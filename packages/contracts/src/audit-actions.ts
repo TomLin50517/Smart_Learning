@@ -1,0 +1,71 @@
+/**
+ * Audit action 目錄（SD §12.2）。
+ * tests/contract 會驗證 openapi.yaml 的每個 x-audit 都在此清單內。
+ */
+export const AUDIT_ACTIONS = [
+  'auth.login.succeeded',
+  'auth.login.failed',
+  'auth.logout',
+  'auth.password_reset.requested',
+  'auth.password_reset.completed',
+  'org.created',
+  'org.updated',
+  'org.disabled',
+  'org.user.created',
+  'org.user.disabled',
+  'org.role.assigned',
+  'org.role.revoked',
+  'cms.updated',
+  'cms.published',
+  'cms.rolled_back',
+  'course.created',
+  'course.archived',
+  'course.version.created',
+  'course.version.cloned',
+  'course.version.updated',
+  'course.version.published',
+  'course.completion_rule.updated',
+  'course.coach_policy.updated',
+  'course.staff.assigned',
+  'course.staff.removed',
+  'course.learner_migration.executed',
+  'enrollment.assigned',
+  'enrollment.approved',
+  'enrollment.rejected',
+  'enrollment.withdrawn',
+  'enrollment.suspended',
+  'enrollment.resumed',
+  'enrollment.reopened',
+  'enrollment.relearning.assigned',
+  'knowledge.document.uploaded',
+  'knowledge.document.version_added',
+  'knowledge.document.deleted',
+  'knowledge.document.indexed',
+  'knowledge.document.failed',
+  'knowledge.reindex.triggered',
+  'derived.edited',
+  'derived.verified',
+  'derived.rejected',
+  'derived.retired',
+  'coach.transcript.read',
+  'coach.transcript_policy.updated',
+  'certificate.issued',
+  'certificate.revoked',
+  'license.activated',
+  'license.replaced',
+  'license.challenge_issued',
+  'system.settings.updated',
+  'ai.provider.updated',
+  'backup.executed',
+  'backup.restored',
+  'audit.exported',
+  'access.denied',
+] as const;
+
+export type AuditAction = (typeof AUDIT_ACTIONS)[number];
+
+/**
+ * 讀取型但必須留痕、且留痕失敗時請求必須失敗的 action（ADR-028 條件 3）。
+ * 與一般 audit「寫入失敗不回滾業務」的原則相反，屬刻意例外。
+ */
+export const AUDIT_MUST_SUCCEED: ReadonlySet<AuditAction> = new Set(['coach.transcript.read']);

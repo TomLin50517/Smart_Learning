@@ -1,0 +1,44 @@
+{
+  "name": "interactive-ai-coach",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Interactive learning platform + evidence-grounded AI Learning Coach (modular monolith + worker)",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean",
+    "typecheck": "tsc -p tsconfig.check.json",
+    "gen:permissions": "tsx tools/gen-permissions.ts",
+    "db:migrate": "tsx tools/migrate.ts",
+    "test": "vitest run --project unit --project contract",
+    "test:unit": "vitest run --project unit",
+    "test:contract": "vitest run --project contract",
+    "test:e2e": "vitest run --project e2e",
+    "test:arch": "depcruise apps packages --config .dependency-cruiser.cjs",
+    "test:db": "bash tests/db/run-db-tests.sh",
+    "ci": "npm run build && npm run test:arch && npm test",
+    "start:api": "node apps/api/dist/main.js",
+    "start:worker": "node apps/worker/dist/main.js"
+  },
+  "devDependencies": {
+    "@nestjs/testing": "12.0.1",
+    "@swc/core": "1.16.2",
+    "@testcontainers/postgresql": "12.1.0",
+    "@types/node": "24.13.4",
+    "@types/pg": "8.23.1",
+    "dependency-cruiser": "18.2.0",
+    "testcontainers": "12.1.0",
+    "tsx": "4.23.13",
+    "typescript": "6.0.3",
+    "unplugin-swc": "1.6.0",
+    "vitest": "5.0.0",
+    "yaml": "2.9.0"
+  }
+}

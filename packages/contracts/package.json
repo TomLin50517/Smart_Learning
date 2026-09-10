@@ -1,0 +1,15 @@
+{
+  "name": "@iac/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "跨 app 共用的 DTO / enum / 錯誤碼 / 權限碼 — 唯一真相（SD §1.1）",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"]
+}

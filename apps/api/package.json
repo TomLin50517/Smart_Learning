@@ -1,0 +1,27 @@
+{
+  "name": "@iac/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "NestJS modular monolith — HTTP API（SA §3、SD §1.2）",
+  "exports": {
+    "./app.module": {
+      "source": "./src/app.module.ts",
+      "types": "./dist/app.module.d.ts",
+      "default": "./dist/app.module.js"
+    }
+  },
+  "dependencies": {
+    "@fastify/cookie": "11.1.2",
+    "@iac/contracts": "0.1.0",
+    "@iac/domain": "0.1.0",
+    "@nestjs/common": "12.0.1",
+    "@nestjs/core": "12.0.1",
+    "@nestjs/platform-fastify": "12.0.1",
+    "pg": "8.23.0",
+    "pino": "10.3.1",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2",
+    "zod": "4.6.1"
+  }
+}
