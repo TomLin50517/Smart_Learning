@@ -1,0 +1,2042 @@
+openapi: 3.1.0
+
+# =============================================================================
+# Interactive AI Coach System — OpenAPI 3.1 Skeleton
+# 依據：SA v1.1 §12（API Catalog）、SD v1.1 §6
+# 版本：1.0.0（對應 ARCH v1.0 / SA v1.1 / SD v1.1）
+# =============================================================================
+# 本檔為骨架：path、method、權限標註、錯誤映射與核心 schema 齊備；
+# 個別 requestBody 的細部欄位在實作時由 packages/contracts 產生後補齊。
+#
+# x- 擴充欄位由 CI 與程式碼中的 decorator 比對（SA INV-T4 / SD §6.3）：
+#   x-required-permission  ← @RequirePermission
+#   x-required-capability  ← @RequireCapability
+#   x-required-limit       ← @RequireCapability 的 limit 參數
+#   x-audit                ← @Audit
+#   x-auth-only: true      ← 僅需已認證，不需特定 permission（session 自身操作）
+# 任何不一致即建置失敗。寫入型操作若既無 x-required-permission
+# 也無 x-auth-only，CI 視為漏標而失敗（SA INV-T4）。
+# =============================================================================
+
+info:
+  title: Interactive AI Coach System API
+  version: 1.0.0
+  description: |
+    通用互動式教學平台 + 有證據鏈的 AI Learning Coach。
+
+    ## 全域不變條件（SA §0.3）
+
+    * **INV-1** `organization_id` 由 Token scope 與資源 ownership 交叉驗證得出，
+      不採信 client 傳入值。
+    * **INV-2** 已發布的 course version 為 immutable。
+    * **INV-3** AI Coach 不得寫入成績、註冊狀態或證書。
+    * **INV-4** 完成判定為 deterministic，不依賴 LLM 可用性。
+    * **INV-5** Coach 正式回答必須有通過 ACL 驗證的 citation，否則回 fallback。
+    * **INV-6** 學習歷史 append-only。
+    * **INV-7** Elasticsearch 的 tenant filter 由 server 注入。
+    * **INV-8** 所有 write endpoint 依序通過
+      AuthN → RBAC → License Capability → Ownership → Audit。
+
+    ## 錯誤處理
+
+    資源不存在與無權限**一律回 404**（ADR-019），避免以 ID guessing 探測
+    其他組織資源是否存在。403 僅用於「在可視 scope 內但缺 permission」。
+  contact:
+    name: Interactive AI Coach System
+  license:
+    name: Proprietary
+
+servers:
+  - url: https://{host}/api
+    description: 已認證 API
+    variables:
+      host:
+        default: localhost
+  - url: https://{host}
+    description: 公開端點（僅證書驗證與首頁 CMS）
+    variables:
+      host:
+        default: localhost
+
+security:
+  - sessionCookie: []
+
+tags:
+  - name: Identity
+    description: 認證與個人資料
+  - name: Organization
+    description: 組織與使用者管理
+  - name: CMS
+    description: 首頁內容管理
+  - name: Course
+    description: 課程與版本
+  - name: Enrollment
+    description: 加入、重修與完成
+  - name: Runtime
+    description: 互動活動執行
+  - name: Coach
+    description: AI Coach
+  - name: Knowledge
+    description: 教材與衍生知識
+  - name: Certificate
+    description: 電子結業證明
+  - name: License
+    description: 授權
+  - name: System
+    description: 稽核、通知、健康檢查
+
+# =============================================================================
+# Components
+# =============================================================================
+components:
+
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: iac_session
+      description: |
+        HttpOnly + Secure + SameSite=Lax。所有非 GET 請求另需
+        `X-CSRF-Token` header，其值須與 `iac_csrf` cookie 相同（SD §8.2）。
+
+  parameters:
+    Cursor:
+      name: cursor
+      in: query
+      description: keyset 分頁游標，取自前一次回應的 `meta.next_cursor`
+      schema: { type: string }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    Sort:
+      name: sort
+      in: query
+      description: '白名單欄位，格式 `field:asc` 或 `field:desc`'
+      schema: { type: string }
+    OrgId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    CourseId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ResourceId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  headers:
+    XRequestId:
+      description: 請求關聯 ID，貫穿 API → job → LLM 呼叫
+      schema: { type: string }
+    RateLimitRemaining:
+      schema: { type: integer }
+    RetryAfter:
+      schema: { type: integer }
+
+  responses:
+    Unauthorized:
+      description: 未認證（`UNAUTHENTICATED`）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    Forbidden:
+      description: |
+        權限或授權不足。可能的 `code`：
+        `PERMISSION_DENIED`、`ORG_SCOPE_DENIED`、`SOURCE_ACCESS_DENIED`、
+        `COACH_TRANSCRIPT_NOT_VISIBLE`、`ACTIVITY_PREREQUISITE_NOT_MET`、
+        `LICENSE_NOT_ACTIVATED`、`LICENSE_EXPIRED`、`LICENSE_CONFIG_FROZEN`、`LICENSE_FEATURE_DISABLED`、
+        `LICENSE_LIMIT_EXCEEDED`、`LICENSE_HARDWARE_MISMATCH`、
+        `LICENSE_SIGNATURE_INVALID`、`LICENSE_CHALLENGE_INVALID`
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    NotFound:
+      description: |
+        不存在**或**不在可視 scope（刻意合併，ADR-019）。
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    Conflict:
+      description: |
+        狀態衝突。可能的 `code`：`COURSE_VERSION_IMMUTABLE`、
+        `TRANSCRIPT_VISIBILITY_IMMUTABLE`、`ENROLLMENT_NOT_ACTIVE`、
+        `RESULT_NOT_READY`
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    UnprocessableEntity:
+      description: |
+        驗證失敗。`COURSE_VALIDATION_FAILED` 的 `details[].issue` 帶
+        `RULE_*` 子代碼；`ACTIVITY_INPUT_INVALID` 由 adapter 的
+        `validateInput()` 產生。
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    RateLimited:
+      description: '`RATE_LIMITED` 或 `AI_QUOTA_EXCEEDED`'
+      headers:
+        Retry-After: { $ref: '#/components/headers/RetryAfter' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    ServiceUnavailable:
+      description: '`COACH_PROVIDER_UNAVAILABLE` 或 `SOURCE_TEMPORARILY_UNAVAILABLE`'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  schemas:
+
+    # ---------------------------------------------------------------- 共用
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      additionalProperties: false
+      properties:
+        error:
+          type: object
+          required: [code, message, correlation_id]
+          properties:
+            code:
+              type: string
+              description: 穩定的錯誤代碼；使用者可見文案由前端依此在地化
+            message:
+              type: string
+              description: 面向開發者的英文訊息
+            correlation_id: { type: string }
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field: { type: string }
+                  issue: { type: string }
+
+    PageMeta:
+      type: object
+      properties:
+        next_cursor: { type: [string, 'null'] }
+        correlation_id: { type: string }
+
+    # ---------------------------------------------------------------- Identity
+    LicenseCapabilities:
+      type: object
+      required: [runtimeAllowed, configurationWriteAllowed, authoringAllowed,
+                 upgradeAllowed, aiCoachAllowed, state]
+      properties:
+        runtimeAllowed:            { type: boolean }
+        configurationWriteAllowed: { type: boolean }
+        authoringAllowed:          { type: boolean }
+        upgradeAllowed:            { type: boolean }
+        aiCoachAllowed:            { type: boolean }
+        state:
+          type: string
+          enum: [unlicensed, active, grace, frozen, blocked]
+        maxOrganizations:  { type: integer }
+        maxActiveLearners: { type: integer }
+        expiresAt:         { type: string, format: date-time }
+        maintenanceUntil:  { type: string, format: date-time }
+
+    MeResponse:
+      type: object
+      required: [user, permissions, scopes, licenseCapabilities]
+      properties:
+        user:
+          type: object
+          required: [id, email, displayName, locale]
+          properties:
+            id:          { type: string, format: uuid }
+            email:       { type: string, format: email }
+            displayName: { type: string }
+            locale:      { type: string }
+        activeOrganization:
+          type: [object, 'null']
+          properties:
+            id:       { type: string, format: uuid }
+            name:     { type: string }
+            branding: { type: object }
+        organizations:
+          type: array
+          items:
+            type: object
+            properties:
+              id:   { type: string, format: uuid }
+              name: { type: string }
+        permissions:
+          type: array
+          items: { type: string }
+          description: 已解析的 permission code（SA §6.2）
+        scopes:
+          type: array
+          items:
+            type: object
+            properties:
+              type: { type: string, enum: [platform, organization, course, self] }
+              id:   { type: [string, 'null'], format: uuid }
+        licenseCapabilities: { $ref: '#/components/schemas/LicenseCapabilities' }
+
+    # ---------------------------------------------------------------- Completion Rule
+    RuleNode:
+      oneOf:
+        - $ref: '#/components/schemas/RuleGroup'
+        - $ref: '#/components/schemas/RuleCondition'
+
+    RuleGroup:
+      type: object
+      required: [operator, conditions]
+      additionalProperties: false
+      properties:
+        operator: { type: string, enum: [AND, OR, NOT] }
+        conditions:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items: { $ref: '#/components/schemas/RuleNode' }
+
+    RuleCondition:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum:
+            - required_activities_completed
+            - specific_activities_completed
+            - minimum_score
+            - minimum_activity_score
+            - video_watch_ratio
+            - attempt_status
+            - module_completed
+            - lesson_completed
+            - time_spent_minimum
+            - attempt_count_maximum
+            - manual_approval
+        activity_id:   { type: string, format: uuid }
+        activity_ids:  { type: array, items: { type: string, format: uuid } }
+        module_id:     { type: string, format: uuid }
+        lesson_id:     { type: string, format: uuid }
+        approver_role: { type: string }
+        scope:         { type: string, enum: [course, module] }
+        scope_id:      { type: string, format: uuid }
+        value:         {}
+        negate:        { type: boolean }
+
+    CompletionEvaluation:
+      type: object
+      description: SD §3.5。`trace` 同時供學員 UI 顯示「還差什麼」與教師除錯。
+      required: [result, evaluated_at, trace]
+      properties:
+        enrollment_id:   { type: string, format: uuid }
+        rule_set_id:     { type: string, format: uuid }
+        grammar_version: { type: string }
+        evaluated_at:    { type: string, format: date-time }
+        result:          { type: boolean }
+        trace:
+          type: array
+          items:
+            type: object
+            properties:
+              path:   { type: string }
+              type:   { type: string }
+              result: { type: string, enum: [TRUE, FALSE, UNKNOWN] }
+              detail: { type: object }
+        blocking_reasons:
+          type: array
+          items:
+            type: object
+            properties:
+              code:        { type: string }
+              activity_id: { type: [string, 'null'], format: uuid }
+              actual:      {}
+              required:    {}
+
+    # ---------------------------------------------------------------- Course
+    ValidationReport:
+      type: object
+      required: [valid, errors, warnings]
+      properties:
+        valid: { type: boolean }
+        errors:
+          type: array
+          items: { $ref: '#/components/schemas/ValidationIssue' }
+        warnings:
+          type: array
+          items: { $ref: '#/components/schemas/ValidationIssue' }
+
+    ValidationIssue:
+      type: object
+      required: [code, path, message]
+      properties:
+        code:     { type: string }
+        path:     { type: string }
+        message:  { type: string }
+        targetId: { type: string, format: uuid }
+
+    VersionImpact:
+      type: object
+      properties:
+        activeLearners:        { type: integer }
+        completedLearners:     { type: integer }
+        boundDocumentVersions: { type: integer }
+
+    CourseVersionDetail:
+      type: object
+      required: [id, courseId, versionNo, status, title, editable]
+      properties:
+        id:              { type: string, format: uuid }
+        courseId:        { type: string, format: uuid }
+        versionNo:       { type: integer }
+        status:
+          type: string
+          enum: [draft, review, published, superseded, archived]
+        title:           { type: string }
+        summary:         { type: string }
+        navigationMode:  { type: string, enum: [strict, prerequisite, free, mixed] }
+        modules:         { type: array, items: { type: object } }
+        completionRuleSet:
+          type: [object, 'null']
+          properties:
+            grammarVersion: { type: string }
+            rule: { $ref: '#/components/schemas/RuleNode' }
+        coachPolicy:       { $ref: '#/components/schemas/CoachPolicy' }
+        knowledgeBindings: { type: array, items: { type: object } }
+        publishedAt:       { type: string, format: date-time }
+        editable:
+          type: boolean
+          description: '等同 `status === "draft"`。false 時所有內容寫入回 409。'
+
+    CoachPolicy:
+      type: object
+      properties:
+        responseMode:
+          type: string
+          enum: [hint_first, coach_first, direct_allowed]
+        maxDirectnessLevel:             { type: integer, minimum: 1, maximum: 5 }
+        allowAnswerRevealAfterAttempts: { type: [integer, 'null'] }
+        preferredLanguage:              { type: string }
+        citationRequired:               { type: boolean }
+        allowedKnowledgeScopes:         { type: array, items: { type: string } }
+        toneProfile:                    { type: string }
+        followUpQuestions:              { type: boolean }
+        prohibitedTopics:               { type: array, items: { type: string } }
+        extraInstructions:              { type: string }
+
+    # ---------------------------------------------------------------- Runtime
+    ActivityRuntime:
+      type: object
+      description: |
+        `answer_key` 由序列化白名單剝除，永遠不會出現在此回應中
+        （SD §7.3.4、SA THR-T-002）。
+      required: [activityId, title, activityType, componentType, schemaVersion, config]
+      properties:
+        activityId:     { type: string, format: uuid }
+        title:          { type: string }
+        activityType:   { type: string, enum: [video, quiz, interactive, reading, assignment] }
+        componentType:  { type: string }
+        schemaVersion:  { type: string }
+        config:         { type: object }
+        attemptPolicy:
+          type: object
+          properties:
+            maxAttempts:  { type: [integer, 'null'] }
+            usedAttempts: { type: integer }
+        previousResultSummary:
+          type: object
+          properties:
+            status:    { type: string }
+            score:     { type: [number, 'null'] }
+            attemptNo: { type: integer }
+        coachAvailable: { type: boolean }
+
+    SubmitAttemptRequest:
+      type: object
+      description: |
+        **刻意不接受 `score` / `status`**。成績一律由 server 端
+        ActivityEvaluator 依 answer_key 產生（ADR-024、AC-LRN-003）。
+        client 送來的任何評分欄位會被忽略。
+      required: [input]
+      additionalProperties: false
+      properties:
+        input:            {}
+        clientDurationMs: { type: integer }
+
+    ActivityResult:
+      type: object
+      required: [attemptId, attemptNo, status, maxScore, issues, evaluatedAt]
+      properties:
+        attemptId:  { type: string, format: uuid }
+        attemptNo:  { type: integer }
+        status:
+          type: string
+          enum: [passed, completed, needs_improvement, failed]
+        score:      { type: [number, 'null'] }
+        maxScore:   { type: number }
+        issues:
+          type: array
+          items:
+            type: object
+            required: [code, category, severity]
+            properties:
+              code:     { type: string }
+              category: { type: string }
+              severity: { type: string, enum: [low, medium, high] }
+        feedbackData:      { type: object }
+        evaluatedAt:       { type: string, format: date-time }
+        completionChanged: { type: boolean }
+
+    LearningEventBatchRequest:
+      type: object
+      description: |
+        `organizationId` / `learnerId` / `enrollmentId` **不接受** client 傳入；
+        server 依 session 與 attempt 歸屬重新推導後覆寫（ADR-021、INV-1）。
+      required: [events]
+      properties:
+        events:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            type: object
+            required: [eventId, eventType, eventVersion, occurredAt, payload]
+            additionalProperties: false
+            properties:
+              eventId:
+                type: string
+                format: uuid
+                description: client 產生的冪等鍵；重送會被去重
+              eventType:    { type: string }
+              eventVersion: { type: string, enum: ['1.0'] }
+              occurredAt:   { type: string, format: date-time }
+              activityId:   { type: string, format: uuid }
+              payload:      { type: object }
+
+    LearningEventBatchResponse:
+      type: object
+      properties:
+        accepted:   { type: integer }
+        duplicated: { type: integer }
+        rejected:
+          type: array
+          items:
+            type: object
+            properties:
+              eventId: { type: string }
+              reason:  { type: string }
+
+    # ---------------------------------------------------------------- Coach
+    Citation:
+      type: object
+      required: [citationId, title, sourceUrl]
+      properties:
+        citationId:         { type: string, pattern: '^c[0-9]{1,2}$' }
+        title:              { type: string }
+        sourceUrl:
+          type: string
+          description: |
+            指向 `/api/coach/citations/{id}/source`。URL 本身不是授權憑證——
+            每次存取都會重新做 ACL 驗證（THR-I-004）。
+        documentVersionId:  { type: string, format: uuid }
+        derivedKnowledgeId: { type: string, format: uuid }
+        chunkId:            { type: string }
+        pageNo:             { type: integer }
+        sectionPath:        { type: string }
+
+    CoachAnswer:
+      type: object
+      required: [messageId, conversationId, answer, citations, status, disclaimer]
+      properties:
+        messageId:      { type: string, format: uuid }
+        conversationId: { type: string, format: uuid }
+        answer:         { type: string }
+        citations:
+          type: array
+          items: { $ref: '#/components/schemas/Citation' }
+        status:
+          type: string
+          enum: [answered, insufficient_evidence, provider_unavailable, validation_failed]
+        disclaimer:
+          type: string
+          description: '例如「此為 AI 教練建議，不影響成績」'
+        followUpQuestions: { type: array, items: { type: string } }
+        responseMode:
+          type: string
+          enum: [hint_first, coach_first, direct_allowed]
+
+    CoachConversationSummary:
+      type: object
+      required: [id, triggerType, messageCount, startedAt, transcriptVisibility, readable]
+      properties:
+        id:                  { type: string, format: uuid }
+        learnerId:           { type: string, format: uuid }
+        learnerDisplayName:  { type: string }
+        activityTitle:       { type: string }
+        triggerType:         { type: string }
+        messageCount:        { type: integer }
+        startedAt:           { type: string, format: date-time }
+        lastMessageAt:       { type: string, format: date-time }
+        transcriptVisibility:
+          type: string
+          enum: [aggregate_only, course_staff]
+          description: 對話建立時的戳印，不隨組織政策變更（ADR-028 條件 4）
+        readable:
+          type: boolean
+          description: |
+            組織政策 × 對話戳印的計算結果。false 時不提供逐字稿連結，
+            且回應不含訊息內容。
+
+    CoachTranscriptPolicy:
+      type: object
+      required: [visibility]
+      properties:
+        visibility:
+          type: string
+          enum: [aggregate_only, course_staff]
+        decidedAt:
+          type: string
+          format: date-time
+          description: 未決定時省略；resolver 對「未決定」回傳 aggregate_only
+        decidedBy: { type: string, format: uuid }
+
+    # ---------------------------------------------------------------- Knowledge
+    DocumentVersion:
+      type: object
+      required: [id, sourceDocumentId, versionNo, status, originalFilename, sizeBytes]
+      properties:
+        id:               { type: string, format: uuid }
+        sourceDocumentId: { type: string, format: uuid }
+        versionNo:        { type: integer }
+        status:
+          type: string
+          enum: [uploaded, scanning, rejected, parsing, chunking, indexing,
+                 ready, failed, superseded, retired]
+        originalFilename: { type: string }
+        sizeBytes:        { type: integer }
+        pageCount:        { type: integer }
+        chunkCount:       { type: integer }
+        failureReason:    { type: string }
+        processedAt:      { type: string, format: date-time }
+
+    DerivedKnowledge:
+      type: object
+      required: [id, kind, status, evidenceStatus, clusterSize, question, answer]
+      properties:
+        id:   { type: string, format: uuid }
+        kind: { type: string, enum: [faq, common_error, fix_path, trend] }
+        status:
+          type: string
+          enum: [auto_generated, teacher_edited, verified, rejected, retired]
+        evidenceStatus:
+          type: string
+          enum: [grounded, insufficient_evidence]
+          description: |
+            `insufficient_evidence` 者不得被 Coach 當作正式引用依據
+            （ARCH §14.4-4）。
+        clusterSize:
+          type: integer
+          description: 低於組織匿名門檻者不會產生（ARCH §14.5、NFR-PRIV-003）
+        question:          { type: string }
+        answer:            { type: string }
+        citations:         { type: array, items: { $ref: '#/components/schemas/Citation' } }
+        currentVersionNo:  { type: integer }
+        firstSeenAt:       { type: string, format: date-time }
+        lastSeenAt:        { type: string, format: date-time }
+
+    # ---------------------------------------------------------------- Certificate
+    PublicCertificate:
+      type: object
+      description: |
+        公開端點的回應刻意精簡：不含分數、email、enrollmentId 或任何
+        學習紀錄（ARCH §17.3、THR-I-005）。
+      required: [status, organizationName, courseTitle, learnerDisplayName, issuedAt]
+      properties:
+        status:             { type: string, enum: [valid, revoked, expired] }
+        organizationName:   { type: string }
+        courseTitle:        { type: string }
+        learnerDisplayName: { type: string }
+        issuedAt:           { type: string, format: date-time }
+        validUntil:         { type: string, format: date-time }
+        revokedAt:          { type: string, format: date-time }
+
+# =============================================================================
+# Paths
+# =============================================================================
+paths:
+
+  # ------------------------------------------------------------------ Identity
+  /auth/login:
+    post:
+      operationId: login
+      tags: [Identity]
+      security: []
+      x-audit: auth.login.succeeded
+      description: |
+        帳號不存在與密碼錯誤回相同訊息與相近耗時（常數時間比對，THR-S-001）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:    { type: string, format: email }
+                password: { type: string, minLength: 8 }
+      responses:
+        '200': { description: 成功，設定 session cookie }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /auth/logout:
+    post:
+      operationId: logout
+      tags: [Identity]
+      x-auth-only: true
+      responses:
+        '204': { description: 已登出 }
+
+  /auth/refresh:
+    post:
+      operationId: refreshSession
+      tags: [Identity]
+      x-auth-only: true
+      description: rotate session token
+      responses:
+        '200': { description: 已更新 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/password-reset/request:
+    post:
+      operationId: requestPasswordReset
+      tags: [Identity]
+      security: []
+      x-audit: auth.password_reset.requested
+      description: 常數時間回應，不透露帳號是否存在
+      responses:
+        '202': { description: 若帳號存在則已寄出 }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /auth/password-reset/confirm:
+    post:
+      operationId: confirmPasswordReset
+      tags: [Identity]
+      security: []
+      x-audit: auth.password_reset.completed
+      description: token 一次性；重設後撤銷該使用者所有 session
+      responses:
+        '204': { description: 已重設 }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /me:
+    get:
+      operationId: getMe
+      tags: [Identity]
+      x-auth-only: true
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MeResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ------------------------------------------------------------ Organization
+  /organizations:
+    get:
+      operationId: listOrganizations
+      tags: [Organization]
+      x-required-permission: org.read
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { description: OK }
+    post:
+      operationId: createOrganization
+      tags: [Organization]
+      x-required-permission: platform.organization.create
+      x-required-capability: configurationWriteAllowed
+      x-required-limit: maxOrganizations
+      x-audit: org.created
+      responses:
+        '201': { description: 已建立 }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /organizations/{id}:
+    parameters: [{ $ref: '#/components/parameters/OrgId' }]
+    get:
+      operationId: getOrganization
+      tags: [Organization]
+      x-required-permission: org.read
+      responses:
+        '200': { description: OK }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      operationId: updateOrganization
+      tags: [Organization]
+      x-required-permission: org.settings.write
+      x-required-capability: configurationWriteAllowed
+      x-audit: org.updated
+      responses:
+        '200': { description: OK }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /organizations/{id}/disable:
+    parameters: [{ $ref: '#/components/parameters/OrgId' }]
+    post:
+      operationId: disableOrganization
+      tags: [Organization]
+      x-required-permission: platform.organization.disable
+      x-required-capability: configurationWriteAllowed
+      x-audit: org.disabled
+      responses:
+        '200': { description: 已停用 }
+
+  /organizations/{id}/enable:
+    parameters: [{ $ref: '#/components/parameters/OrgId' }]
+    post:
+      operationId: enableOrganization
+      tags: [Organization]
+      x-required-permission: platform.organization.disable
+      x-required-capability: configurationWriteAllowed
+      x-audit: org.updated
+      responses:
+        '200': { description: 已啟用 }
+
+  /organizations/{id}/users:
+    parameters: [{ $ref: '#/components/parameters/OrgId' }]
+    get:
+      operationId: listOrganizationUsers
+      tags: [Organization]
+      x-required-permission: org.user.read
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { description: OK }
+    post:
+      operationId: createOrganizationUser
+      tags: [Organization]
+      x-required-permission: org.user.write
+      x-required-capability: configurationWriteAllowed
+      x-required-limit: maxActiveLearners
+      x-audit: org.user.created
+      responses:
+        '201': { description: 已建立 }
+
+  /organizations/{id}/users/{userId}/roles:
+    parameters:
+      - $ref: '#/components/parameters/OrgId'
+      - { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      operationId: assignUserRoles
+      tags: [Organization]
+      x-required-permission: org.role.assign
+      x-required-capability: configurationWriteAllowed
+      x-audit: org.role.assigned
+      description: 高風險操作，before/after 完整寫入 Audit
+      responses:
+        '200': { description: OK }
+
+  /organizations/{id}/ai-quota:
+    parameters: [{ $ref: '#/components/parameters/OrgId' }]
+    get:
+      operationId: getAiQuota
+      tags: [Organization]
+      x-required-permission: org.ai_quota.write
+      responses:
+        '200': { description: OK }
+    put:
+      operationId: updateAiQuota
+      tags: [Organization]
+      x-required-permission: org.ai_quota.write
+      x-required-capability: configurationWriteAllowed
+      x-audit: system.settings.updated
+      responses:
+        '200': { description: OK }
+
+  /organizations/{id}/coach-transcript-policy:
+    parameters: [{ $ref: '#/components/parameters/OrgId' }]
+    get:
+      operationId: getCoachTranscriptPolicy
+      tags: [Organization, Coach]
+      x-required-permission: coach.transcript_policy.write
+      responses:
+        '200':
+          description: |
+            `decidedAt` 缺少代表尚未決定，UI 應強制管理者做一次明確選擇
+            （SD §2.11.2）。
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CoachTranscriptPolicy' }
+    put:
+      operationId: updateCoachTranscriptPolicy
+      tags: [Organization, Coach]
+      x-required-permission: coach.transcript_policy.write
+      x-required-capability: configurationWriteAllowed
+      x-audit: coach.transcript_policy.updated
+      description: |
+        變更**不回溯**：既有對話維持其建立時的戳印（ADR-028 條件 4）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CoachTranscriptPolicy' }
+      responses:
+        '200': { description: OK }
+
+  /organizations/{id}/reports:
+    parameters: [{ $ref: '#/components/parameters/OrgId' }]
+    get:
+      operationId: getOrganizationReports
+      tags: [Organization]
+      x-required-permission: org.report.read
+      description: 集體資訊須達匿名門檻後才呈現（ARCH §14.5）
+      responses:
+        '200': { description: OK }
+
+  # -------------------------------------------------------------------- CMS
+  /cms/pages/{pageKey}:
+    parameters:
+      - { name: pageKey, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: getCmsPage
+      tags: [CMS]
+      x-required-permission: cms.read
+      responses:
+        '200': { description: OK }
+
+  /cms/pages/{pageKey}/draft:
+    parameters:
+      - { name: pageKey, in: path, required: true, schema: { type: string } }
+    patch:
+      operationId: updateCmsDraft
+      tags: [CMS]
+      x-required-permission: cms.write
+      x-required-capability: configurationWriteAllowed
+      x-audit: cms.updated
+      description: block-based schema；禁止 raw HTML/script 注入（SD §7.5）
+      responses:
+        '200': { description: OK }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /cms/pages/{pageKey}/publish:
+    parameters:
+      - { name: pageKey, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: publishCmsPage
+      tags: [CMS]
+      x-required-permission: cms.publish
+      x-required-capability: configurationWriteAllowed
+      x-audit: cms.published
+      responses:
+        '200': { description: OK }
+
+  /cms/pages/{pageKey}/rollback:
+    parameters:
+      - { name: pageKey, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: rollbackCmsPage
+      tags: [CMS]
+      x-required-permission: cms.rollback
+      x-required-capability: configurationWriteAllowed
+      x-audit: cms.rolled_back
+      responses:
+        '200': { description: OK }
+
+  # ----------------------------------------------------------------- Course
+  /courses:
+    get:
+      operationId: listCourses
+      tags: [Course]
+      x-required-permission: course.read
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Sort'
+      responses:
+        '200': { description: OK }
+    post:
+      operationId: createCourse
+      tags: [Course]
+      x-required-permission: course.create
+      x-required-capability: authoringAllowed
+      x-audit: course.created
+      responses:
+        '201': { description: 已建立 }
+
+  /courses/{id}:
+    parameters: [{ $ref: '#/components/parameters/CourseId' }]
+    get:
+      operationId: getCourse
+      tags: [Course]
+      x-required-permission: course.read
+      responses:
+        '200': { description: OK }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      operationId: updateCourse
+      tags: [Course]
+      x-required-permission: course.archive
+      x-required-capability: authoringAllowed
+      x-audit: course.archived
+      responses:
+        '200': { description: OK }
+
+  /courses/{id}/versions:
+    parameters: [{ $ref: '#/components/parameters/CourseId' }]
+    post:
+      operationId: createCourseVersion
+      tags: [Course]
+      x-required-permission: course.version.create
+      x-required-capability: authoringAllowed
+      x-audit: course.version.created
+      responses:
+        '201': { description: 已建立 draft }
+
+  /courses/{id}/staff:
+    parameters: [{ $ref: '#/components/parameters/CourseId' }]
+    get:
+      operationId: listCourseStaff
+      tags: [Course]
+      x-required-permission: course.staff.assign
+      responses:
+        '200': { description: OK }
+    post:
+      operationId: assignCourseStaff
+      tags: [Course]
+      x-required-permission: course.staff.assign
+      x-required-capability: configurationWriteAllowed
+      x-audit: course.staff.assigned
+      responses:
+        '201': { description: 已指派 }
+
+  /course-versions/{id}:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      operationId: getCourseVersion
+      tags: [Course]
+      x-required-permission: course.version.read
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CourseVersionDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      operationId: updateCourseVersionDraft
+      tags: [Course]
+      x-required-permission: course.version.write
+      x-required-capability: authoringAllowed
+      x-audit: course.version.updated
+      description: |
+        **僅 Draft 可寫**。對 published/superseded/archived 版本寫入回
+        409 `COURSE_VERSION_IMMUTABLE`——由應用層 Guard 與 DB 觸發器
+        雙層阻擋（INV-2、AC-CRS-001）。
+      responses:
+        '200': { description: OK }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /course-versions/{id}/validate:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    post:
+      operationId: validateCourseVersion
+      tags: [Course]
+      x-required-permission: course.version.validate
+      description: |
+        ARCH §6.3 的五項檢查：無法到達的必修單元、完成條件引用已刪除活動、
+        來源文件是否處理完成、Coach Policy 是否缺失、互動活動 schema 是否合法。
+      responses:
+        '200':
+          description: 驗證報告（`valid` 可能為 false）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ValidationReport' }
+
+  /course-versions/{id}/publish:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    post:
+      operationId: publishCourseVersion
+      tags: [Course]
+      x-required-permission: course.version.publish
+      x-required-capability: authoringAllowed
+      x-audit: course.version.published
+      description: |
+        原子操作：舊 active published → superseded；本版 → published；
+        凍結 knowledge_bindings 的 document_version_id；寫入 content_snapshot_hash。
+      responses:
+        '200': { description: 已發布 }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /course-versions/{id}/clone:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    post:
+      operationId: cloneCourseVersion
+      tags: [Course]
+      x-required-permission: course.version.create
+      x-required-capability: authoringAllowed
+      x-audit: course.version.cloned
+      description: 既有 enrollment 仍指向原版本（AC-CRS-002）
+      responses:
+        '201': { description: 已建立新 draft }
+
+  /course-versions/{id}/hotfix:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    post:
+      operationId: hotfixCourseVersionMetadata
+      tags: [Course]
+      x-required-permission: course.version.hotfix
+      x-required-capability: authoringAllowed
+      x-audit: course.version.updated
+      description: |
+        僅限純 typo／無語意影響的文案（ARCH §6.2-7）。仍保留 revision history。
+        任何影響學習結果、順序、題目、Rubric 或 Coach Policy 的變更一律走新版本。
+      responses:
+        '200': { description: OK }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /course-versions/{id}/impact:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      operationId: getCourseVersionImpact
+      tags: [Course]
+      x-required-permission: course.version.read
+      description: 供 UI 顯示「目前有 N 名學員綁定此版本」（ARCH §6.3）
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VersionImpact' }
+
+  /course-versions/{id}/completion-rules:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    put:
+      operationId: updateCompletionRules
+      tags: [Course]
+      x-required-permission: course.completion_rule.write
+      x-required-capability: authoringAllowed
+      x-audit: course.completion_rule.updated
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rule]
+              properties:
+                grammarVersion: { type: string, default: '1.0' }
+                rule: { $ref: '#/components/schemas/RuleNode' }
+      responses:
+        '200': { description: OK }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /course-versions/{id}/coach-policy:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    put:
+      operationId: updateCoachPolicy
+      tags: [Course, Coach]
+      x-required-permission: course.coach_policy.write
+      x-required-capability: authoringAllowed
+      x-audit: course.coach_policy.updated
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CoachPolicy' }
+      responses:
+        '200': { description: OK }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /course-versions/{id}/migrate-learners:
+    parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      - { name: preview, in: query, schema: { type: boolean, default: false } }
+    post:
+      operationId: migrateLearnersToVersion
+      tags: [Course, Enrollment]
+      x-required-permission: course.learner_migration.execute
+      x-required-capability: configurationWriteAllowed
+      x-audit: course.learner_migration.executed
+      description: 須先以 `?preview=true` 取得影響範圍（ARCH §6.2-5）
+      responses:
+        '200': { description: OK }
+
+  # ------------------------------------------------------------- Enrollment
+  /courses/{id}/enrollments:
+    parameters: [{ $ref: '#/components/parameters/CourseId' }]
+    post:
+      operationId: createEnrollment
+      tags: [Enrollment]
+      x-required-permission: enrollment.assign
+      x-required-limit: maxActiveLearners
+      x-audit: enrollment.assigned
+      description: |
+        學員自行加入時所需權限為 `enrollment.self_enroll`。
+        綁定當下的 active published version（AC-CRS-003）。
+      responses:
+        '201': { description: 已建立 }
+
+  /courses/{id}/learners:
+    parameters: [{ $ref: '#/components/parameters/CourseId' }]
+    get:
+      operationId: listCourseLearners
+      tags: [Enrollment]
+      x-required-permission: learning.result.read_all
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { description: OK }
+
+  /me/enrollments:
+    get:
+      operationId: listMyEnrollments
+      tags: [Enrollment]
+      x-required-permission: learning.result.read_self
+      responses:
+        '200': { description: OK }
+
+  /enrollments/{id}/approve:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    post:
+      operationId: approveEnrollment
+      tags: [Enrollment]
+      x-required-permission: enrollment.approve
+      x-audit: enrollment.approved
+      responses:
+        '200': { description: OK }
+
+  /enrollments/{id}/withdraw:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    post:
+      operationId: withdrawEnrollment
+      tags: [Enrollment]
+      x-required-permission: enrollment.withdraw
+      x-audit: enrollment.withdrawn
+      responses:
+        '200': { description: OK }
+
+  /enrollments/{id}/suspend:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    post:
+      operationId: suspendEnrollment
+      tags: [Enrollment]
+      x-required-permission: enrollment.suspend
+      x-audit: enrollment.suspended
+      responses:
+        '200': { description: OK }
+
+  /enrollments/{id}/resume:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    post:
+      operationId: resumeEnrollment
+      tags: [Enrollment]
+      x-required-permission: enrollment.suspend
+      x-audit: enrollment.resumed
+      responses:
+        '200': { description: OK }
+
+  /enrollments/{id}/relearning:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    post:
+      operationId: assignRelearning
+      tags: [Enrollment]
+      x-required-permission: enrollment.relearning.assign
+      x-audit: enrollment.relearning.assigned
+      description: |
+        歷史 attempt/result 完整保留，以新 attempt 疊加（INV-6、AC-LRN-004）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scopeType, reason]
+              properties:
+                scopeType: { type: string, enum: [course, module, lesson, activity] }
+                scopeId:   { type: string, format: uuid }
+                reason:    { type: string }
+                dueDate:   { type: string, format: date-time }
+                newAttemptPolicy: { type: string, enum: [append, reset_counter] }
+      responses:
+        '201': { description: 已指派 }
+
+  /enrollments/{id}/reopen:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    post:
+      operationId: reopenEnrollment
+      tags: [Enrollment]
+      x-required-permission: enrollment.reopen
+      x-audit: enrollment.reopened
+      responses:
+        '200': { description: OK }
+
+  /enrollments/{id}/timeline:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      operationId: getEnrollmentTimeline
+      tags: [Enrollment]
+      x-required-permission: learning.timeline.read_all
+      description: 學員讀自己的 timeline 時所需權限為 `learning.timeline.read_self`
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { description: OK }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /enrollments/{id}/completion:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      operationId: getCompletionEvaluation
+      tags: [Enrollment]
+      x-required-permission: learning.result.read_all
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CompletionEvaluation' }
+
+  # ---------------------------------------------------------------- Runtime
+  /activities/{id}/runtime:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      operationId: getActivityRuntime
+      tags: [Runtime]
+      x-required-permission: learning.attempt.write_self
+      x-required-capability: runtimeAllowed
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ActivityRuntime' }
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /activities/{id}/attempts:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    post:
+      operationId: createAttempt
+      tags: [Runtime]
+      x-required-permission: learning.attempt.write_self
+      x-required-capability: runtimeAllowed
+      responses:
+        '201': { description: 已建立 }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /attempts/{id}/events:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    post:
+      operationId: ingestLearningEvents
+      tags: [Runtime]
+      x-required-permission: learning.event.write_self
+      x-required-capability: runtimeAllowed
+      description: |
+        每 enrollment 每分鐘上限 120 筆；超額回 429 並丟棄，
+        **不阻斷學習**（THR-D-002）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LearningEventBatchRequest' }
+      responses:
+        '202':
+          description: 已接收
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LearningEventBatchResponse' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /attempts/{id}/submit:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    post:
+      operationId: submitAttempt
+      tags: [Runtime]
+      x-required-permission: learning.attempt.write_self
+      x-required-capability: runtimeAllowed
+      description: |
+        同步執行完成判定（ADR-020）。評估路徑上零 LLM 呼叫，
+        因此 Coach 中斷不影響完成與發證（INV-4、AC-LRN-002）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SubmitAttemptRequest' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ActivityResult' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /attempts/{id}/result:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      operationId: getAttemptResult
+      tags: [Runtime]
+      x-required-permission: learning.result.read_self
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ActivityResult' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ------------------------------------------------------------------ Coach
+  /coach/conversations:
+    post:
+      operationId: createCoachConversation
+      tags: [Coach]
+      x-required-permission: coach.interact_self
+      x-required-capability: aiCoachAllowed
+      description: |
+        建立時依組織當下政策戳印 `transcript_visibility`，之後不可變
+        （ADR-028 條件 4、SD §2.11.3）。
+      responses:
+        '201': { description: 已建立 }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /coach/conversations/{id}:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      operationId: getCoachConversation
+      tags: [Coach]
+      x-required-permission: coach.conversation.read_self
+      responses:
+        '200': { description: OK }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /coach/conversations/{id}/messages:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    post:
+      operationId: sendCoachMessage
+      tags: [Coach]
+      x-required-permission: coach.interact_self
+      x-required-capability: aiCoachAllowed
+      description: |
+        SSE 分階段回應（ADR-025）：
+
+        ```
+        event: stage    {"stage":"retrieving"}              < 1 s
+        event: sources  {"citations":[...]}                 < 3 s  已 ACL 驗證，安全早送
+        event: stage    {"stage":"composing"}
+        event: stage    {"stage":"validating"}
+        event: token    {"delta":"..."}                     驗證通過後才開始
+        event: done     {"messageId":"...","status":"answered"}
+        ```
+
+        `token` **只在** ResponseValidator 通過後才送出——未驗證的 LLM
+        文字永遠不會到達瀏覽器（INV-5）。檢索結果先於生成完成且已通過
+        ACL 過濾，因此可提前送出讓學員先閱讀教材。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content:    { type: string, maxLength: 2000 }
+                lessonId:   { type: string, format: uuid }
+                activityId: { type: string, format: uuid }
+                attemptId:  { type: string, format: uuid }
+      responses:
+        '200':
+          description: SSE 串流
+          content:
+            text/event-stream:
+              schema: { type: string }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /coach/from-result:
+    post:
+      operationId: startCoachFromResult
+      tags: [Coach]
+      x-required-permission: coach.interact_self
+      x-required-capability: aiCoachAllowed
+      description: |
+        AI 不重新評分、不改變 pass/fail（INV-3）。ResponseValidator 的 V7
+        會攔截任何宣稱改分的回答，且 `app_coach` 資料庫角色對
+        `learning_results` 只有 SELECT（ADR-026）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [attemptId]
+              properties:
+                attemptId: { type: string, format: uuid }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CoachAnswer' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /coach/citations/{id}/source:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      operationId: openCitationSource
+      tags: [Coach, Knowledge]
+      x-required-permission: coach.citation.open
+      description: |
+        URL 本身不是授權憑證：每次存取都重新做 ACL 驗證（THR-I-004）。
+      responses:
+        '200': { description: Viewer payload + highlight range }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /courses/{id}/coach/usage:
+    parameters: [{ $ref: '#/components/parameters/CourseId' }]
+    get:
+      operationId: getCourseCoachUsage
+      tags: [Coach]
+      x-required-permission: coach.usage_stats.read
+      description: 僅匿名彙整，須達匿名門檻（ARCH §14.5）
+      responses:
+        '200': { description: OK }
+
+  /courses/{id}/coach/conversations:
+    parameters: [{ $ref: '#/components/parameters/CourseId' }]
+    get:
+      operationId: listCourseCoachConversations
+      tags: [Coach]
+      x-required-permission: coach.conversation.read_course
+      x-audit: coach.transcript.read
+      description: |
+        `readable=false` 的對話不提供逐字稿連結，且回應不含訊息內容。
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/CoachConversationSummary' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /courses/{id}/coach/conversations/{convId}:
+    parameters:
+      - $ref: '#/components/parameters/CourseId'
+      - { name: convId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: readCourseCoachTranscript
+      tags: [Coach]
+      x-required-permission: coach.conversation.read_course
+      x-audit: coach.transcript.read
+      description: |
+        **權限通過不等於可讀**。`TranscriptVisibilityGuard` 另檢查兩個
+        彼此獨立的條件（SD §8.7）：
+
+        | 組織政策 | 對話戳印 | 結果 |
+        |---|---|---|
+        | `course_staff` | `course_staff` | 可讀 |
+        | `course_staff` | `aggregate_only` | 403 — 對話建立於承諾不可見的期間 |
+        | `aggregate_only` | `course_staff` | 403 — 組織已收回政策 |
+        | `aggregate_only` | `aggregate_only` | 403 |
+
+        本端點與其列表版本是**唯二寫 Audit 的讀取型 API**。留痕是這項
+        權限得以開放的前提（ADR-028 條件 3），因此 audit 寫入失敗時
+        本請求必須失敗——與一般 audit 的「不回滾業務交易」原則相反，
+        屬刻意例外。該筆紀錄同時出現在學員自己的 `audit.read_self` 摘要中。
+      responses:
+        '200': { description: OK }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # -------------------------------------------------------------- Knowledge
+  /course-versions/{id}/knowledge:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      operationId: listCourseKnowledge
+      tags: [Knowledge]
+      x-required-permission: knowledge.document.read
+      responses:
+        '200': { description: OK }
+
+  /course-versions/{id}/knowledge/documents:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    post:
+      operationId: uploadKnowledgeDocument
+      tags: [Knowledge]
+      x-required-permission: knowledge.document.write
+      x-required-capability: authoringAllowed
+      x-audit: knowledge.document.uploaded
+      description: |
+        上傳先入 quarantine prefix，掃描通過才移至 accepted（ARCH §23.3）。
+        解析與索引為非同步；以 `status` 輪詢進度。
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:  { type: string, format: binary }
+                title: { type: string }
+      responses:
+        '202':
+          description: 已接收，處理中
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DocumentVersion' }
+        '413': { description: '`UPLOAD_TOO_LARGE`' }
+        '415': { description: '`UNSUPPORTED_MEDIA_TYPE`' }
+
+  /course-versions/{id}/knowledge/faqs:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      operationId: listCourseFaqs
+      tags: [Knowledge]
+      x-required-permission: knowledge.document.read
+      responses:
+        '200': { description: OK }
+    post:
+      operationId: createCourseFaq
+      tags: [Knowledge]
+      x-required-permission: knowledge.faq.write
+      x-required-capability: authoringAllowed
+      x-audit: knowledge.document.uploaded
+      description: 教師建立的正式 FAQ 屬 Source Knowledge，檢索優先權高於衍生知識
+      responses:
+        '201': { description: 已建立 }
+
+  /knowledge/faqs/{id}:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    patch:
+      operationId: updateCourseFaq
+      tags: [Knowledge]
+      x-required-permission: knowledge.faq.write
+      x-required-capability: authoringAllowed
+      x-audit: knowledge.document.version_added
+      responses:
+        '200': { description: OK }
+    delete:
+      operationId: deleteCourseFaq
+      tags: [Knowledge]
+      x-required-permission: knowledge.faq.write
+      x-required-capability: authoringAllowed
+      x-audit: knowledge.document.deleted
+      responses:
+        '204': { description: 已刪除 }
+
+  /knowledge/documents/{id}/versions:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    post:
+      operationId: addDocumentVersion
+      tags: [Knowledge]
+      x-required-permission: knowledge.document.write
+      x-required-capability: authoringAllowed
+      x-audit: knowledge.document.version_added
+      description: |
+        舊版保留並轉 superseded。已發布的 course_version 其
+        knowledge_bindings 仍指向舊 document_version，因此舊學員的
+        citation 不會失效（ARCH §13.5）。
+      responses:
+        '202': { description: 已接收 }
+
+  /knowledge/documents/{id}/versions/{versionId}/view:
+    parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: page, in: query, schema: { type: integer } }
+      - { name: anchor, in: query, schema: { type: string } }
+    get:
+      operationId: viewDocumentSource
+      tags: [Knowledge]
+      x-required-permission: knowledge.source.view
+      responses:
+        '200': { description: Viewer payload }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /knowledge/documents/{id}:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    delete:
+      operationId: deleteKnowledgeDocument
+      tags: [Knowledge]
+      x-required-permission: knowledge.document.write
+      x-required-capability: authoringAllowed
+      x-audit: knowledge.document.deleted
+      responses:
+        '204': { description: 已刪除 }
+
+  /knowledge/reindex:
+    post:
+      operationId: triggerReindex
+      tags: [Knowledge, System]
+      x-required-permission: knowledge.reindex.execute
+      x-required-capability: configurationWriteAllowed
+      x-audit: knowledge.reindex.triggered
+      responses:
+        '202': { description: 已排入佇列 }
+
+  /course-versions/{id}/derived-knowledge:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      operationId: listDerivedKnowledge
+      tags: [Knowledge]
+      x-required-permission: derived.read
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/DerivedKnowledge' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+
+  /derived-knowledge/{id}:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    patch:
+      operationId: updateDerivedKnowledge
+      tags: [Knowledge]
+      x-required-permission: derived.write
+      x-required-capability: authoringAllowed
+      x-audit: derived.edited
+      description: 建立新版本，保留 auto-generated 原文（ARCH §14.4-5）
+      responses:
+        '200': { description: OK }
+
+  /derived-knowledge/{id}/verify:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    post:
+      operationId: verifyDerivedKnowledge
+      tags: [Knowledge]
+      x-required-permission: derived.verify
+      x-required-capability: authoringAllowed
+      x-audit: derived.verified
+      description: verified 版本的檢索權重高於 auto_generated（SA §15.3）
+      responses:
+        '200': { description: OK }
+
+  /derived-knowledge/{id}/reject:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    post:
+      operationId: rejectDerivedKnowledge
+      tags: [Knowledge]
+      x-required-permission: derived.verify
+      x-required-capability: authoringAllowed
+      x-audit: derived.rejected
+      responses:
+        '200': { description: OK }
+
+  /derived-knowledge/{id}/retire:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    post:
+      operationId: retireDerivedKnowledge
+      tags: [Knowledge]
+      x-required-permission: derived.verify
+      x-required-capability: authoringAllowed
+      x-audit: derived.retired
+      responses:
+        '200': { description: OK }
+
+  # ------------------------------------------------------------ Certificate
+  /me/certificates:
+    get:
+      operationId: listMyCertificates
+      tags: [Certificate]
+      x-required-permission: certificate.read_self
+      responses:
+        '200': { description: OK }
+
+  /courses/{id}/certificates:
+    parameters: [{ $ref: '#/components/parameters/CourseId' }]
+    get:
+      operationId: listCourseCertificates
+      tags: [Certificate]
+      x-required-permission: certificate.read_all
+      responses:
+        '200': { description: OK }
+
+  /certificates/{id}/download:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      operationId: downloadCertificate
+      tags: [Certificate]
+      x-required-permission: certificate.read_self
+      description: proxy streaming；每次存取重新驗證 self/course scope
+      responses:
+        '200':
+          description: PDF
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /certificates/{id}/revoke:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    post:
+      operationId: revokeCertificate
+      tags: [Certificate]
+      x-required-permission: certificate.revoke
+      x-audit: certificate.revoked
+      description: |
+        撤銷**不刪除** PDF object，只改狀態並留 Audit（ARCH §17.4、AC-CRT-004）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+      responses:
+        '200': { description: 已撤銷 }
+
+  # ---------------------------------------------------------------- License
+  /platform/license:
+    get:
+      operationId: getLicense
+      tags: [License]
+      x-required-permission: platform.license.read
+      responses:
+        '200': { description: OK }
+
+  /platform/license/capabilities:
+    get:
+      operationId: getLicenseCapabilities
+      tags: [License]
+      x-required-permission: platform.license.read
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LicenseCapabilities' }
+
+  /platform/license/activate:
+    post:
+      operationId: activateLicense
+      tags: [License]
+      x-required-permission: platform.license.activate
+      x-audit: license.activated
+      description: |
+        以內建 public key 驗簽（僅接受 EdDSA，拒絕 `alg: none`），比對
+        hardware fingerprint；offline 模式另檢查 nonce 未過期未使用。
+      responses:
+        '200': { description: 已啟用 }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /platform/license/challenge:
+    post:
+      operationId: createLicenseChallenge
+      tags: [License]
+      x-required-permission: platform.license.activate
+      x-audit: license.challenge_issued
+      description: |
+        產生離線啟用用的一次性 challenge（SEQ-09）。
+
+        **技術限制的誠實聲明**：純 VM、離線、無 TPM 的情境下，使用者可透過
+        snapshot/clone 繞過「同硬體只能 Trial 一次」。系統會記錄 last_seen
+        並偵測 clock rollback，但這是 tamper detection，不是絕對防護
+        （ARCH §18.5、ADR-014）。
+      responses:
+        '200': { description: challenge blob }
+
+  # ----------------------------------------------------------------- System
+  /audit-logs:
+    get:
+      operationId: listAuditLogs
+      tags: [System]
+      x-required-permission: audit.read_org
+      description: 依 scope 解析為 platform / org / course / self 四種可見範圍
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - { name: action, in: query, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+      responses:
+        '200': { description: OK }
+
+  /audit-logs/export:
+    post:
+      operationId: exportAuditLogs
+      tags: [System]
+      x-required-permission: audit.export
+      x-audit: audit.exported
+      responses:
+        '202': { description: 已排入佇列 }
+
+  /notifications:
+    get:
+      operationId: listNotifications
+      tags: [System]
+      x-required-permission: notification.read_self
+      responses:
+        '200': { description: OK }
+
+  /platform/settings:
+    get:
+      operationId: getPlatformSettings
+      tags: [System]
+      x-required-permission: platform.settings.read
+      responses:
+        '200': { description: OK }
+    put:
+      operationId: updatePlatformSettings
+      tags: [System]
+      x-required-permission: platform.settings.write
+      x-required-capability: configurationWriteAllowed
+      x-audit: system.settings.updated
+      responses:
+        '200': { description: OK }
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /platform/ai-provider:
+    get:
+      operationId: getAiProvider
+      tags: [System]
+      x-required-permission: platform.ai_provider.write
+      responses:
+        '200': { description: 'API key 於回應中遮罩' }
+    put:
+      operationId: updateAiProvider
+      tags: [System]
+      x-required-permission: platform.ai_provider.write
+      x-required-capability: configurationWriteAllowed
+      x-audit: ai.provider.updated
+      description: |
+        預設為 `none`——資料離開客戶邊界必須是刻意行為（SA §22.1）。
+        首次設定精靈強制三選一：外部 Provider／內部 endpoint／暫不啟用。
+      responses:
+        '200': { description: OK }
+
+  /platform/backups:
+    get:
+      operationId: listBackups
+      tags: [System]
+      x-required-permission: platform.backup.execute
+      responses:
+        '200': { description: OK }
+    post:
+      operationId: executeBackup
+      tags: [System]
+      x-required-permission: platform.backup.execute
+      x-audit: backup.executed
+      responses:
+        '202': { description: 已排入佇列 }
+
+  /system/jobs:
+    get:
+      operationId: getJobQueueStatus
+      tags: [System]
+      x-required-permission: platform.health.read
+      responses:
+        '200': { description: OK }
+
+  /system/health:
+    get:
+      operationId: getHealth
+      tags: [System]
+      security: []
+      description: liveness probe——僅檢查進程存活
+      responses:
+        '200': { description: OK }
+
+  /system/ready:
+    get:
+      operationId: getReadiness
+      tags: [System]
+      security: []
+      description: |
+        readiness probe。**刻意不包含 Elasticsearch 與 LLM**（ADR-023）：
+        若列入，其故障會導致整個 API 被判定不可用，違反
+        NFR-AVAIL-002/003。兩者狀態以 `degraded[]` 呈現。
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ready:    { type: boolean }
+                  degraded: { type: array, items: { type: string } }
+
+  /system/metrics:
+    get:
+      operationId: getMetrics
+      tags: [System]
+      x-required-permission: platform.health.read
+      responses:
+        '200':
+          description: Prometheus text format
+          content:
+            text/plain:
+              schema: { type: string }
+
+  # ------------------------------------------------------- Public（免認證）
+  /public/certificates/{verificationCode}:
+    parameters:
+      - name: verificationCode
+        in: path
+        required: true
+        schema: { type: string, minLength: 20 }
+    get:
+      operationId: verifyCertificatePublic
+      tags: [Certificate]
+      security: []
+      servers:
+        - url: https://{host}
+          variables: { host: { default: localhost } }
+      description: |
+        QR 驗證端點。per-IP rate limit + 常數時間比對；查無資料回 404 且
+        回應時間不因存在與否而顯著差異（THR-D-005、AC-CRT-005）。
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PublicCertificate' }
+        '404': { description: 查無此驗證碼 }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /public/cms/home:
+    get:
+      operationId: getPublicHome
+      tags: [CMS]
+      security: []
+      servers:
+        - url: https://{host}
+          variables: { host: { default: localhost } }
+      responses:
+        '200': { description: OK }

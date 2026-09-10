@@ -1,0 +1,14 @@
+# 一律以 LF 儲存於 repo 並以 LF checkout。
+# Windows 上若 checkout 成 CRLF：bash 腳本與送進容器的 SQL/heredoc 會壞掉。
+* text=auto eol=lf
+
+*.sh   text eol=lf
+*.sql  text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+
+# 二進位
+*.docx binary
+*.pdf  binary
+*.png  binary
+*.jpg  binary
