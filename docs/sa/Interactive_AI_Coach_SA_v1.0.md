@@ -143,7 +143,7 @@ flowchart TB
 | 外部系統 | 用途 | 失效時系統行為（Degradation） | 相關不變條件 |
 |---|---|---|---|
 | LLM Provider | Coach 回答、Derived Knowledge 生成、embedding | Coach 回 `COACH_PROVIDER_UNAVAILABLE`；**學習、提交、完成判定、發證全部照常** | INV-4 |
-| SMTP | Email 通知 | Job retry → DLQ；in-app 通知仍送達 | — |
+| SMTP | Email 通知 | 一般通知：Job retry → DLQ；in-app 通知仍送達。**帳號安全信件（密碼重設、邀請）不經佇列**，於 API 內同步寄出（token 不落地到佇列）；邀請信失敗時回報 `emailSent: false`，使用者可改用「忘記密碼」（SD §8.10） | — |
 | Vendor Activation Service | Trial online activation、DR 重綁 | 改走 offline challenge/response（SEQ-09） | — |
 | Object Storage | 教材原檔、影片、證書 PDF | 已 index 的 chunk 檢索仍可用，Source Viewer 不可用（`SOURCE_TEMPORARILY_UNAVAILABLE`） | — |
 | Elasticsearch | RAG 檢索 | Coach 走 `insufficient_evidence` fallback；課程學習不受影響 | INV-4, INV-5 |
@@ -477,6 +477,7 @@ flowchart LR
 | UC-ORG-005 | 檢視/編輯自己的個人資料 | Self | Self | Self | Self | P | — | self scope |
 | UC-ORG-006 | 設定組織級 AI 配額與 retention | R | P | — | — | — | R* | ARCH §24.3/§24.4 |
 | UC-ORG-007 | 組織級報表 | R | P | R | — | — | R* | 匿名門檻適用 |
+| UC-ORG-008 | 建立組織時指定首位管理員（寄送設定密碼邀請） | P | — | — | — | — | R* | v1.6：解決新組織無人可新增成員的缺口（SD ADR-030） |
 
 ## 5.4 UC-CMS 首頁 CMS
 
@@ -753,7 +754,7 @@ ALLOW  ⇔  ∃ grant ∈ effectivePermissions(user)
 
 | Role | 預設 scope | 預設 Permission（摘要） |
 |---|---|---|
-| `platform_admin` | platform | `platform.*`, `org.read`, `cms.*`, `audit.read_platform`, `audit.export`, `course.read`, `course.version.read`, `coach.interact_test` |
+| `platform_admin` | platform | `platform.*`, `org.read`, `org.user.read`（§5.3 UC-ORG-003；v1.5 補列，migration 0016）, `cms.*`, `audit.read_platform`, `audit.export`, `course.read`, `course.version.read`, `coach.interact_test` |
 | `org_admin` | organization | `org.*`, `cms.*`（可委派）, `course.create`, `course.archive`, `course.staff.assign`, `course.read`, `course.version.read`, `enrollment.*`（可設定）, `learning.result.read_all`, `coach.transcript_policy.write`, `audit.read_org` |
 | `course_admin` | course | `course.*`（除 `course.create` 由 org 授予）, `enrollment.*`, `learning.result.read_all`, `learning.timeline.read_all`, `certificate.read_all`, `certificate.revoke`, `knowledge.document.*`, `derived.read`, `coach.conversation.read_course`†, `audit.read_course` |
 | `instructor` | course | `course.version.write/validate/create`, `course.completion_rule.write`, `course.coach_policy.write`, `knowledge.*`, `derived.*`, `learning.result.read_all`, `learning.timeline.read_all`, `coach.interact_test`, `coach.usage_stats.read`, `coach.conversation.read_course`†, `audit.read_course` |
@@ -1803,7 +1804,9 @@ erDiagram
 | `permissions` | `id` | `code`, `description`, `required_capability` | — | `UNIQUE(code)` |
 | `role_permissions` | `(role_id, permission_id)` | — | roles, permissions | — |
 | `user_org_roles` | `id` | `scope_type`（platform/org/course/self）, `scope_id`, `granted_by`, `expires_at` | users, organizations, roles | `UNIQUE(user_id, role_id, scope_type, scope_id)`；`idx_uor_user`；`idx_uor_scope` |
-| `user_sessions` | `id` | `session_token_hash`（只存 hash）, `active_organization_id`, `issued_at`, `expires_at`, `revoked_at`, `ip`, `user_agent` | users, organizations | `UNIQUE(session_token_hash)`；`idx_sessions_user_active WHERE revoked_at IS NULL` |
+| `user_sessions` | `id` | `session_token_hash`（只存 hash）, `active_organization_id`, `issued_at`, `expires_at`, `last_seen_at`（閒置逾時，0015）, `revoked_at`, `ip`, `user_agent` | users, organizations | `UNIQUE(session_token_hash)`；`idx_sessions_user_active WHERE revoked_at IS NULL` |
+| `password_reset_tokens` | `id` | `user_id`, `token_hash`（只存 SHA-256）, `expires_at`, `used_at`, `requested_ip` | users | `UNIQUE(token_hash)`；`idx_prt_user_open WHERE used_at IS NULL`；僅 `app_api` 可讀（0015） |
+| `rate_limit_counters` | `(bucket, window_start)` | `hits` | — | UNLOGGED；bucket 內帳號識別先雜湊；僅 `app_api` 可讀寫（0015） |
 
 ### 11.3.2 Course
 
@@ -1903,8 +1906,8 @@ erDiagram
 | Method | Path | Perm | Cap | Aud | 說明 |
 |---|---|---|---|:--:|---|
 | POST | `/api/auth/login` | — | — | 是 | rate limit；失敗不區分帳號不存在/密碼錯 |
-| POST | `/api/auth/logout` | 已登入 | — | 否 | — |
-| POST | `/api/auth/refresh` | 已登入 | — | 否 | rotate session |
+| POST | `/api/auth/logout` | 已登入（需 CSRF） | — | 是 | `auth.logout`；撤銷 session 並清除 cookie |
+| POST | `/api/auth/refresh` | 已登入（需 CSRF） | — | 否 | 輪替 session 與 CSRF token，不延長絕對到期 |
 | POST | `/api/auth/password-reset/request` | — | — | 是 | 常數時間回應 |
 | POST | `/api/auth/password-reset/confirm` | — | — | 是 | token 一次性 |
 | GET | `/api/me` | 已登入 | — | 否 | 回 profile + effective permissions + capabilities |
@@ -2058,7 +2061,10 @@ erDiagram
 | 403 | `LICENSE_SIGNATURE_INVALID` | 驗簽失敗 | SEQ-08 |
 | 403 | `LICENSE_CHALLENGE_INVALID` | nonce 不符/過期/已用 | SEQ-09 |
 | 403 | `LICENSE_NOT_ACTIVATED` | 尚無任何有效授權／啟用紀錄（與「已到期」區分，對使用者意義不同） | §7.7 |
+| 403 | `CSRF_TOKEN_INVALID` | 已登入的狀態變更請求缺少或帶錯 `X-CSRF-Token` | SD §8.2 |
+| 422 | `PASSWORD_RESET_TOKEN_INVALID` | 密碼重設連結無效、已使用或已過期 | SD §8.1 |
 | 403 | `LICENSE_ACTIVATION_REJECTED` | 供應方 activation service 拒絕啟用 | SEQ-08 |
+| 503 | `LICENSE_ACTIVATION_UNAVAILABLE` | 線上啟用服務未設定或無法連線（改用離線啟用） | SEQ-08 |
 | 400 | `VALIDATION_FAILED` | request body / query 不符 schema | ARCH §29 |
 | 500 | `INTERNAL_ERROR` | 未預期錯誤；回應不含內部細節，僅 correlation_id（THR-I-008） | §18.1 |
 | 429 | `RATE_LIMITED` | 一般 rate limit | ARCH §23.1 |
@@ -2777,7 +2783,7 @@ Browser (X-Request-Id) → Nginx → API (correlation_id)
 | 4 | AI Provider 與資料出境規範 | `system_settings: ai.provider` | 是否允許外部 LLM；PII 過濾強度 | 預設 `none`（**維持保守**），但改為**顯性未設定**：見 §22.1 |
 | 5 | 備份保存天數 | 備份腳本參數 | 儲存空間 | 7d + 4w + 6m |
 | 6 | RPO / RTO 合約值 | 合約 + §16 | 備份頻率、是否需 WAL 連續歸檔 | RPO 24h / RTO 8h |
-| 7 | SMTP / SSO 實際提供者 | `system_settings: smtp.*` / IdP adapter | 通知可用性、Phase 2 SSO | SMTP 必填；SSO 不啟用 |
+| 7 | SMTP / SSO 實際提供者 | SMTP：環境變數 `SMTP_*`（v1.7，SD ADR-031；帳密不存於 `system_settings`）/ IdP adapter | 通知可用性、Phase 2 SSO | SMTP 必填（未設定則不寄帳號信件，正式環境啟動時警告）；SSO 不啟用 |
 | 8 | 是否需閉網 LLM / embedding model | Provider Adapter endpoint | 是否需內部推論服務與硬體 | 否 |
 | 9 | Certificate 法定格式 / 組織章 | 證書模板 + `organizations.branding` | PDF 模板設計 | 通用模板 |
 | 10 | Trial 是否要求 TPM 級強綁定 | Fingerprint collector 設定 | §8.7 的技術限制聲明 | 否（明示可繞過） |
@@ -2847,3 +2853,7 @@ Browser (X-Request-Id) → Nginx → API (correlation_id)
 | v1.1 | 2026-09-09 | 依需求方決議調整：ADR-017 由 ADR-028 取代（開放課程範圍逐字稿讀取 + 四道約束）；ADR-025 修訂為分階段 SSE；NFR-PERF-003 拆為 a/b/c；新增 THR-I-011、UC-COA-010~012、AC-COA-009~013、SEC-13~16、E2E-11~12；§22 兩項保守預設改為 §22.1/§22.2 的顯性處理 | System Analyst |
 | v1.2 | 2026-09-10 | 全面複查修正：§11.3 補 `user_sessions`、`notification_preferences`；§12.2 補 11 個端點（平台設定、AI Provider、備份、組織停用/報表、hotfix、正式 FAQ、audit 匯出、metrics）；刪除重複權限 `platform.audit.read`；§6.2 權限表正規化為一權限一列（73 個）；§12.3 補 `TRANSCRIPT_VISIBILITY_IMMUTABLE` 與 `RULE_*` 子代碼 | System Analyst |
 | v1.3 | 2026-09-10 | Repo skeleton 實作回饋：§12.3 補 `LICENSE_NOT_ACTIVATED`、`LICENSE_ACTIVATION_REJECTED`、`VALIDATION_FAILED`、`INTERNAL_ERROR` | System Analyst |
+| v1.4 | 2026-09-11 | 認證實作：§11.3 新增 `password_reset_tokens`、`rate_limit_counters`、`user_sessions.last_seen_at`；§12.2 logout 改為寫稽核、logout／refresh 需 CSRF；§12.3 新增 `CSRF_TOKEN_INVALID`、`PASSWORD_RESET_TOKEN_INVALID` | System Analyst |
+| v1.5 | 2026-09-11 | 授權啟用實作：§12.3 新增 `LICENSE_ACTIVATION_UNAVAILABLE`；§6.3 platform_admin 補列 `org.user.read`（原與 §5.3 不一致） | System Analyst |
+| v1.6 | 2026-09-11 | 組織管理實作：§5.3 新增 UC-ORG-008（建立組織時指定首位管理員，SD ADR-030） | System Analyst |
+| v1.7 | 2026-09-11 | SMTP 寄信實作：§2.2 註明帳號安全信件不經佇列；§22 #7 SMTP 設定位置改為環境變數（SD ADR-031） | System Analyst |

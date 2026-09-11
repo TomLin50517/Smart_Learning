@@ -14,7 +14,7 @@ Modular Monolith（NestJS）+ Worker，PostgreSQL 為 system of record。
 
 ## 技術棧
 
-Node 24 · TypeScript 6 · NestJS 12（ESM）· Fastify 5 · PostgreSQL 18 · Vitest 5（SWC）
+Node 24 · TypeScript 6 · NestJS 12（ESM）· Fastify 5 · PostgreSQL 18 · Vitest 5（SWC）· Vite 8 + React 19 + react-router 8
 
 ## 結構
 
@@ -22,13 +22,14 @@ Node 24 · TypeScript 6 · NestJS 12（ESM）· Fastify 5 · PostgreSQL 18 · Vi
 apps/
   api/        NestJS HTTP API — 17 個模組（SA §4.1），Guard 鏈（INV-8）
   worker/     Job consumer — SKIP LOCKED 取件、backoff、DLQ
+  web/        React SPA — 登入／密碼、組織與成員、系統授權（SD §7.1.3）
 packages/
   contracts/  跨 app 共用型別、錯誤碼、權限碼（由 SA 產生）
   domain/     純領域規則，無 I/O（license capability…）
-migrations/   0001–0014 SQL
-tools/        migrate.ts、gen-permissions.ts
-tests/        contract/（INV-T4）、e2e/（testcontainers）、db/（59 項 DB 不變條件）
-infra/        Dockerfile、docker-compose、nginx
+migrations/   0001–0016 SQL
+tools/        migrate.ts、gen-permissions.ts、create-admin.ts、license-*（供應方專用）
+tests/        contract/（INV-T4）、e2e/（testcontainers + 行程內 SMTP）、db/（67 項 DB 不變條件）
+infra/        Dockerfile（api/worker）、Dockerfile.web（nginx + SPA）、docker-compose、nginx
 ```
 
 ## 常用指令
@@ -36,12 +37,13 @@ infra/        Dockerfile、docker-compose、nginx
 ```bash
 npm install
 npm run gen:permissions   # SA §6.2 → packages/contracts/src/permissions.generated.ts
-npm run build             # tsc -b
-npm run typecheck         # 全 repo，含測試與 tools
+npm run build             # tsc -b（api / worker / packages）
+npm run build:web         # Vite 建置 apps/web
+npm run typecheck         # 全 repo，含測試、tools 與 web
 npm test                  # unit + contract
 npm run test:arch         # 模組邊界（dependency-cruiser）
-npm run test:e2e          # Guard 鏈 × 真實 PostgreSQL 18（需 Docker）
-npm run test:db           # migration + 59 項 DB 不變條件（需 Docker）
+npm run test:e2e          # Guard 鏈、認證、授權、組織、SMTP × 真實 PostgreSQL 18（需 Docker）
+npm run test:db           # migration + 67 項 DB 不變條件（需 Docker）
 ```
 
 ## 本機執行
@@ -51,7 +53,16 @@ cp .env.example .env      # 填入密碼，並加上 PG_SUPERUSER_PASSWORD
 docker compose -f infra/compose/docker-compose.yml up --build
 ```
 
-API 於 `http://127.0.0.1:8080/api/`（經 nginx）；PostgreSQL 綁 `127.0.0.1:55432`。
+網頁與 API 皆經 nginx：`http://127.0.0.1:8080/`（API 在 `/api/`）；PostgreSQL 綁 `127.0.0.1:55432`。
+第一位平台管理員以 `npm run admin:create` 建立（密碼從環境變數讀取，見該檔說明）。
+
+### 前端開發
+
+```bash
+npm run dev:web           # http://localhost:5173，/api 代理到 IAC_API_URL（預設 http://127.0.0.1:3000）
+```
+
+本機以純 HTTP 開發時，API 需設 `COOKIE_SECURE=false`（正式環境禁止）。
 
 ## 護欄（違反即 CI 失敗）
 
