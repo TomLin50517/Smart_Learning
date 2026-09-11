@@ -21,10 +21,14 @@ export interface PermissionGrant extends ScopeGrant {
 export interface RequestContext {
   correlationId: string;
   user?: AuthUser;
+  /** AuthGuard 寫入；CSRF token 由此推導 */
+  sessionId?: string;
   /** PermissionGuard 延遲載入，同一請求內只查一次 */
   grants?: PermissionGrant[];
   /** PermissionGuard 解析出的目標 scope，供 AuditInterceptor 記錄 */
   target?: { organizationId: string | null; courseId: string | null; resourceId: string | null };
+  /** handler 可補充稽核細節（新建資源的 id、變更前後），AuditInterceptor 會一併寫入 */
+  audit?: { resourceId?: string; before?: unknown; after?: unknown; metadata?: Record<string, unknown> };
 }
 
 declare module 'fastify' {

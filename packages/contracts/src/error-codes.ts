@@ -6,12 +6,16 @@ export const ERROR_CODES = {
   // --- 通用 -----------------------------------------------------------------
   UNAUTHENTICATED: 401,
   PERMISSION_DENIED: 403,
+  /** 已登入的狀態變更請求缺少或帶錯 X-CSRF-Token（SD §8.2） */
+  CSRF_TOKEN_INVALID: 403,
   ORG_SCOPE_DENIED: 403,
   /** 不存在「或」不在可視 scope——刻意合併，避免 ID 探測（ADR-019） */
   NOT_FOUND: 404,
   /** request body / query 不符 schema */
   VALIDATION_FAILED: 400,
   RATE_LIMITED: 429,
+  /** 密碼重設連結無效、已使用或已過期 */
+  PASSWORD_RESET_TOKEN_INVALID: 422,
   INTERNAL_ERROR: 500,
 
   // --- 課程 / 學習 ----------------------------------------------------------
@@ -48,6 +52,8 @@ export const ERROR_CODES = {
   LICENSE_SIGNATURE_INVALID: 403,
   LICENSE_CHALLENGE_INVALID: 403,
   LICENSE_ACTIVATION_REJECTED: 403,
+  /** 線上啟用服務未設定或無法連線——改用離線啟用 */
+  LICENSE_ACTIVATION_UNAVAILABLE: 503,
 } as const;
 
 export type ErrorCode = keyof typeof ERROR_CODES;

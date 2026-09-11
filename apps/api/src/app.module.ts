@@ -5,8 +5,10 @@ import { CommonModule } from './common/common.module.js';
 import { DatabaseModule } from './common/database.module.js';
 import { AppExceptionFilter } from './common/exception.filter.js';
 import { AuthGuard } from './common/guards/auth.guard.js';
+import { CsrfGuard } from './common/guards/csrf.guard.js';
 import { LicenseCapabilityGuard } from './common/guards/license-capability.guard.js';
 import { PermissionGuard } from './common/guards/permission.guard.js';
+import { RateLimitGuard } from './common/rate-limit.js';
 import { EnvModule } from './config/env.module.js';
 import { AiCoachModule } from './modules/ai-coach/ai-coach.module.js';
 import { AuditModule } from './modules/audit/audit.module.js';
@@ -51,9 +53,13 @@ import { SystemModule } from './modules/system/system.module.js';
     SystemModule,
   ],
   providers: [
-    // INV-8：AuthN → RBAC/scope/ownership → License Capability → (handler) → Audit
-    // APP_GUARD 依註冊順序執行，順序即安全語意，勿任意調整。
+    // INV-8：AuthN → 流量限制 → CSRF → RBAC/scope/ownership → License Capability → (handler) → Audit
+    // APP_GUARD 依註冊順序執行，順序即安全語意，勿任意調整：
+    //  - RateLimit 在 Auth 之後，才能做「每位使用者」限額；公開路由跳過 Auth、直接吃 IP 限額
+    //  - CSRF 在 Permission 之前：偽造的跨站請求不該消耗權限查詢
     { provide: APP_GUARD, useClass: AuthGuard },
+    { provide: APP_GUARD, useClass: RateLimitGuard },
+    { provide: APP_GUARD, useClass: CsrfGuard },
     { provide: APP_GUARD, useClass: PermissionGuard },
     { provide: APP_GUARD, useClass: LicenseCapabilityGuard },
     { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },

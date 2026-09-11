@@ -3,7 +3,7 @@
  * 真實 PostgreSQL 18（testcontainers）+ 全部 migration + 以 app_api 角色連線的 NestJS app。
  */
 import 'reflect-metadata';
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { Controller, Get, Module, Post } from '@nestjs/common';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
@@ -12,12 +12,15 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../../apps/api/src/app.module.js';
 import { configureApp, createAdapter } from '../../apps/api/src/bootstrap.js';
+import { csrfTokenFor } from '../../apps/api/src/common/csrf.js';
 import { Audit, RequirePermission } from '../../apps/api/src/common/decorators.js';
+import { hashToken } from '../../apps/api/src/common/tokens.js';
 import { ENV, loadEnv } from '../../apps/api/src/config/env.js';
 import { LicenseService } from '../../apps/api/src/modules/license/application/license.service.js';
 import { applyMigrations } from '../../tools/migrate.js';
 
 const PW = { api_pw: 'e2e_api', coach_pw: 'e2e_coach', worker_pw: 'e2e_worker', ro_pw: 'e2e_ro' };
+const SECRET = 'e2e-session-secret-e2e-session-secret';
 const FINGERPRINT = 'sha256:e2e-machine';
 const ORG = '11111111-0000-0000-0000-00000000000a';
 const ADMIN = 'aaaaaaaa-0000-0000-0000-00000000000a';
@@ -41,23 +44,36 @@ class ProbeController {
 @Module({ controllers: [ProbeController] })
 class ProbeModule {}
 
+interface TestSession {
+  token: string;
+  csrf: string;
+}
+
 let container: StartedPostgreSqlContainer;
 let admin: pg.Client;
 let app: NestFastifyApplication;
-const tokens = { admin: '', learner: '', revoked: '' };
+const s = {} as Record<'admin' | 'learner' | 'revoked', TestSession>;
 
-async function session(userId: string, revoked = false): Promise<string> {
+async function session(userId: string, revoked = false): Promise<TestSession> {
   const token = randomBytes(32).toString('base64url');
-  await admin.query(
+  const r = await admin.query<{ id: string }>(
     `INSERT INTO user_sessions (user_id, session_token_hash, active_organization_id, expires_at, revoked_at)
-     VALUES ($1, $2, $3, now() + interval '1 hour', $4)`,
-    [userId, createHash('sha256').update(token).digest('hex'), ORG, revoked ? new Date() : null],
+     VALUES ($1, $2, $3, now() + interval '1 hour', $4) RETURNING id`,
+    [userId, hashToken(token), ORG, revoked ? new Date() : null],
   );
-  return token;
+  return { token, csrf: csrfTokenFor(r.rows[0]!.id, SECRET) };
 }
 
-const get = (url: string, token?: string, headers: Record<string, string> = {}) =>
-  app.inject({ method: 'GET', url, headers: { ...headers, ...(token && { cookie: `iac_session=${token}` }) } });
+const get = (url: string, t?: TestSession, headers: Record<string, string> = {}) =>
+  app.inject({ method: 'GET', url, headers: { ...headers, ...(t && { cookie: `iac_session=${t.token}` }) } });
+
+/** 帶齊 session cookie + CSRF cookie + CSRF header 的 POST */
+const post = (url: string, t: TestSession, headers: Record<string, string> = {}) =>
+  app.inject({
+    method: 'POST',
+    url,
+    headers: { ...headers, cookie: `iac_session=${t.token}; iac_csrf=${t.csrf}`, 'x-csrf-token': t.csrf },
+  });
 
 beforeAll(async () => {
   container = await new PostgreSqlContainer('postgres:18-alpine')
@@ -82,9 +98,9 @@ beforeAll(async () => {
      SELECT $2::uuid, id, 'self'::scope_type, $2::uuid, $3::uuid FROM roles WHERE code = 'learner'`,
     [ADMIN, LEARNER, ORG],
   );
-  tokens.admin = await session(ADMIN);
-  tokens.learner = await session(LEARNER);
-  tokens.revoked = await session(LEARNER, true);
+  s.admin = await session(ADMIN);
+  s.learner = await session(LEARNER);
+  s.revoked = await session(LEARNER, true);
 
   const host = container.getHost();
   const port = container.getPort();
@@ -95,7 +111,7 @@ beforeAll(async () => {
         NODE_ENV: 'test',
         DATABASE_URL: `postgres://app_api:${PW.api_pw}@${host}:${port}/iac`,
         DATABASE_URL_COACH: `postgres://app_coach:${PW.coach_pw}@${host}:${port}/iac`,
-        SESSION_SECRET: 'e2e-session-secret-e2e-session-secret',
+        SESSION_SECRET: SECRET,
         LICENSE_FINGERPRINT_OVERRIDE: FINGERPRINT,
       }),
     )
@@ -120,10 +136,10 @@ describe('system endpoints are public', () => {
     expect(res.headers['x-request-id']).toBeTruthy();
   });
 
-  it('ready → 200, all 14 migrations present', async () => {
+  it('ready → 200, all migrations present', async () => {
     const res = await get('/api/system/ready');
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ ready: true, components: { database: 'ok', migrations: 14 } });
+    expect(res.json()).toMatchObject({ ready: true, components: { database: 'ok', migrations: 16 } });
   });
 
   it('echoes a safe incoming X-Request-Id', async () => {
@@ -142,17 +158,17 @@ describe('authentication (INV-8 step 1)', () => {
   });
 
   it('unknown token → 401', async () => {
-    expect((await get('/api/me', 'not-a-real-token')).statusCode).toBe(401);
+    expect((await get('/api/me', { token: 'not-a-real-token', csrf: '' })).statusCode).toBe(401);
   });
 
   it('revoked session → 401', async () => {
-    expect((await get('/api/me', tokens.revoked)).statusCode).toBe(401);
+    expect((await get('/api/me', s.revoked)).statusCode).toBe(401);
   });
 });
 
 describe('/api/me', () => {
   it('learner sees own permissions and no platform permissions', async () => {
-    const res = await get('/api/me', tokens.learner);
+    const res = await get('/api/me', s.learner);
     expect(res.statusCode).toBe(200);
     const me = res.json();
     expect(me.user.id).toBe(LEARNER);
@@ -166,19 +182,19 @@ describe('/api/me', () => {
 
 describe('permission guard (INV-8 step 2)', () => {
   it('learner → platform endpoint → 403 PERMISSION_DENIED', async () => {
-    const res = await get('/api/platform/license/capabilities', tokens.learner);
+    const res = await get('/api/platform/license/capabilities', s.learner);
     expect(res.statusCode).toBe(403);
     expect(res.json().error.code).toBe('PERMISSION_DENIED');
   });
 
   it('platform admin → 200', async () => {
-    const res = await get('/api/platform/license/capabilities', tokens.admin);
+    const res = await get('/api/platform/license/capabilities', s.admin);
     expect(res.statusCode).toBe(200);
     expect(res.json().state).toBe('unlicensed');
   });
 
   it('route without any permission declaration is denied by default', async () => {
-    const res = await get('/api/__probe/undeclared', tokens.admin);
+    const res = await get('/api/__probe/undeclared', s.admin);
     expect(res.statusCode).toBe(403);
     expect(res.body).not.toContain('leaked');
   });
@@ -200,7 +216,7 @@ describe('license capability (reads from DB, computed by @iac/domain)', () => {
     ]);
     app.get(LicenseService).invalidate();
 
-    const res = await get('/api/platform/license/capabilities', tokens.admin);
+    const res = await get('/api/platform/license/capabilities', s.admin);
     expect(res.json()).toMatchObject({
       state: 'frozen',
       runtimeAllowed: true,
@@ -213,22 +229,15 @@ describe('license capability (reads from DB, computed by @iac/domain)', () => {
 
 describe('audit interceptor (INV-8 step 5)', () => {
   it('successful audited route writes an audit_logs row with actor and correlation id', async () => {
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/__probe/audited',
-      headers: { cookie: `iac_session=${tokens.admin}`, 'x-request-id': 'e2e-audit-0001' },
-    });
+    const res = await post('/api/__probe/audited', s.admin, { 'x-request-id': 'e2e-audit-0001' });
     expect(res.statusCode).toBe(201);
     const row = await admin.query(`SELECT actor_user_id, action, outcome FROM audit_logs WHERE correlation_id = 'e2e-audit-0001'`);
     expect(row.rows).toEqual([{ actor_user_id: ADMIN, action: 'system.settings.updated', outcome: 'success' }]);
   });
 
-  it('denied request writes no success audit row', async () => {
-    await app.inject({
-      method: 'POST',
-      url: '/api/__probe/audited',
-      headers: { cookie: `iac_session=${tokens.learner}`, 'x-request-id': 'e2e-audit-0002' },
-    });
+  it('request denied by permission (with valid CSRF) writes no success audit row', async () => {
+    const res = await post('/api/__probe/audited', s.learner, { 'x-request-id': 'e2e-audit-0002' });
+    expect(res.json().error.code).toBe('PERMISSION_DENIED');
     const row = await admin.query(`SELECT 1 FROM audit_logs WHERE correlation_id = 'e2e-audit-0002'`);
     expect(row.rowCount).toBe(0);
   });

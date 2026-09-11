@@ -59,6 +59,10 @@ export class AppExceptionFilter implements ExceptionFilter {
       message = 'Internal error';
     }
 
+    if (exception instanceof DomainError && exception.options.retryAfterSec) {
+      void reply.header('retry-after', String(exception.options.retryAfterSec));
+    }
+
     const body: ErrorEnvelope = { error: { code, message, correlation_id: correlationId, ...(details && { details }) } };
     void reply.status(status).header('x-request-id', correlationId).send(body);
   }

@@ -10,9 +10,10 @@ import type { AuthUser } from './context.js';
  * - organization：取 route param（預設 'id'），未指定則用 session 的 active organization
  * - course / course_version：取 route param，再由 ScopeResolver 查出所屬組織
  * - self：目標就是目前使用者
+ * - any：列表端點——任何範圍持有此權限即可進入，handler 必須依授權過濾結果
  */
 export interface ScopeTarget {
-  scope: ScopeType;
+  scope: ScopeType | 'any';
   /** 對應的資源種類；course scope 可由 course 或 course_version 反查 */
   resource?: 'organization' | 'course' | 'course_version';
   /** route param 名稱，預設 'id' */
