@@ -268,8 +268,33 @@ SELECT pg_temp.t('T58 4 monthly partitions per table', NULL,
      OR (SELECT count(*) FROM pg_inherits i JOIN pg_class c ON c.oid=i.inhrelid
           WHERE i.inhparent='audit_logs'::regclass AND c.relname ~ '_\d{4}_\d{2}$') <> 4
      THEN RAISE EXCEPTION 'PARTITIONS'; END IF; END $d$ $$, 'OK');
-SELECT pg_temp.t('T59 14 migrations recorded', NULL,
- $$DO $d$ BEGIN IF (SELECT count(*) FROM schema_migrations) <> 14 THEN RAISE EXCEPTION 'COUNT'; END IF; END $d$ $$, 'OK');
+SELECT pg_temp.t('T59 16 migrations recorded', NULL,
+ $$DO $d$ BEGIN IF (SELECT count(*) FROM schema_migrations) <> 16 THEN RAISE EXCEPTION 'COUNT'; END IF; END $d$ $$, 'OK');
+
+-- ============================================================ 0015 auth tables
+SELECT pg_temp.t('T60 app_coach cannot read password_reset_tokens', 'app_coach',
+ $$SELECT count(*) FROM password_reset_tokens$$, '42501');
+SELECT pg_temp.t('T61 app_worker cannot read password_reset_tokens', 'app_worker',
+ $$SELECT count(*) FROM password_reset_tokens$$, '42501');
+SELECT pg_temp.t('T62 app_coach cannot read user_sessions', 'app_coach',
+ $$SELECT count(*) FROM user_sessions$$, '42501');
+SELECT pg_temp.t('T63 app_readonly cannot read rate_limit_counters', 'app_readonly',
+ $$SELECT count(*) FROM rate_limit_counters$$, '42501');
+SELECT pg_temp.t('T64 app_api can upsert rate_limit_counters', 'app_api',
+ $$INSERT INTO rate_limit_counters (bucket, window_start, hits) VALUES ('t', now(), 1)
+   ON CONFLICT (bucket, window_start) DO UPDATE SET hits = rate_limit_counters.hits + 1$$, 'OK');
+SELECT pg_temp.t('T65 reset token hash must be 64 hex chars', NULL,
+ $$INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
+   VALUES ('aaaaaaaa-0000-0000-0000-000000000001', 'short', now())$$, '23514');
+
+-- ============================================================ 0016 org membership
+SELECT pg_temp.t('T66 platform_admin can read org users (SA §5.3 UC-ORG-003)', NULL,
+ $$DO $d$ BEGIN IF NOT EXISTS (SELECT 1 FROM role_permissions rp JOIN roles r ON r.id = rp.role_id
+      JOIN permissions p ON p.id = rp.permission_id WHERE r.code = 'platform_admin' AND p.code = 'org.user.read')
+   THEN RAISE EXCEPTION 'MISSING'; END IF; END $d$ $$, 'OK');
+SELECT pg_temp.t('T67 token purpose restricted to reset/invite', NULL,
+ $$INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, purpose)
+   VALUES ('aaaaaaaa-0000-0000-0000-000000000001', repeat('a', 64), now(), 'bogus')$$, '23514');
 
 -- ------------------------------------------------------------------ report
 \pset border 1

@@ -1,0 +1,21 @@
+{
+  "//": "全 repo 型別檢查（含測試與 tools）。Vitest 以 SWC 轉譯只剝除型別不檢查，tsc -b 又排除 *.test.ts，因此需要這一份。",
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "incremental": false,
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": [
+    "packages/*/src/**/*.ts",
+    "apps/*/src/**/*.ts",
+    "tests/**/*.ts",
+    "tools/**/*.ts",
+    "vitest.config.ts"
+  ],
+  "//web": "apps/web 為瀏覽器程式（DOM + JSX），由 apps/web/tsconfig.json 另行檢查（npm run typecheck 會一併執行）",
+  "exclude": ["apps/web/**"]
+}

@@ -1,0 +1,112 @@
+# =============================================================================
+# 本機 / 單機部署（SD §9.1，Small profile）
+#   cp .env.example .env   # 填入密碼
+#   docker compose -f infra/compose/docker-compose.yml up --build
+#
+# Phase 0 只啟動 postgres / migrate / api / worker / reverse-proxy。
+# Elasticsearch 與 object storage 於 Phase 2 以 profile 啟用：
+#   docker compose -f infra/compose/docker-compose.yml --profile search --profile storage up
+# 不含 Redis / Kafka / RabbitMQ（ARCH §5.2、ADR-011）。
+# =============================================================================
+name: iac
+
+x-app: &app
+  build:
+    context: ../..
+    dockerfile: infra/docker/Dockerfile
+  image: iac-app:dev
+  env_file:
+    - path: ../../.env
+      required: false
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: iac
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PG_SUPERUSER_PASSWORD:?set PG_SUPERUSER_PASSWORD in .env}
+    command: >
+      postgres -c shared_buffers=2GB -c work_mem=16MB -c max_connections=100
+    volumes:
+      - pgdata:/var/lib/postgresql
+    # 只綁 127.0.0.1，且避開本機常見的 5432
+    ports: ["127.0.0.1:55432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d iac"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 8g
+
+  migrate:
+    <<: *app
+    restart: "no"
+    command: ["node", "tools/migrate.ts"]
+    environment:
+      DATABASE_URL_MIGRATE: postgres://postgres:${PG_SUPERUSER_PASSWORD}@postgres:5432/iac
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  api:
+    <<: *app
+    command: ["node", "apps/api/dist/main.js"]
+    environment:
+      # api 只經由 nginx 對外 → 信任一層代理的 X-Forwarded-For
+      TRUST_PROXY: "1"
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/system/ready || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    mem_limit: 4g
+
+  worker:
+    <<: *app
+    command: ["node", "apps/worker/dist/main.js"]
+    environment:
+      WORKER_QUEUES: ingest,ai,output
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    mem_limit: 4g
+
+  # nginx + React SPA（建置產物與 nginx.conf 皆包進 image，見 Dockerfile.web）
+  reverse-proxy:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.web
+    image: iac-web:dev
+    depends_on: [api]
+    ports: ["127.0.0.1:8080:80"]
+    restart: unless-stopped
+    mem_limit: 512m
+
+  # ---- Phase 2 ---------------------------------------------------------------
+  elasticsearch:
+    profiles: ["search"]
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.0.0
+    environment:
+      discovery.type: single-node
+      ES_JAVA_OPTS: "-Xms2g -Xmx2g"
+      xpack.security.enabled: "true"
+      ELASTIC_PASSWORD: ${ES_PASSWORD:-changeme}
+    volumes: [esdata:/usr/share/elasticsearch/data]
+    mem_limit: 4g
+
+  object-storage:
+    profiles: ["storage"]
+    image: ${S3_IMAGE:-minio/minio}
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-iac}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-changeme123}
+    volumes: [objdata:/data]
+    mem_limit: 2g
+
+volumes:
+  pgdata:
+  esdata:
+  objdata:

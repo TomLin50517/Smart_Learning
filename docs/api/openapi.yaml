@@ -96,8 +96,11 @@ components:
       in: cookie
       name: iac_session
       description: |
-        HttpOnly + Secure + SameSite=Lax。所有非 GET 請求另需
-        `X-CSRF-Token` header，其值須與 `iac_csrf` cookie 相同（SD §8.2）。
+        HttpOnly + Secure + SameSite=Lax。已登入狀態下的所有非 GET 請求另需
+        `X-CSRF-Token` header，其值須與 `iac_csrf` cookie 相同，且等於
+        HMAC(SESSION_SECRET, session id)——換 session 即失效（SD §8.2）。
+        公開端點（登入、密碼重設）沒有 session 可綁定，不需要此 header。
+        缺少或不符回 403 `CSRF_TOKEN_INVALID`。
 
   parameters:
     Cursor:
@@ -697,6 +700,7 @@ paths:
       operationId: logout
       tags: [Identity]
       x-auth-only: true
+      x-audit: auth.logout
       responses:
         '204': { description: 已登出 }
 
@@ -727,7 +731,9 @@ paths:
       tags: [Identity]
       security: []
       x-audit: auth.password_reset.completed
-      description: token 一次性；重設後撤銷該使用者所有 session
+      description: |
+        token 一次性；重設後撤銷該使用者所有 session、解除登入鎖定。
+        token 無效、已使用或已過期回 422 `PASSWORD_RESET_TOKEN_INVALID`。
       responses:
         '204': { description: 已重設 }
         '422': { $ref: '#/components/responses/UnprocessableEntity' }
@@ -763,8 +769,28 @@ paths:
       x-required-capability: configurationWriteAllowed
       x-required-limit: maxOrganizations
       x-audit: org.created
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [code, name]
+              properties:
+                code: { type: string, pattern: '^[a-z0-9][a-z0-9-]{1,62}$' }
+                name: { type: string, maxLength: 200 }
+                initialAdmin:
+                  type: object
+                  additionalProperties: false
+                  required: [email, displayName]
+                  description: 新組織的首位管理員；寄出設定密碼邀請（ADR-030）
+                  properties:
+                    email: { type: string, format: email }
+                    displayName: { type: string, maxLength: 200 }
       responses:
-        '201': { description: 已建立 }
+        '201': { description: '已建立；帶 initialAdmin 時回傳 `initialAdmin: { userId, invited, emailSent }`——`emailSent: false` 表示邀請信未能寄出，對方可改用「忘記密碼」設定密碼' }
+        '400': { description: '`VALIDATION_FAILED`；代碼重複時 details 為 `code: already_exists`' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
   /organizations/{id}:
@@ -826,8 +852,25 @@ paths:
       x-required-capability: configurationWriteAllowed
       x-required-limit: maxActiveLearners
       x-audit: org.user.created
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email, displayName]
+              properties:
+                email: { type: string, format: email }
+                displayName: { type: string, maxLength: 200 }
+                role:
+                  type: string
+                  enum: [learner, org_admin, auditor]
+                  default: learner
+                  description: 課程角色（course_admin／instructor）請經由角色指派端點設定
       responses:
-        '201': { description: 已建立 }
+        '201': { description: '回傳 `{ userId, invited, emailSent }`。新帳號 `invited: true` 並寄出設定密碼邀請，`emailSent` 表示信件是否已交給郵件伺服器（失敗時對方可改用「忘記密碼」）；既有帳號 `invited: false`、`emailSent: false`（直接加入）' }
+        '400': { description: '已是成員時 details 為 `email: already_member`' }
 
   /organizations/{id}/users/{userId}/roles:
     parameters:
@@ -839,7 +882,29 @@ paths:
       x-required-permission: org.role.assign
       x-required-capability: configurationWriteAllowed
       x-audit: org.role.assigned
-      description: 高風險操作，before/after 完整寫入 Audit
+      description: |
+        高風險操作，before/after 完整寫入 Audit。整組取代使用者在本組織的角色。
+        course_admin／instructor 必須指定屬於本組織的課程；platform_admin 無法由此授予；
+        非本組織成員回 404；會移除最後一位 org_admin 時回 400 `last_org_admin`。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [roles]
+              properties:
+                roles:
+                  type: array
+                  maxItems: 50
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [role]
+                    properties:
+                      role: { type: string, enum: [org_admin, course_admin, instructor, learner, auditor] }
+                      courseId: { type: string, format: uuid, description: 課程角色必填，其他角色不可提供 }
       responses:
         '200': { description: OK }
 
@@ -1850,8 +1915,31 @@ paths:
       description: |
         以內建 public key 驗簽（僅接受 EdDSA，拒絕 `alg: none`），比對
         hardware fingerprint；offline 模式另檢查 nonce 未過期未使用。
+        同一 license_id 不接受比已安裝版本更早簽發者。
+        **刻意不要求 license capability**——未授權狀態下必須仍能啟用授權。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  additionalProperties: false
+                  required: [licenseFile]
+                  properties:
+                    licenseFile: { type: string, description: 供應方簽發的授權檔內容（JWS） }
+                - type: object
+                  additionalProperties: false
+                  required: [activationCode]
+                  properties:
+                    activationCode: { type: string, description: 線上啟用碼（需設定 LICENSE_ACTIVATION_URL） }
       responses:
-        '200': { description: 已啟用 }
+        '200':
+          description: 已啟用
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LicenseCapabilities' }
+        '503': { description: '`LICENSE_ACTIVATION_UNAVAILABLE`：線上啟用服務未設定或無法連線' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
   /platform/license/challenge:
@@ -1868,7 +1956,18 @@ paths:
         並偵測 clock rollback，但這是 tamper detection，不是絕對防護
         （ARCH §18.5、ADR-014）。
       responses:
-        '200': { description: challenge blob }
+        '200':
+          description: challenge blob——交給供應方，換取綁定本機的授權檔
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [challenge, fingerprint, weakFingerprint, expiresAt]
+                properties:
+                  challenge: { type: string }
+                  fingerprint: { type: string }
+                  weakFingerprint: { type: boolean, description: 可用硬體識別不足 2 項（ADR-014） }
+                  expiresAt: { type: string, format: date-time }
 
   # ----------------------------------------------------------------- System
   /audit-logs:

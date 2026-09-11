@@ -1153,6 +1153,8 @@ UPDATE job_queue
 | 0012 | `0012_seed_permissions.sql` | permissions / roles / role_permissions 種子資料（SA §6.2–6.3），**含 v1.1 新增的 `coach.conversation.read_course` 與 `coach.transcript_policy.write`**（§2.11.1）。不 seed `coach_transcript_visibility` 設定列（§2.11.2） | 0002 |
 | 0013 | `0013_seed_interactive_definitions.sql` | 內建互動元件定義（§7.3） | 0003 |
 | 0014 | `0014_partitions_bootstrap.sql` | 建立當月與後續 3 個月分區 | 0005, 0009 |
+| 0015 | `0015_auth.sql` | `user_sessions.last_seen_at`；`password_reset_tokens`；`rate_limit_counters`（UNLOGGED）；收回 coach／worker／readonly 對 session 與重設 token 的讀取權 | 0002, 0011 |
+| 0016 | `0016_org_membership.sql` | `password_reset_tokens.purpose`（reset / invite）；platform_admin 補 `org.user.read` | 0012, 0015 |
 
 **規則**：
 
@@ -2226,6 +2228,23 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 
 > **前端只做提示，不是防線**（ARCH §18.3、SA AC-LIC-005）。所有隱藏的操作在後端仍有 guard；SEC-07 專門驗證這一點。
 
+### 7.1.3 Phase 0 實作現況（v1.8，`apps/web`）
+
+| 項目 | 實作 |
+|---|---|
+| 技術 | Vite 8 + React 19 + react-router 8（data router；v8 起 `RouterProvider` 自 `react-router/dom` 匯入，`react-router-dom` 已移除）。XState（§7.2）於學習 Runtime 階段導入 |
+| 已實作路由 | `/login`、`/forgot-password`、`/password-reset`、`/set-password`；`/app`（首頁）、`/app/org/users`（目前組織的成員與角色）、`/app/platform/organizations`、`/app/platform/organizations/:orgId/users`、`/app/platform/license`。`/` 在 CMS 首頁完成前暫時導向 `/app` |
+| 與上表的差異 | 新增 `/forgot-password`（申請重設）與 `/set-password`（組織邀請；與 `/password-reset` 共用 confirm 端點，文案不同）；角色指派併入成員頁，不另設 `/app/org/roles`；平台管理員檢視特定組織成員使用 `/app/platform/organizations/:orgId/users` |
+| 角色編輯 | 目前只能勾選組織層級角色（org_admin／learner／auditor）；指派為「整組取代」，因此既有課程角色原樣送回，避免被清除。課程角色的指派待課程 API 完成後提供 |
+| Session | 啟動時以 `GET /api/me` 探測；任何 API 回 401（逾時、閒置、撤銷）→ 回到未登入並導向 `/login?next=`。`next` 只接受站內相對路徑（拒絕 `//`、`/\`、絕對 URL、控制字元），防止開放式重導向 |
+| CSRF | 狀態變更請求從非 HttpOnly 的 `iac_csrf` cookie 讀出 token 放入 `X-CSRF-Token`；session cookie 為 HttpOnly，前端完全不接觸 |
+| 錯誤文案 | `Record<ErrorCode, string>` 的繁體中文文案表：contracts 新增錯誤碼時編譯失敗，確保不漏翻。顯示 correlation id 供追查；不顯示伺服器原始訊息或例外內容 |
+| Token 連結 | 密碼重設／邀請頁讀出 token 後立即自網址列移除，不留在瀏覽紀錄、書籤或截圖中 |
+| 授權頁 | 顯示狀態、能力、限制、硬體識別；線上啟用（有 `LICENSE_ACTIVATION_URL` 時）與離線啟用（產生請求碼 → 上傳／貼上授權檔） |
+| 依賴邊界 | `apps/web` 只能 import `@iac/contracts`（dependency-cruiser `web-only-uses-contracts`） |
+| 部署 | `infra/docker/Dockerfile.web`：Vite 建置產物與 nginx.conf 包成 reverse-proxy image。`/assets/`（檔名含雜湊）長期快取，其餘路徑 fallback 至 `index.html` 且不快取。nginx 補上 `include mime.types`（否則 JS 以 octet-stream 送出，在 nosniff 下被瀏覽器拒絕）；location 內不使用 `add_header`（會使 server 層的安全標頭全部失效——同時修正了 `/api/coach/` 的既有問題） |
+| 開發 | `npm run dev:web`（:5173，`/api` 同源代理到 `IAC_API_URL`，預設 :3000），cookie 行為與正式環境一致 |
+
 ## 7.2 XState Machine 定義
 
 ### 7.2.1 `activityRuntimeMachine`（學習 Runtime 核心）
@@ -2605,12 +2624,14 @@ Coach 面板頂端**常駐**顯示可見性標示，文案直接取自該對話�
 
 | 項目 | 規格 |
 |---|---|
-| 密碼雜湊 | Argon2id，`memoryCost=19456 KiB`、`timeCost=2`、`parallelism=1`（OWASP 建議起點），參數存於雜湊字串以便未來升級 |
-| Session | 隨機 256-bit token，DB 只存 SHA-256 hash；cookie `HttpOnly; Secure; SameSite=Lax; Path=/` |
-| Session TTL | access 8 小時；閒置 30 分鐘後需 refresh；refresh 時 rotate token |
-| 登入節流 | 同帳號 5 次失敗 → 鎖 15 分鐘（`locked_until`）；同 IP 20 次/分鐘 |
-| 登入回應 | 帳號不存在與密碼錯誤回相同訊息與相近耗時（常數時間比對 + 假 hash 計算） |
-| 密碼重設 | 一次性 token（hash 儲存）、TTL 30 分鐘、使用後失效、重設後撤銷所有 session |
+| 密碼雜湊 | Argon2id，m=19456 KiB、t=2、p=1（OWASP 建議起點）。使用 Node 24.7+ 內建 `crypto.argon2`（已通過 RFC 9106 測試向量；Node 仍標為 experimental），輸出標準 PHC 字串——日後改用其他實作時既有雜湊仍可驗證，使用者不需重設密碼。登入成功時若參數過時自動重新雜湊 |
+| Session | 隨機 256-bit token，DB 只存 SHA-256；cookie `HttpOnly; Secure; SameSite=Lax; Path=/`（`COOKIE_SECURE=false` 僅供本機純 HTTP 除錯） |
+| Session 期限 | 絕對到期 8 小時（`expires_at`）＋閒置 30 分鐘（`last_seen_at`，最多每 60 秒更新一次以免每個請求都寫 DB）。refresh 以新 session 取代舊 session（輪替 token 與 CSRF token），**不延長**絕對到期 |
+| 登入鎖定 | 連續 5 次密碼錯誤 → 鎖 15 分鐘（`locked_until`）；流量限制見 §8.8 |
+| 登入回應 | 帳號不存在、停用、鎖定、密碼錯誤一律回同一訊息 `Invalid email or password`；帳號不存在時仍對假雜湊跑一次比對，回應時間無差異。失敗原因只寫入 audit `metadata.reason`，未知帳號不記錄嘗試的 email |
+| 密碼重設 | 一次性 token（只存 hash）、TTL 30 分鐘；新連結發出即作廢舊連結；重設後撤銷該使用者所有 session 並解除鎖定。申請端點一律回 202，實際工作於回應送出後才執行——回應內容與時間皆不透露帳號是否存在 |
+| 寄信 | `ACCOUNT_MAILER` 介面，由 NotificationModule 提供（§8.10）：設定 `SMTP_HOST` 時經 SMTP 寄出；未設定時非正式環境把連結寫進 log，正式環境只記錄「未寄出」且**不記 token** |
+| 初始管理員 | `npm run admin:create`；密碼由環境變數提供、不接受命令列參數（避免留在 shell history）；同 email 已存在時拒絕執行 |
 | MFA | 擴充點：`users.mfa_enabled` + `IdentityProviderAdapter`；MVP 不實作 |
 
 ## 8.2 CSRF / CORS / Headers
@@ -2625,7 +2646,7 @@ add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
 
 | 控制 | 規格 |
 |---|---|
-| CSRF | double-submit：`iac_csrf` cookie（非 HttpOnly）+ `X-CSRF-Token` header，值須相同且與 session 綁定 |
+| CSRF | double-submit 且綁定 session：token = HMAC-SHA256(`SESSION_SECRET`, session id)，`iac_csrf` cookie（非 HttpOnly）與 `X-CSRF-Token` header 皆須等於此值（常數時間比對）；換 session 即失效。只檢查已登入狀態下的非 GET 請求——公開端點（登入、密碼重設）沒有 session 可綁定，由 SameSite=Lax 與流量限制保護。錯誤碼 `CSRF_TOKEN_INVALID`（403） |
 | CORS | 預設**不允許**跨來源（web 與 api 同源經 reverse proxy）；如需，白名單設定於 `system_settings` |
 | H5P iframe | `frame-src 'self'`；H5P 內容以同源 iframe 載入並加 `sandbox="allow-scripts allow-same-origin"` |
 
@@ -2764,30 +2785,32 @@ export class LicenseCapabilityGuard implements CanActivate {
 
 `maxActiveLearners` 的計數定義：`enrollments.status IN ('active','suspended','reopened')` 的 distinct `user_id`（跨組織合計）。此定義寫入文件避免爭議。
 
-### 8.4.3 簽章驗證
+### 8.4.3 簽章驗證與啟用
 
-```ts
-verifyLicense(rawJws: string): LicensePayload {
-  // 1. 以內建 public key（編譯時嵌入 + 檔案覆寫檢查）驗證 Ed25519 簽章
-  // 2. 檢查 alg 白名單（僅 EdDSA），拒絕 alg: none
-  // 3. 檢查 iat 不在未來、payload schema 合法
-  // 4. 檢查 hardware_binding == 本機 fingerprint
-  // 5. offline 模式另檢查 nonce 存在、未過期、未使用
-}
-```
+實作：`apps/api/src/modules/license/`（v1.5）。安裝授權前，下列檢查必須全部通過：
 
-Fingerprint 計算：
+| 檢查 | 規則 | 失敗錯誤碼 |
+|---|---|---|
+| 格式與演算法 | JWS compact；header `alg` 必須為 `EdDSA`——`none`、`HS256` 等一律拒絕（防 algorithm confusion） | `LICENSE_SIGNATURE_INVALID` |
+| 簽章 | 以**程式碼內建**的供應方 Ed25519 public key 驗證（`vendor-public-key.ts`）；先驗簽，通過後才解析 payload | `LICENSE_SIGNATURE_INVALID` |
+| payload | schema 驗證；限期授權（trial／subscription／evaluation_extension）必須有 `expires_at`；`issued_at` 不可晚於現在 5 分鐘以上 | `LICENSE_SIGNATURE_INVALID` |
+| 硬體綁定 | `hardware_binding` 必須等於本機 fingerprint | `LICENSE_HARDWARE_MISMATCH` |
+| 一次性 challenge | 帶 `nonce` 者：challenge 存在、未使用、未過期、fingerprint 相符；啟用即標記已使用 | `LICENSE_CHALLENGE_INVALID` |
+| 防回滾 | 同一 `license_id` 不接受比已安裝版本更早簽發者 | `LICENSE_SIGNATURE_INVALID` |
 
-```
-fingerprint = SHA256(
-  normalize(machine_id) || '|' ||
-  normalize(dmi_system_uuid) || '|' ||
-  normalize(root_disk_uuid) || '|' ||
-  normalize(tpm_ek_hash ?? '')
-)
-```
+啟用成功後，同一時間只保留一筆有效啟用（其餘標記 `replaced`），並寫入 `license.activated` 稽核——只記 license_id、類型與模式，不記原始授權內容。啟用端點刻意**不**要求 license capability，未授權時必須仍能啟用。
 
-缺項以空字串參與（保持穩定性）；若可用元素少於 2 個，`license.warnings` 加註 `WEAK_FINGERPRINT`，並在 UI 明示（ARCH §18.5 的誠實聲明）。
+**Public key 不可由部署設定替換**：若能以環境變數更換 public key，客戶即可自產金鑰對、自簽任意授權。`LICENSE_PUBLIC_KEY_OVERRIDE`／`LICENSE_FINGERPRINT_OVERRIDE` 僅供開發測試，`NODE_ENV=production` 時設定即拒絕啟動。v1.4 以前的 `LICENSE_PUBLIC_KEY` 環境變數已移除。
+
+線上啟用（SEQ-08）：`LICENSE_ACTIVATION_URL`，正式環境必須為 https。供應方回傳的授權仍須通過上表全部檢查，不因來源而被信任。未設定或無法連線時回 `LICENSE_ACTIVATION_UNAVAILABLE`（503）。
+
+供應方工具（不隨產品交付）：
+- `npm run license:keygen`：私鑰只能寫到 repo 以外、權限 0600、不覆寫既有檔案
+- `npm run license:issue`：以產品端相同 schema 驗證後才簽發；提供 challenge 時自動帶入 fingerprint 與 nonce
+
+Fingerprint：`SHA256(machine-id | DMI product_uuid | hostname)`，缺項以空字串參與；可用元素少於 2 個時標記 `weak`（ADR-014 的誠實聲明）。容器部署須疊加 `infra/compose/docker-compose.prod.yml`：固定 hostname 並唯讀掛載主機 `machine-id`，否則每次重建容器 fingerprint 都會改變、授權隨之失效。
+
+時鐘回撥偵測（ARCH §18.5）：每小時以應用程式時鐘更新 `last_seen_at`；目前時間早於它超過 5 分鐘即標記 `clock_rollback_detected`。只記錄與告警，不改變授權判定。
 
 ## 8.5 上傳安全
 
@@ -2927,15 +2950,55 @@ export class TranscriptVisibilityGuard implements CanActivate {
 
 | 端點群 | 限制 | 依據 |
 |---|---|---|
-| `POST /api/auth/login` | 5/min/account、20/min/IP | THR-S-001 |
-| `POST /api/auth/password-reset/*` | 3/hour/account、10/hour/IP | — |
+| `POST /api/auth/login` | 5/min/account、20/min/IP（計入所有嘗試，不論成敗） | THR-S-001 |
+| `POST /api/auth/password-reset/request` | 3/hour/account、10/hour/IP | THR-S-001 |
+| `POST /api/auth/password-reset/confirm` | 10/hour/IP | THR-S-001 |
 | Coach 訊息 | 10/min/learner、依 org 設定的每日 token 預算 | THR-D-001 |
 | Learning events | 120 events/min/enrollment（超額丟棄不阻斷） | THR-D-002 |
 | `/public/certificates/*` | 30/min/IP | THR-D-005 |
-| 一般 API | 600/min/session | — |
+| 一般 API | 由 nginx `limit_req` 負責（見下方說明） | — |
 | 上傳 | 20/hour/user | THR-D-003 |
 
-實作以 PostgreSQL 計數表 + 時間窗（避免引入 Redis，符合 ADR-011 精神），高流量部署可換 Nginx `limit_req` 作第一層。
+實作（`apps/api/src/common/rate-limit.ts`）：PostgreSQL `UNLOGGED` 固定時間窗計數表 `rate_limit_counters`（0015），不引入 Redis（ADR-011）。UNLOGGED 不寫 WAL，當機後計數歸零——對流量限制可接受，換取寫入效能。帳號類 bucket 以 SHA-256 雜湊，不存 email 原文或攻擊者輸入。
+
+**一般 API 的每 session 限額不在應用層實作**（v1.4 決定）：每個請求多一次 DB 寫入的成本不划算，改由 nginx `limit_req` 作第一層（`infra/nginx/nginx.conf`）；應用層只保護上表中的高風險端點。
+
+IP 判定依 `TRUST_PROXY`：預設不信任 `X-Forwarded-For`；只有確定位於 nginx 之後才設為 `1`（信任一層代理）。否則 client 可偽造 IP 規避限額，並污染 audit 的 `actor_ip`。
+
+
+## 8.9 組織成員與角色管理（v1.6）
+
+實作：`apps/api/src/modules/organization/`。
+
+| 規則 | 說明 |
+|---|---|
+| 列表端點的 `any` scope | `GET /organizations` 以 `{ scope: 'any' }` 宣告：在任何範圍（self 除外）持有 `org.read` 即可進入，handler 以 `organizationsGranted()` 過濾——platform 授權看全部，其餘只看自己持有權限的組織。**`any` 路由必須依授權過濾結果** |
+| 首位管理員 | 新組織由 Platform Admin 建立時以 `initialAdmin` 指定（ADR-030）；否則沒有任何人有權限新增成員 |
+| 新成員 | 一律不設密碼，寄出「設定密碼」邀請；token 與密碼重設共用機制（`purpose='invite'`，有效期 `INVITATION_TTL_HOURS`）。管理員永不經手他人密碼。既有帳號直接加入，不重寄邀請。回應的 `emailSent` 表示邀請信是否已交給郵件伺服器（§8.10） |
+| 角色指派 | `PATCH …/users/{userId}/roles` 整組取代：course_admin／instructor 必須指定屬於本組織的課程；`platform_admin` 無法經由組織端點授予（輸入驗證排除）；非本組織成員回 404；會讓組織失去最後一位 org_admin 的變更回 400 `last_org_admin`；變更前後寫入 `org.role.assigned` 稽核 |
+| 停用組織 | 狀態改為 disabled 後，`GrantLoader` 立即忽略該組織的所有授權，成員對該組織的請求改回 404 |
+| 品牌設定 | 只接受品牌 token（`primaryColor`、`logoAssetId`），拒絕其他鍵值——不允許注入 CSS／HTML |
+| ID 驗證 | 路由與 body 的 ID 以 `z.guid()` 驗證（任何 8-4-4-4-12 十六進位），對齊 PostgreSQL `uuid` 型別。不用 zod 4 的 `z.uuid()`：它檢查 RFC 版本位元，會拒絕資料庫中合法但非 v4 的 ID |
+| 稽核細節 | handler 以 `req.ctx.audit` 補充 resourceId（新建資源）與 before／after，由 AuditInterceptor 一併寫入 |
+
+
+## 8.10 帳號信件（SMTP）（v1.7）
+
+實作：`apps/api/src/modules/notification/`。
+
+| 規則 | 說明 |
+|---|---|
+| 介面歸屬 | `AccountMailer`／`ACCOUNT_MAILER` 定義於 `notification.contracts.ts`；identity 經 contracts 依賴 notification（單向，無循環）。`NotificationModule` 以 factory 選擇實作：設定 `SMTP_HOST` → `SmtpMailer`，否則 `LogOnlyMailer` |
+| 同步寄送、不進佇列 | 密碼重設與邀請屬安全性信件，含一次性 token：直接在 API 行程內寄出，不寫入 job queue，token 不落地到任何佇列資料表。密碼重設在回應送出後（`setImmediate`）才寄，回應內容與時間不洩漏帳號是否存在 |
+| TLS | `SMTP_SECURE=true` 為隱式 TLS；否則預設 `SMTP_REQUIRE_TLS=true`，伺服器不支援 STARTTLS 即拒絕寄出，**不降級為明文**。正式環境禁止關閉（env 驗證拒絕啟動）。憑證一律驗證；內部 CA 以 `NODE_EXTRA_CA_CERTS` 提供，不提供關閉驗證的選項 |
+| 逾時 | 連線 10 秒、greeting 10 秒、socket 30 秒（nodemailer 預設 2～10 分鐘，不適合位於請求路徑上） |
+| 模板 | 純函式（`account-templates.ts`），繁體中文與英文：使用者 `locale` 為 `en*` → 英文，其餘 → 繁體中文。每封信含純文字與 HTML 兩個版本。外部字串（組織名稱）在 HTML 中跳脫；放進主旨前移除控制字元（含 CR/LF，防 header 注入）並限長 120 字。信件只含連結與期限，不含學習資料 |
+| 自動信件標示 | 加上 `Auto-Submitted: auto-generated`（RFC 3834），避免自動回覆程式回信 |
+| Log | 只記 `kind`、收件者網域、message id；失敗只記 SMTP 錯誤碼與回應碼。**不記連結、不記完整收件地址、不記完整錯誤物件**（可能夾帶伺服器回應）。未設定 SMTP 時：非正式環境把連結寫進 log（開發用），正式環境只記「未寄出」並在啟動時警告 |
+| 失敗處理 | 邀請信失敗不回滾：帳號與成員資格已建立，API 回應 `emailSent: false`，對方可在登入頁以「忘記密碼」取得設定連結。密碼重設信失敗只寫 log（回應早已是 202） |
+| 設定來源 | 環境變數 `SMTP_*`，不存於 `system_settings`（ADR-031）；變更需重啟 API |
+| 設定驗證 | 設了 `SMTP_HOST` 必須有含地址的 `SMTP_FROM`；設了 `SMTP_USER` 必須有 `SMTP_PASSWORD`；違反即拒絕啟動 |
+| 測試 | `tests/e2e/smtp-mail.test.ts` 以行程內 `smtp-server` 驗證：實際送達、MIME 解碼後的內容與語系、信中連結可完成密碼重設、header／HTML 注入無效、收件者被拒時 `invite()` 回 `false`、無 STARTTLS 時拒寄、帳密錯誤拒寄 |
 
 ---
 
@@ -2946,7 +3009,7 @@ export class TranscriptVisibilityGuard implements CanActivate {
 ```yaml
 services:
   reverse-proxy:
-    image: nginx:1.27-alpine
+    build: { context: ../.., dockerfile: infra/docker/Dockerfile.web }   # nginx + React SPA（v1.8）
     depends_on: [web, api]
     ports: ["443:443", "80:80"]
     volumes:
@@ -3073,11 +3136,21 @@ limit_req_zone $binary_remote_addr zone=public:10m rate=30r/m;
 | `ELASTICSEARCH_URL` / `ELASTICSEARCH_API_KEY` | 是 | — |
 | `S3_ENDPOINT` / `S3_BUCKET` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` / `S3_REGION` | 是 | — |
 | `SESSION_SECRET` | 是 | ≥ 32 bytes |
-| `LICENSE_PUBLIC_KEY` | 是 | Ed25519 public key（PEM） |
+| `CSRF_COOKIE_NAME` | 否 | 預設 `iac_csrf` |
+| `SESSION_TTL_HOURS` / `SESSION_IDLE_MINUTES` | 否 | 絕對到期（預設 8）／閒置逾時（預設 30） |
+| `COOKIE_SECURE` | 否 | 預設 `true`；僅本機純 HTTP 除錯時設 `false` |
+| `TRUST_PROXY` | 否 | 預設 `false`；位於 nginx 之後設 `1`（§8.8） |
+| `PUBLIC_BASE_URL` | 否 | 密碼重設連結的對外網址 |
+| `LOGIN_MAX_FAILURES` / `LOGIN_LOCK_MINUTES` | 否 | 預設 5 次／15 分鐘 |
+| `PASSWORD_RESET_TTL_MINUTES` | 否 | 預設 30 |
+| `LICENSE_PUBLIC_KEY_OVERRIDE` / `LICENSE_FINGERPRINT_OVERRIDE` | 否 | **僅限非正式環境**；正式環境設定即拒絕啟動（§8.4.3）。供應方 public key 內建於程式碼 |
+| `LICENSE_ACTIVATION_URL` | 否 | 供應方線上啟用服務；未設定時只能離線啟用；正式環境須 https |
+| `LICENSE_CHALLENGE_TTL_HOURS` | 否 | 離線 challenge 有效期，預設 168 |
+| `INVITATION_TTL_HOURS` | 否 | 組織邀請「設定密碼」連結有效期，預設 72 |
 | `AI_PROVIDER` | 否 | `openai` \| `azure_openai` \| `internal` \| `none`（預設 `none`） |
 | `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL` / `AI_EMBEDDING_MODEL` | 條件 | provider ≠ none 時必填 |
 | `AI_DAILY_TOKEN_BUDGET_DEFAULT` | 否 | 組織每日 token 預設上限；**非零保守值**，不是啟用閘門（ADR-029）。80% 告警、100% 硬停 |
-| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` | 否 | 未設定則僅 in-app 通知 |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_SECURE` / `SMTP_REQUIRE_TLS` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` | 否 | 未設定 `SMTP_HOST` 則不寄帳號信件（§8.10）。`SMTP_REQUIRE_TLS` 預設 true，正式環境不可關閉；設了 `SMTP_HOST` 則 `SMTP_FROM` 必填、設了 `SMTP_USER` 則 `SMTP_PASSWORD` 必填 |
 | `WORKER_QUEUES` | worker | `ingest,ai,output` |
 | `RETRIEVAL_MODE` | 否 | `hybrid` \| `hybrid_external_embedding` \| `lexical_only` |
 | `LOG_LEVEL` | 否 | 預設 `info` |
@@ -3593,7 +3666,7 @@ export interface AuditEvent {
 | action | resourceType | 記錄 before/after | 對應 UC |
 |---|---|:--:|---|
 | `auth.login.succeeded` | user | 否 | — |
-| `auth.login.failed` | user | 否（僅 email 與原因類別） | THR-S-001 |
+| `auth.login.failed` | user | 否（`metadata.reason` 記原因類別；未知帳號不記錄嘗試的 email） | THR-S-001 |
 | `auth.logout` | user | 否 | — |
 | `auth.password_reset.requested` / `.completed` | user | 否 | — |
 | `org.created` / `.updated` / `.disabled` | organization | 是 | UC-PLT-007, UC-ORG-002 |
@@ -3941,6 +4014,20 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 - **對照**：AI Provider 預設 `none` **維持不變**——資料離開客戶邊界必須是刻意行為。但改以首次設定精靈強制三選一，消除沉默失敗（SA §22.1）。
 - **後果**：管理者第一天起就看得到實際用量，據以調整而非事前猜測。
 
+### ADR-030：新組織的首位管理員於建立組織時指定
+
+- **狀態**：Accepted（v1.6）
+- **脈絡**：依 SA §6.3，Platform Admin 對組織使用者只有唯讀權（UC-ORG-003／004 為 R）；而新組織裡還沒有任何人擁有 `org.user.write`／`org.role.assign`——新組織將永遠無法產生第一位成員。
+- **決策**：`POST /organizations` 接受選填的 `initialAdmin`，在同一交易中建立組織與首位 org_admin，並寄出設定密碼邀請。Platform Admin 的日常權限不放寬，分權模型維持不變。
+- **後果**：若某組織日後失去所有管理員（例如帳號遭停用），目前沒有平台層級的復原途徑，列為後續項目（需 Audit 的平台層級管理員復原流程）。「最後一位 org_admin 不可移除」的護欄降低了此風險。
+
+### ADR-031：SMTP 連線設定以環境變數提供，不存於 system_settings
+
+- **狀態**：Accepted（v1.7）
+- **脈絡**：SA §22 #7 原將 SMTP 設定位置列為 `system_settings: smtp.*`。但 SMTP 帳密屬機密：依 ADR-026，資料庫角色採「廣 SELECT、窄寫入」，app_coach／app_readonly 可讀 `system_settings`——帳密放進資料庫即對這些角色可見，也會隨資料庫備份流出。
+- **決策**：SMTP 連線設定（主機、埠、TLS、帳密、寄件者）以環境變數 `SMTP_*` 提供，啟動時驗證；與 `SESSION_SECRET`、資料庫密碼同等視為部署機密。
+- **後果**：Platform Admin 無法在 UI 修改 SMTP 設定，須由部署管理者修改環境變數並重啟。日後若要 UI 化，須先有機密的加密儲存機制（以部署金鑰加密的欄位，且不授權給 app_coach／app_readonly），另立 ADR。
+
 ---
 
 # 16. 實作順序建議（對應 ARCH §30 Phase）
@@ -3965,3 +4052,8 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.1 | 2026-09-09 | 依需求方決議調整：ADR-024 確認；ADR-025 補分階段 SSE；ADR-026 授權形狀改為寬讀窄寫並新增 `app_worker`；新增 `transcript_visibility` 欄位與凍結觸發器（ADR-028 落實）；新增 ADR-029（AI 預算為旋鈕非閘門）；新增 §2.11 Seed 資料規格與 §14.6.1~4 fixture 補值規格；§8.6、§8.7、§6.2.4、§10.6、§9.3、§12、§14 同步更新 | Software Designer |
 | v1.2 | 2026-09-10 | PostgreSQL 18.6 實測後修正：`system_settings` 主鍵改代理鍵 + `NULLS NOT DISTINCT` 唯一約束；不可變觸發器涵蓋 INSERT（T04 發現）；append-only 由 RULE 改為 RAISE 觸發器；`audit_logs` 補 append-only 觸發器；§2.3.1 改為與 migration 一致的實作說明；新增 `cms.updated` audit action | Software Designer |
 | v1.3 | 2026-09-10 | Repo skeleton 實作回饋：§8.4.1 `evaluation_extension` 改為硬到期（與 trial 同組）；§1.1 apps 相依規則改為單向，消除與 §1.3 的矛盾 | Software Designer |
+| v1.4 | 2026-09-11 | 認證實作：§8.1 依實作改寫（內建 Argon2id + PHC、雙重到期、登入回應一致化、非同步重設申請、初始管理員工具）；§8.2 CSRF = HMAC(session id)；§8.8 一般 API 限額改由 nginx、PG UNLOGGED 計數表、`TRUST_PROXY`；§2.9 新增 0015；§9.3 新增環境變數；§12.2 登入失敗稽核不記未知 email | Software Designer |
+| v1.5 | 2026-09-11 | 授權啟用實作：§8.4.3 改寫（六項安裝前檢查、public key 內建不可替換、正式環境拒絕覆寫、防回滾、線上啟用、供應方工具、容器 fingerprint 穩定化、時鐘回撥偵測）；§9.3 移除 `LICENSE_PUBLIC_KEY`、新增覆寫與啟用相關變數；§2.9 新增 0016 | Software Designer |
+| v1.6 | 2026-09-11 | 組織管理實作：新增 §8.9（`any` scope、首位管理員、邀請、角色指派護欄、ID 以 `z.guid()` 驗證）；新增 ADR-030 | Software Designer |
+| v1.7 | 2026-09-11 | SMTP 寄信實作：新增 §8.10（介面移至 NotificationModule、強制 TLS、zh-TW／en 模板、log 規範、邀請信失敗以 `emailSent` 回報）；新增 ADR-031（SMTP 設定走環境變數）；§8.1、§8.9、§9.3 同步 | Software Designer |
+| v1.8 | 2026-09-11 | React 前端實作：新增 §7.1.3（實作路由與差異、session／CSRF、錯誤文案、token 連結處理、部署與 nginx 修正） | Software Designer |

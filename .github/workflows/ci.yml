@@ -1,0 +1,49 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci --no-audit --no-fund
+
+      - name: Permission catalog is in sync with SA §6.2
+        run: |
+          npm run gen:permissions
+          git diff --exit-code packages/contracts/src/permissions.generated.ts
+
+      - name: Build (tsc -b)
+        run: npm run build
+
+      - name: Build web (Vite)
+        run: npm run build:web
+
+      - name: Typecheck incl. tests, tools & web
+        run: npm run typecheck
+
+      - name: Architecture guardrails (INV-T2 / INV-T3)
+        run: npm run test:arch
+
+      - name: Unit + contract tests (incl. INV-T4 openapi consistency)
+        run: npm test
+
+      - name: E2E — guard chain against real PostgreSQL 18
+        run: npm run test:e2e
+
+      - name: DB invariant tests (migrations 0001-0016)
+        run: bash tests/db/run-db-tests.sh
