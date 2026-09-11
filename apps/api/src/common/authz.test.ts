@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decideAccess, type AccessTarget } from './authz.js';
+import { decideAccess, organizationsGranted, type AccessTarget } from './authz.js';
 import type { PermissionGrant } from './context.js';
 
 const ME = 'user-me';
@@ -81,5 +81,37 @@ describe('decideAccess — ADR-019: 404 vs 403', () => {
   it('a grant for a different permission does not leak into another', () => {
     const grants = [g('course.read', 'platform', null, null)];
     expect(decideAccess(ME, grants, 'course.version.publish', course(COURSE_A1, ORG_A))).toBe('forbidden');
+  });
+});
+
+describe("decideAccess — 'any' scope (list endpoints)", () => {
+  const any: AccessTarget = { scope: 'any', exists: true, organizationId: null, courseId: null, userId: null };
+
+  it('an organization grant is enough to enter; results are filtered by the handler', () => {
+    expect(decideAccess(ME, [g('org.read', 'organization', ORG_A, ORG_A)], 'org.read', any)).toBe('allow');
+  });
+
+  it('a self grant does not open an administrative list', () => {
+    expect(decideAccess(ME, [g('org.read', 'self', ME, ORG_A)], 'org.read', any)).toBe('forbidden');
+  });
+
+  it('no grant for the permission → forbidden', () => {
+    expect(decideAccess(ME, [g('course.read', 'platform', null, null)], 'org.read', any)).toBe('forbidden');
+  });
+});
+
+describe('organizationsGranted', () => {
+  it("platform grant → 'all'", () => {
+    expect(organizationsGranted([g('org.read', 'platform', null, null)], 'org.read')).toBe('all');
+  });
+
+  it('organization grants → exactly those orgs (deduplicated)', () => {
+    const grants = [g('org.read', 'organization', ORG_A, ORG_A), g('org.read', 'organization', ORG_A, ORG_A), g('org.read', 'organization', ORG_B, ORG_B)];
+    expect(organizationsGranted(grants, 'org.read')).toEqual([ORG_A, ORG_B]);
+  });
+
+  it('course and self grants never widen an organization list', () => {
+    const grants = [g('org.read', 'course', COURSE_A1, ORG_A), g('org.read', 'self', ME, ORG_B)];
+    expect(organizationsGranted(grants, 'org.read')).toEqual([]);
   });
 });

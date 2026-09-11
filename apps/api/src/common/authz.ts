@@ -7,7 +7,8 @@ import type { PermissionGrant } from './context.js';
  */
 
 export interface AccessTarget {
-  scope: ScopeType;
+  /** 'any'：列表類端點——在任何範圍持有此權限即可進入，結果由 handler 依授權過濾 */
+  scope: ScopeType | 'any';
   /** 目標資源是否存在；不存在一律 not_found */
   exists: boolean;
   organizationId: string | null;
@@ -30,6 +31,9 @@ function covers(g: PermissionGrant, t: AccessTarget, userId: string): boolean {
         (g.type === 'organization' && g.organizationId === t.organizationId) ||
         (g.type === 'course' && g.id === t.courseId)
       );
+    case 'any':
+      // self 授權不算：'any' 用於管理類列表，不應因個人權限而進入
+      return g.type !== 'self';
     case 'self':
       // ADR-016：self 不被上層 scope 自動涵蓋。Platform Admin 不會因此讀到學員的個人資料。
       return g.type === 'self' && g.id === userId && t.userId === userId;
@@ -39,6 +43,18 @@ function covers(g: PermissionGrant, t: AccessTarget, userId: string): boolean {
 /** 使用者在目標組織中是否有「任何」授權——決定回 404 還是 403 */
 function canSeeOrganization(grants: PermissionGrant[], orgId: string | null): boolean {
   return grants.some((g) => g.type === 'platform' || (orgId !== null && g.organizationId === orgId));
+}
+
+/**
+ * 列表端點用：使用者在哪些組織持有此權限。platform 授權 → 'all'。
+ * course / self 授權不算——組織層級的列表不應因課程或個人權限而擴大可見範圍。
+ */
+export function organizationsGranted(grants: readonly PermissionGrant[], permission: string): 'all' | string[] {
+  if (grants.some((g) => g.permission === permission && g.type === 'platform')) return 'all';
+  const ids = grants
+    .filter((g) => g.permission === permission && g.type === 'organization' && g.organizationId)
+    .map((g) => g.organizationId as string);
+  return [...new Set(ids)];
 }
 
 export function decideAccess(
