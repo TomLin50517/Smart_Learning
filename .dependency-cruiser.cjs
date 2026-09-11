@@ -52,6 +52,13 @@ module.exports = {
       to: { path: '^apps/worker/' },
     },
     {
+      name: 'web-only-uses-contracts',
+      comment: 'React SPA 只能依賴 @iac/contracts（DTO／錯誤碼／權限碼），不得觸及後端實作或 domain 邏輯。',
+      severity: 'error',
+      from: { path: '^apps/web/' },
+      to: { path: '^(apps/(api|worker)|packages/domain)/' },
+    },
+    {
       name: 'h5p-must-not-leak',
       comment: 'ADR-012：H5P 只能存在於 adapter 內。',
       severity: 'error',
@@ -73,7 +80,7 @@ module.exports = {
     enhancedResolveOptions: {
       exportsFields: ['exports'],
       conditionNames: ['source', 'import', 'default'],
-      extensions: ['.ts', '.js'],
+      extensions: ['.ts', '.tsx', '.js'],
     },
   },
 };

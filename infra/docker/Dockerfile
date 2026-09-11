@@ -16,6 +16,8 @@ COPY packages/contracts/package.json packages/contracts/
 COPY packages/domain/package.json    packages/domain/
 COPY apps/api/package.json           apps/api/
 COPY apps/worker/package.json        apps/worker/
+# web 不在此 image 內建置（見 Dockerfile.web），但 workspace manifest 須齊全，npm ci 才與 lock 一致
+COPY apps/web/package.json           apps/web/
 RUN npm ci --no-audit --no-fund
 
 COPY tsconfig.base.json tsconfig.json ./

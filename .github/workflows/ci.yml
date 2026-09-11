@@ -30,7 +30,10 @@ jobs:
       - name: Build (tsc -b)
         run: npm run build
 
-      - name: Typecheck incl. tests & tools
+      - name: Build web (Vite)
+        run: npm run build:web
+
+      - name: Typecheck incl. tests, tools & web
         run: npm run typecheck
 
       - name: Architecture guardrails (INV-T2 / INV-T3)
@@ -42,5 +45,5 @@ jobs:
       - name: E2E — guard chain against real PostgreSQL 18
         run: npm run test:e2e
 
-      - name: DB invariant tests (migrations 0001-0014)
+      - name: DB invariant tests (migrations 0001-0016)
         run: bash tests/db/run-db-tests.sh

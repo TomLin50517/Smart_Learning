@@ -15,5 +15,7 @@
     "tests/**/*.ts",
     "tools/**/*.ts",
     "vitest.config.ts"
-  ]
+  ],
+  "//web": "apps/web 為瀏覽器程式（DOM + JSX），由 apps/web/tsconfig.json 另行檢查（npm run typecheck 會一併執行）",
+  "exclude": ["apps/web/**"]
 }

@@ -1,0 +1,27 @@
+# syntax=docker/dockerfile:1
+# =============================================================================
+# Reverse proxy image：nginx + React SPA 靜態檔（SD §7、§9.1）
+# 建置：docker build -f infra/docker/Dockerfile.web -t iac-web .
+# =============================================================================
+
+FROM node:24-alpine AS build
+WORKDIR /app
+
+# workspace manifest 須齊全，npm ci 才與 lock 一致
+COPY package.json package-lock.json ./
+COPY packages/contracts/package.json packages/contracts/
+COPY packages/domain/package.json    packages/domain/
+COPY apps/api/package.json           apps/api/
+COPY apps/worker/package.json        apps/worker/
+COPY apps/web/package.json           apps/web/
+RUN npm ci --no-audit --no-fund
+
+# web 只依賴 contracts 的原始碼（型別與常數）
+COPY packages/contracts packages/contracts
+COPY apps/web apps/web
+RUN npm run build -w @iac/web
+
+FROM nginx:1.27-alpine
+COPY infra/nginx/nginx.conf /etc/nginx/nginx.conf
+COPY --from=build /app/apps/web/dist /usr/share/nginx/html
+EXPOSE 80

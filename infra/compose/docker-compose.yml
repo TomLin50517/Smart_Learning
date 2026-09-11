@@ -52,6 +52,9 @@ services:
   api:
     <<: *app
     command: ["node", "apps/api/dist/main.js"]
+    environment:
+      # api 只經由 nginx 對外 → 信任一層代理的 X-Forwarded-For
+      TRUST_PROXY: "1"
     depends_on:
       migrate: { condition: service_completed_successfully }
     healthcheck:
@@ -70,12 +73,15 @@ services:
       migrate: { condition: service_completed_successfully }
     mem_limit: 4g
 
+  # nginx + React SPA（建置產物與 nginx.conf 皆包進 image，見 Dockerfile.web）
   reverse-proxy:
-    image: nginx:1.27-alpine
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.web
+    image: iac-web:dev
     depends_on: [api]
     ports: ["127.0.0.1:8080:80"]
-    volumes:
-      - ../nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    restart: unless-stopped
     mem_limit: 512m
 
   # ---- Phase 2 ---------------------------------------------------------------
