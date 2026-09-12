@@ -9,6 +9,7 @@ import { SettingsPage } from './pages/SettingsPage';
 import { LicensePage } from './pages/LicensePage';
 import { OrganizationsPage } from './pages/OrganizationsPage';
 import { OrgMembersPage } from './pages/OrgMembersPage';
+import { ProfilePage } from './pages/ProfilePage';
 
 /**
  * 路由（SD §7.1；react-router 8 data router）。
@@ -27,6 +28,7 @@ export const router = createBrowserRouter([
     errorElement: <RouteError />,
     children: [
       { index: true, element: <HomePage /> },
+      { path: 'profile', element: <ProfilePage /> },
       // Org Admin：目前組織的成員與角色（SD 的 /app/org/roles 併入此頁）
       { path: 'org/users', element: <OrgMembersPage /> },
       // Platform Admin

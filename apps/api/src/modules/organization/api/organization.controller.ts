@@ -142,6 +142,28 @@ export class OrganizationController {
     return r;
   }
 
+  /**
+   * openapi: recoverOrganizationAdmin——組織已無啟用中的管理員時，由平台管理員指定一位（ADR-033）。
+   * 稽核記在被復原的組織之下，讓該組織日後的管理員看得到這次介入。
+   */
+  @Post(':id/admin-recovery')
+  @RequirePermission('platform.organization.create', { scope: 'platform' })
+  @RequireCapability({ capability: 'configurationWriteAllowed' })
+  @Audit({ action: 'org.role.assigned', resourceType: 'user' })
+  @HttpCode(200)
+  async recoverAdmin(@Param('id') id: string, @Body() body: unknown, @CurrentUser() actor: AuthUser, @Req() req: FastifyRequest) {
+    const orgId = parseInput(z.guid(), id);
+    const input = parseInput(Person, body);
+    const r = await this.orgs.recoverAdmin(orgId, input, actor.id);
+    req.ctx.target = { organizationId: orgId, courseId: null, resourceId: null };
+    req.ctx.audit = {
+      resourceId: r.userId,
+      after: { roles: [{ role: 'org_admin' }] },
+      metadata: { reason: 'admin_recovery', email: input.email, invited: r.invited, emailSent: r.emailSent },
+    };
+    return r;
+  }
+
   /** openapi: assignUserRoles——整組取代；變更前後寫入稽核 */
   @Patch(':id/users/:userId/roles')
   @RequirePermission('org.role.assign', { scope: 'organization', param: 'id' })

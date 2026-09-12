@@ -1155,6 +1155,7 @@ UPDATE job_queue
 | 0014 | `0014_partitions_bootstrap.sql` | 建立當月與後續 3 個月分區 | 0005, 0009 |
 | 0015 | `0015_auth.sql` | `user_sessions.last_seen_at`；`password_reset_tokens`；`rate_limit_counters`（UNLOGGED）；收回 coach／worker／readonly 對 session 與重設 token 的讀取權 | 0002, 0011 |
 | 0016 | `0016_org_membership.sql` | `password_reset_tokens.purpose`（reset / invite）；platform_admin 補 `org.user.read` | 0012, 0015 |
+| 0017 | `0017_multi_org_roles.sql` | `uq_uor_unique` 納入 `organization_id`（`NULLS NOT DISTINCT`）：同一人可在多個組織擔任 learner 等 self／course 範圍角色（原索引使已在他組織當學員的帳號無法加入第二個組織） | 0002 |
 
 **規則**：
 
@@ -2233,7 +2234,7 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 項目 | 實作 |
 |---|---|
 | 技術 | Vite 8 + React 19 + react-router 8（data router；v8 起 `RouterProvider` 自 `react-router/dom` 匯入，`react-router-dom` 已移除）。XState（§7.2）於學習 Runtime 階段導入 |
-| 已實作路由 | `/login`、`/forgot-password`、`/password-reset`、`/set-password`；`/app`（首頁）、`/app/org/users`（目前組織的成員與角色）、`/app/platform/organizations`、`/app/platform/organizations/:orgId/users`、`/app/platform/license`、`/app/audit`（v1.10）、`/app/platform/system`、`/app/platform/jobs`（v1.11）。`/` 在 CMS 首頁完成前暫時導向 `/app` |
+| 已實作路由 | `/login`、`/forgot-password`、`/password-reset`、`/set-password`；`/app`（首頁）、`/app/org/users`（目前組織的成員與角色）、`/app/platform/organizations`、`/app/platform/organizations/:orgId/users`、`/app/platform/license`、`/app/audit`（v1.10）、`/app/platform/system`、`/app/platform/jobs`（v1.11）、`/app/profile`（v1.12）。`/` 在 CMS 首頁完成前暫時導向 `/app` |
 | 與上表的差異 | 新增 `/forgot-password`（申請重設）與 `/set-password`（組織邀請；與 `/password-reset` 共用 confirm 端點，文案不同）；角色指派併入成員頁，不另設 `/app/org/roles`；平台管理員檢視特定組織成員使用 `/app/platform/organizations/:orgId/users` |
 | 角色編輯 | 目前只能勾選組織層級角色（org_admin／learner／auditor）；指派為「整組取代」，因此既有課程角色原樣送回，避免被清除。課程角色的指派待課程 API 完成後提供 |
 | Session | 啟動時以 `GET /api/me` 探測；任何 API 回 401（逾時、閒置、撤銷）→ 回到未登入並導向 `/login?next=`。`next` 只接受站內相對路徑（拒絕 `//`、`/\`、絕對 URL、控制字元），防止開放式重導向 |
@@ -3016,6 +3017,18 @@ IP 判定依 `TRUST_PROXY`：預設不信任 `X-Forwarded-For`；只有確定位
 | 佇列狀態 | `GET /api/system/jobs`（`platform.health.read`）：依佇列 × 工作類型統計 pending／running／24 小時內 succeeded、最舊「已到執行時間」的待處理等待秒數、running 但鎖已過期的數量、DLQ 總數與最近 20 筆（錯誤截斷 500 字元）。只讀；重送 DLQ 屬後續項目 |
 | 前端 | `/app/platform/system`（平台設定，bytes 以 MB 顯示）、`/app/platform/jobs`（背景工作，最久等待超過 30 分鐘時標示，對應 SA §18.2 告警起點） |
 
+
+## 8.12 本人帳號操作與管理員復原（v1.12）
+
+| 項目 | 實作 |
+|---|---|
+| 切換組織 | `PUT /api/me/active-organization`：更新**目前 session** 的 `active_organization_id`，其他 session 不受影響。只能切到本人有角色且為啟用狀態的組織，其他一律 404（ADR-019）。前端：屬於多個組織時，頂端列顯示組織下拉選單 |
+| 權限模型 | 本人帳號端點（切換組織、個人資料、變更密碼）皆為 `@AuthOnly`。SA UC-ORG-005 規定所有角色都可管理自己的資料，但角色種子只將 `self.profile.*` 授予 learner——若以權限檢查，管理員將無法修改自己的名稱。因此比照 `/me`：「是本人」本身就是授權依據。`self.profile.*` 保留於目錄，供日後如需限制時使用 |
+| 個人資料 | `PATCH /api/me/profile`：`displayName`（1～200）、`locale`（zh-TW／en，決定系統信件語言）。email 不可自行變更。稽核 `user.profile.updated` 只記實際變更的欄位 |
+| 變更密碼 | `POST /api/me/password`：需目前密碼（錯誤回 400 `currentPassword: incorrect`，不回 401 以免被當成 session 失效）；新舊相同回 `same_as_current`；帳號每 15 分鐘 5 次。成功後撤銷本人其他所有 session（目前的保留），並作廢尚未使用的重設／邀請連結。稽核 `auth.password.changed` 只記撤銷的 session 數 |
+| 管理員復原 | `POST /api/organizations/{id}/admin-recovery`（ADR-033）：僅在組織已沒有**啟用中**的 org_admin 時可用，否則 400 `org_has_active_admin`。組織列 `FOR UPDATE` 避免並行復原。對象為新帳號 → 建立並寄設定密碼邀請；既有帳號 → 加上 org_admin（停用中的帳號拒絕）。稽核 `org.role.assigned` 記在**該組織**之下（`metadata.reason = admin_recovery`），讓組織日後的管理員看得到平台的介入 |
+| 前端 | `/app/profile`（基本資料、變更密碼、帳號活動連結）；頂端列的名稱連到個人資料；組織管理頁的「管理員復原」 |
+
 ---
 
 # 9. 部署與基礎設施
@@ -3685,6 +3698,8 @@ export interface AuditEvent {
 | `auth.login.failed` | user | 否（`metadata.reason` 記原因類別；未知帳號不記錄嘗試的 email） | THR-S-001 |
 | `auth.logout` | user | 否 | — |
 | `auth.password_reset.requested` / `.completed` | user | 否 | — |
+| `auth.password.changed` | user | 否（`metadata.revoked_sessions`） | UC-ORG-005 |
+| `user.profile.updated` | user | 是（只含變更欄位） | UC-ORG-005 |
 | `org.created` / `.updated` / `.disabled` | organization | 是 | UC-PLT-007, UC-ORG-002 |
 | `org.user.created` / `.disabled` | user | 是 | UC-ORG-003 |
 | `org.role.assigned` / `.revoked` | user_org_role | 是 | UC-ORG-004 |
@@ -4062,7 +4077,7 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 - **狀態**：Accepted（v1.6）
 - **脈絡**：依 SA §6.3，Platform Admin 對組織使用者只有唯讀權（UC-ORG-003／004 為 R）；而新組織裡還沒有任何人擁有 `org.user.write`／`org.role.assign`——新組織將永遠無法產生第一位成員。
 - **決策**：`POST /organizations` 接受選填的 `initialAdmin`，在同一交易中建立組織與首位 org_admin，並寄出設定密碼邀請。Platform Admin 的日常權限不放寬，分權模型維持不變。
-- **後果**：若某組織日後失去所有管理員（例如帳號遭停用），目前沒有平台層級的復原途徑，列為後續項目（需 Audit 的平台層級管理員復原流程）。「最後一位 org_admin 不可移除」的護欄降低了此風險。
+- **後果**：若某組織日後失去所有管理員（例如帳號遭停用），目前沒有平台層級的復原途徑，列為後續項目（需 Audit 的平台層級管理員復原流程）——v1.12 已由 ADR-033 補上。「最後一位 org_admin 不可移除」的護欄降低了此風險。
 
 ### ADR-031：SMTP 連線設定以環境變數提供，不存於 system_settings
 
@@ -4077,6 +4092,13 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 - **脈絡**：OpenAPI 原訂 `POST /audit-logs/export` 回 202 並由 worker 產檔。產出的檔案需要存放與下載位置，而物件儲存（S3 相容）於 Phase 2 才導入。
 - **決策**：Phase 0 改為同步回傳 CSV，並以上限控制成本：區間 ≤ 366 天、≤ 50,000 列，超過回 400（`range_too_large`／`too_many_rows`），不做靜默截斷。匯出動作仍寫入 `audit.exported`（含查詢條件與筆數）。
 - **後果**：大範圍匯出需分段進行。物件儲存上線後改回 202 + job（`output` 佇列）+ 下載連結與通知，屆時 API 契約變更需另行版本化。
+
+### ADR-033：組織失去所有管理員時，由平台管理員復原
+
+- **狀態**：Accepted（v1.12）
+- **脈絡**：ADR-030 讓新組織於建立時指定首位管理員，並以「最後一位 org_admin 不可移除」降低風險；但管理員帳號被停用（離職）時，組織仍可能沒有任何可用的管理員，而平台管理員依分權模型無權管理組織成員。
+- **決策**：新增 `POST /organizations/{id}/admin-recovery`，沿用 `platform.organization.create`（與建立組織時指定首位管理員為同等權力，因此不新增權限碼）。**只在組織沒有任何啟用中的 org_admin 時可用**；稽核記在該組織之下並標註 `admin_recovery`。
+- **後果**：平台管理員的日常權限不變——只要組織還有一位可用的管理員，這個端點就無法使用，不構成繞過組織分權的後門。復原後的第一件事應由新管理員檢視稽核紀錄。
 
 ---
 
@@ -4110,3 +4132,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.9 | 2026-09-12 | 可觀測性實作：新增 §13.5（AsyncLocalStorage 關聯、存取 log、redact 補強、Prometheus metrics 與已輸出指標、metrics 端點的機器憑證待決） | Software Designer |
 | v1.10 | 2026-09-12 | 稽核查詢與匯出：新增 §12.4（任一權限進入 + includeSelf、四種可見範圍、本人相關紀錄的欄位裁剪、微秒精度 keyset 分頁、同步 CSV 與公式注入防護）；新增 ADR-032；§7.1.3 補 `/app/audit` | Software Designer |
 | v1.11 | 2026-09-12 | 平台設定與背景工作狀態：新增 §8.11（設定白名單目錄、預設值語意、只記實際變更的稽核、授權凍結時唯讀、佇列與 DLQ 狀態）；§7.1.3 補路由 | Software Designer |
+| v1.12 | 2026-09-12 | 規格缺口補齊：新增 §8.12（切換組織、個人資料、變更密碼、管理員復原；本人端點為 AuthOnly 的理由）；新增 ADR-033；§12.2 新增 `auth.password.changed`、`user.profile.updated`；ADR-030 後果更新；§2.9 新增 0017（修正同一人無法在多個組織擔任 learner） | Software Designer |

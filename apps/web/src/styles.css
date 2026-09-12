@@ -417,6 +417,23 @@ fieldset {
   color: var(--brand);
   font-weight: 600;
 }
+.org-switch select {
+  width: auto;
+  max-width: 260px;
+  padding: 4px 8px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 10%, var(--surface));
+  border-color: color-mix(in srgb, var(--brand) 30%, var(--border));
+}
+.topbar-user a.user-name {
+  color: var(--text);
+  text-decoration: none;
+}
+.topbar-user a.user-name:hover {
+  text-decoration: underline;
+}
 .topbar-user {
   margin-left: auto;
   display: flex;

@@ -4,6 +4,7 @@ import { AuthController } from './api/auth.controller.js';
 import { MeController } from './api/me.controller.js';
 import { AuthService } from './application/auth.service.js';
 import { MeService } from './application/me.service.js';
+import { ProfileService } from './application/profile.service.js';
 import { SessionService } from './application/session.service.js';
 import { USER_INVITATIONS } from './identity.contracts.js';
 
@@ -18,6 +19,7 @@ import { USER_INVITATIONS } from './identity.contracts.js';
   controllers: [MeController, AuthController],
   providers: [
     MeService,
+    ProfileService,
     SessionService,
     AuthService,
     { provide: USER_INVITATIONS, useExisting: AuthService },

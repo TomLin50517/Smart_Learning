@@ -20,6 +20,7 @@ export function OrganizationsPage() {
   const list = useApi<OrganizationDto[]>(can(me, 'org.read') ? '/api/organizations' : null);
   const [actionError, setActionError] = useState<unknown>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [recovering, setRecovering] = useState<string | null>(null);
 
   if (!can(me, 'org.read')) return <Forbidden />;
   const writable = me.licenseCapabilities.configurationWriteAllowed;
@@ -65,7 +66,7 @@ export function OrganizationsPage() {
                 </tr>
               </thead>
               <tbody>
-                {list.data?.map((o) => (
+                {list.data?.map((o) => [
                   <tr key={o.id}>
                     <td>{o.name}</td>
                     <td>
@@ -77,20 +78,107 @@ export function OrganizationsPage() {
                     <td>{formatDate(o.createdAt)}</td>
                     <td className="actions">
                       {can(me, 'org.user.read') && o.status === 'active' && <Link to={`/app/platform/organizations/${o.id}/users`}>成員</Link>}
+                      {can(me, 'platform.organization.create') && (
+                        <button className="btn btn-small btn-ghost" disabled={!writable} onClick={() => setRecovering(recovering === o.id ? null : o.id)} aria-expanded={recovering === o.id}>
+                          管理員復原
+                        </button>
+                      )}
                       {can(me, 'platform.organization.disable') && (
                         <button className={`btn btn-small ${o.status === 'active' ? 'btn-danger' : ''}`} disabled={!writable || busyId === o.id} onClick={() => void toggle(o)}>
                           {o.status === 'active' ? '停用' : '重新啟用'}
                         </button>
                       )}
                     </td>
-                  </tr>
-                ))}
+                  </tr>,
+                  recovering === o.id && (
+                    <tr key={`${o.id}-recovery`} className="row-editor">
+                      <td colSpan={5}>
+                        <AdminRecovery org={o} onDone={() => setRecovering(null)} />
+                      </td>
+                    </tr>
+                  ),
+                ])}
               </tbody>
             </table>
           </div>
         )}
       </section>
     </>
+  );
+}
+
+/**
+ * 管理員復原（ADR-033）：只在組織已沒有啟用中的管理員時可用，伺服器會拒絕其他情況。
+ * 平台管理員平時無權管理組織成員——這不是繞道。
+ */
+function AdminRecovery({ org, onDone }: { org: OrganizationDto; onDone(): void }) {
+  const [email, setEmail] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const [result, setResult] = useState<string | null>(null);
+
+  async function onSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const addr = email.trim();
+      const r = await api<{ invited: boolean; emailSent: boolean }>('POST', `/api/organizations/${org.id}/admin-recovery`, {
+        email: addr,
+        displayName: displayName.trim(),
+      });
+      setResult(
+        !r.invited
+          ? `${addr} 已設為「${org.name}」的組織管理員。`
+          : r.emailSent
+            ? `已建立 ${addr} 並寄出設定密碼邀請，對方設定後即為「${org.name}」的組織管理員。`
+            : `已建立 ${addr}，但邀請信未能寄出；請對方在登入頁使用「忘記密碼」設定密碼。`,
+      );
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="editor">
+      <p>
+        <strong>管理員復原：{org.name}</strong>
+      </p>
+      <p className="muted small">只有在此組織已沒有任何啟用中的管理員時才能使用；此操作會記錄在該組織的稽核紀錄中。</p>
+      {result ? (
+        <>
+          <Notice kind="ok">{result}</Notice>
+          <button className="btn btn-small" onClick={onDone}>
+            完成
+          </button>
+        </>
+      ) : (
+        <>
+          <ErrorAlert error={error} />
+          <form className="form-grid" onSubmit={(e) => void onSubmit(e)}>
+            <fieldset disabled={busy}>
+              <Field label="新管理員 Email" hint="可為新帳號或既有帳號">
+                <input type="email" required maxLength={254} value={email} onChange={(e) => setEmail(e.target.value)} />
+              </Field>
+              <Field label="姓名" hint="僅在建立新帳號時使用">
+                <input required maxLength={200} value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
+              </Field>
+              <div className="form-actions">
+                <button type="submit" className="btn btn-primary">
+                  {busy ? '處理中…' : '指定管理員'}
+                </button>
+                <button type="button" className="btn btn-ghost" onClick={onDone}>
+                  取消
+                </button>
+              </div>
+            </fieldset>
+          </form>
+        </>
+      )}
+    </div>
   );
 }
 

@@ -212,6 +212,63 @@ export class OrganizationService {
     }
   }
 
+  /**
+   * 管理員復原（ADR-033）：組織已沒有任何「啟用中」的 org_admin 時，由平台管理員指定一位。
+   * 仍有啟用中的管理員時拒絕——平台管理員平時無權管理組織成員，此端點不能被當成繞道。
+   * 對象可為新帳號（寄設定密碼邀請）、他組織的既有帳號，或本組織的既有成員（追加 org_admin）。
+   */
+  async recoverAdmin(orgId: string, input: { email: string; displayName: string }, actorId: string) {
+    const client = await this.db.connect();
+    let userId: string;
+    let created = false;
+    let orgName: string;
+    try {
+      await client.query('BEGIN');
+      // 鎖定組織列：兩位平台管理員同時復原時，只有一位會成功
+      const o = await client.query<{ name: string }>(`SELECT name FROM organizations WHERE id = $1 FOR UPDATE`, [orgId]);
+      if (!o.rows[0]) throw new DomainError('NOT_FOUND');
+      orgName = o.rows[0].name;
+
+      const admins = await client.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM user_org_roles uor
+           JOIN roles ro ON ro.id = uor.role_id JOIN users u ON u.id = uor.user_id
+          WHERE uor.organization_id = $1 AND ro.code = 'org_admin' AND u.status = 'active'`,
+        [orgId],
+      );
+      if (admins.rows[0]!.n > 0) {
+        throw new DomainError('VALIDATION_FAILED', 'Organization still has an active admin', [{ issue: 'org_has_active_admin' }]);
+      }
+
+      const existing = await client.query<{ id: string; status: string }>(`SELECT id, status FROM users WHERE email = $1`, [input.email]);
+      if (existing.rows[0]) {
+        if (existing.rows[0].status !== 'active') throw invalid('email', 'user_not_active');
+        userId = existing.rows[0].id;
+        const has = await client.query(
+          `SELECT 1 FROM user_org_roles uor JOIN roles ro ON ro.id = uor.role_id
+            WHERE uor.user_id = $1 AND uor.organization_id = $2 AND ro.code = 'org_admin'`,
+          [userId, orgId],
+        );
+        if (!has.rowCount) await this.insertGrant(client, orgId, userId, { role: 'org_admin' }, actorId);
+      } else {
+        const u = await client.query<{ id: string }>(`INSERT INTO users (email, display_name) VALUES ($1, $2) RETURNING id`, [
+          input.email,
+          input.displayName,
+        ]);
+        userId = u.rows[0]!.id;
+        created = true;
+        await this.insertGrant(client, orgId, userId, { role: 'org_admin' }, actorId);
+      }
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+    const emailSent = created ? await this.invitations.invite(userId, orgName) : false;
+    return { userId, invited: created, emailSent };
+  }
+
   private async addMemberTx(tx: Tx, orgId: string, email: string, displayName: string, role: OrgRole, actorId: string) {
     const existing = await tx.query<{ id: string }>(`SELECT id FROM users WHERE email = $1`, [email]);
     let userId = existing.rows[0]?.id;

@@ -8,6 +8,8 @@ export const AUDIT_ACTIONS = [
   'auth.logout',
   'auth.password_reset.requested',
   'auth.password_reset.completed',
+  'auth.password.changed',
+  'user.profile.updated',
   'org.created',
   'org.updated',
   'org.disabled',
