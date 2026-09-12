@@ -15,6 +15,8 @@ export interface AccessTarget {
   courseId: string | null;
   /** self scope 的目標使用者 */
   userId: string | null;
+  /** 僅 scope 'any'：self 授權也可進入（handler 必須只回本人相關的資料） */
+  includeSelf?: boolean;
 }
 
 export type AccessDecision = 'allow' | 'not_found' | 'forbidden';
@@ -32,8 +34,9 @@ function covers(g: PermissionGrant, t: AccessTarget, userId: string): boolean {
         (g.type === 'course' && g.id === t.courseId)
       );
     case 'any':
-      // self 授權不算：'any' 用於管理類列表，不應因個人權限而進入
-      return g.type !== 'self';
+      // 預設不算 self：'any' 多用於管理類列表，不應因個人權限而進入。
+      // 例外由路由明確宣告（includeSelf），且只認本人的 self 授權
+      return g.type !== 'self' || (t.includeSelf === true && g.id === userId);
     case 'self':
       // ADR-016：self 不被上層 scope 自動涵蓋。Platform Admin 不會因此讀到學員的個人資料。
       return g.type === 'self' && g.id === userId && t.userId === userId;
@@ -57,10 +60,36 @@ export function organizationsGranted(grants: readonly PermissionGrant[], permiss
   return [...new Set(ids)];
 }
 
+/**
+ * 稽核紀錄的可見範圍（SA UC-AUD-001、§6.2 audit.read_*）：
+ * - all：platform 範圍持有任一 audit.read_platform／_org／_course
+ * - organizations：組織範圍的 audit.read_org（或組織範圍的 audit.read_course）
+ * - courses：課程範圍的 audit.read_course
+ * - self：audit.read_self——只看與本人相關的紀錄，且欄位會被裁剪
+ */
+export interface AuditVisibility {
+  all: boolean;
+  organizations: string[];
+  courses: string[];
+  self: boolean;
+}
+
+const AUDIT_READ = new Set(['audit.read_platform', 'audit.read_org', 'audit.read_course']);
+
+export function auditVisibility(grants: readonly PermissionGrant[], userId: string): AuditVisibility {
+  const read = grants.filter((g) => AUDIT_READ.has(g.permission));
+  return {
+    all: read.some((g) => g.type === 'platform'),
+    organizations: [...new Set(read.filter((g) => g.type === 'organization' && g.organizationId).map((g) => g.organizationId as string))],
+    courses: [...new Set(read.filter((g) => g.type === 'course' && g.id).map((g) => g.id as string))],
+    self: grants.some((g) => g.permission === 'audit.read_self' && g.type === 'self' && g.id === userId),
+  };
+}
+
 export function decideAccess(
   userId: string,
   grants: readonly PermissionGrant[],
-  permission: string,
+  permission: string | readonly string[],
   target: AccessTarget,
 ): AccessDecision {
   if (!target.exists) return 'not_found';
@@ -70,5 +99,7 @@ export function decideAccess(
     return 'not_found';
   }
 
-  return grants.some((g) => g.permission === permission && covers(g, target, userId)) ? 'allow' : 'forbidden';
+  // 多個權限時為「任一即可」
+  const accepted = typeof permission === 'string' ? [permission] : permission;
+  return grants.some((g) => accepted.includes(g.permission) && covers(g, target, userId)) ? 'allow' : 'forbidden';
 }

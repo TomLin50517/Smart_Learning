@@ -2233,7 +2233,7 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 項目 | 實作 |
 |---|---|
 | 技術 | Vite 8 + React 19 + react-router 8（data router；v8 起 `RouterProvider` 自 `react-router/dom` 匯入，`react-router-dom` 已移除）。XState（§7.2）於學習 Runtime 階段導入 |
-| 已實作路由 | `/login`、`/forgot-password`、`/password-reset`、`/set-password`；`/app`（首頁）、`/app/org/users`（目前組織的成員與角色）、`/app/platform/organizations`、`/app/platform/organizations/:orgId/users`、`/app/platform/license`。`/` 在 CMS 首頁完成前暫時導向 `/app` |
+| 已實作路由 | `/login`、`/forgot-password`、`/password-reset`、`/set-password`；`/app`（首頁）、`/app/org/users`（目前組織的成員與角色）、`/app/platform/organizations`、`/app/platform/organizations/:orgId/users`、`/app/platform/license`、`/app/audit`（v1.10）。`/` 在 CMS 首頁完成前暫時導向 `/app` |
 | 與上表的差異 | 新增 `/forgot-password`（申請重設）與 `/set-password`（組織邀請；與 `/password-reset` 共用 confirm 端點，文案不同）；角色指派併入成員頁，不另設 `/app/org/roles`；平台管理員檢視特定組織成員使用 `/app/platform/organizations/:orgId/users` |
 | 角色編輯 | 目前只能勾選組織層級角色（org_admin／learner／auditor）；指派為「整組取代」，因此既有課程角色原樣送回，避免被清除。課程角色的指派待課程 API 完成後提供 |
 | Session | 啟動時以 `GET /api/me` 探測；任何 API 回 401（逾時、閒置、撤銷）→ 回到未登入並導向 `/login?next=`。`next` 只接受站內相對路徑（拒絕 `//`、`/\`、絕對 URL、控制字元），防止開放式重導向 |
@@ -3709,6 +3709,21 @@ export interface AuditEvent {
 - `outcome: 'denied'` 的紀錄由 exception filter 寫入（不同交易）。
 - 寫入失敗**不**回滾業務交易，但記 error log 並增加 `audit.write_failed` metric（避免稽核故障造成全站不可用；此取捨明列於文件供客戶確認）。
 
+## 12.4 查詢與匯出（v1.10）
+
+實作：`apps/api/src/modules/audit/`。
+
+| 規則 | 說明 |
+|---|---|
+| 進入條件 | `GET /api/audit-logs` 宣告 `@RequirePermission([audit.read_platform, audit.read_org, audit.read_course, audit.read_self], { scope: 'any', includeSelf: true })`：持有任一即可。`any` scope 預設不計 self 授權，此端點以 `includeSelf` 明確納入，且只認本人的 self 授權 |
+| 可見範圍 | `auditVisibility(grants)`（純函式）：platform 範圍的任一 audit.read_* → 全部；組織範圍 → `organization_id` 清單；課程範圍 → `course_id` 清單；audit.read_self → 本人相關（`actor_user_id`、`resource_id` 或 `metadata.learner_id` 為本人） |
+| 欄位裁剪 | 只因「本人相關」而可見的紀錄回 `visibility: 'self'`，移除 IP、User-Agent、before/after、metadata、correlation id 與執行者 email——學員看得到「誰在何時讀了我的對話」（AC-COA-011），看不到教職員的裝置資訊 |
+| 篩選與分頁 | `action`（精確，或 `.*` 前綴；只接受小寫、底線、點）、`from`／`to`（to 不含）。occurred_at 由新到舊，keyset 分頁；cursor 以 SQL 端轉出的**微秒精度**時間字串 + id 組成（JS Date 只到毫秒，會使同一毫秒內的列漏掉或重複） |
+| 讀取不留痕 | 查詢本身不寫稽核（§12.2 的唯一例外仍是 `coach.transcript.read`） |
+| 匯出 | `POST /api/audit-logs/export`（audit.export，`any` scope；platform 授權可匯出全部或以 `organizationId` 限定，組織授權只能匯出自己的組織，範圍外 404）。同步 CSV（ADR-032）：區間 ≤ 366 天、≤ 50,000 列，先 count，超過回 400 不做部分匯出。UTF-8 BOM、CRLF、全部欄位加引號；以 `= + - @ Tab CR` 開頭的儲存格前加單引號（CWE-1236）。查詢條件與筆數寫入 `audit.exported` metadata |
+| 前端 | `/app/audit`：管理範圍的使用者顯示「稽核紀錄」，只有 audit.read_self 者顯示「帳號活動」；持有 audit.export 者可下載 CSV |
+| 尚未實作 | 匯出時依組織政策遮罩 email（§12.1）——目前一律保留 |
+
 ---
 
 # 13. Observability 實作
@@ -4040,6 +4055,13 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 - **決策**：SMTP 連線設定（主機、埠、TLS、帳密、寄件者）以環境變數 `SMTP_*` 提供，啟動時驗證；與 `SESSION_SECRET`、資料庫密碼同等視為部署機密。
 - **後果**：Platform Admin 無法在 UI 修改 SMTP 設定，須由部署管理者修改環境變數並重啟。日後若要 UI 化，須先有機密的加密儲存機制（以部署金鑰加密的欄位，且不授權給 app_coach／app_readonly），另立 ADR。
 
+### ADR-032：稽核匯出於 Phase 0 採同步 CSV
+
+- **狀態**：Accepted（v1.10）
+- **脈絡**：OpenAPI 原訂 `POST /audit-logs/export` 回 202 並由 worker 產檔。產出的檔案需要存放與下載位置，而物件儲存（S3 相容）於 Phase 2 才導入。
+- **決策**：Phase 0 改為同步回傳 CSV，並以上限控制成本：區間 ≤ 366 天、≤ 50,000 列，超過回 400（`range_too_large`／`too_many_rows`），不做靜默截斷。匯出動作仍寫入 `audit.exported`（含查詢條件與筆數）。
+- **後果**：大範圍匯出需分段進行。物件儲存上線後改回 202 + job（`output` 佇列）+ 下載連結與通知，屆時 API 契約變更需另行版本化。
+
 ---
 
 # 16. 實作順序建議（對應 ARCH §30 Phase）
@@ -4070,3 +4092,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.7 | 2026-09-11 | SMTP 寄信實作：新增 §8.10（介面移至 NotificationModule、強制 TLS、zh-TW／en 模板、log 規範、邀請信失敗以 `emailSent` 回報）；新增 ADR-031（SMTP 設定走環境變數）；§8.1、§8.9、§9.3 同步 | Software Designer |
 | v1.8 | 2026-09-11 | React 前端實作：新增 §7.1.3（實作路由與差異、session／CSRF、錯誤文案、token 連結處理、部署與 nginx 修正） | Software Designer |
 | v1.9 | 2026-09-12 | 可觀測性實作：新增 §13.5（AsyncLocalStorage 關聯、存取 log、redact 補強、Prometheus metrics 與已輸出指標、metrics 端點的機器憑證待決） | Software Designer |
+| v1.10 | 2026-09-12 | 稽核查詢與匯出：新增 §12.4（任一權限進入 + includeSelf、四種可見範圍、本人相關紀錄的欄位裁剪、微秒精度 keyset 分頁、同步 CSV 與公式注入防護）；新增 ADR-032；§7.1.3 補 `/app/audit` | Software Designer |

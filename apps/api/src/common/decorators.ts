@@ -18,16 +18,19 @@ export interface ScopeTarget {
   resource?: 'organization' | 'course' | 'course_version';
   /** route param 名稱，預設 'id' */
   param?: string;
+  /** 僅 scope 'any'：self 授權也可進入——handler 必須只回本人相關的資料（例：稽核的 audit.read_self） */
+  includeSelf?: boolean;
 }
 
 export interface PermissionRequirement extends ScopeTarget {
-  permission: PermissionCode;
+  /** 陣列表示「任一即可」；與 openapi.yaml 的 x-required-permission（字串或陣列）對應 */
+  permission: PermissionCode | readonly PermissionCode[];
 }
 
 export const RequirePermissionMeta = Reflector.createDecorator<PermissionRequirement>();
 
 /** 宣告此路由需要的權限與目標 scope（INV-8 第 2 步） */
-export const RequirePermission = (permission: PermissionCode, target: ScopeTarget) =>
+export const RequirePermission = (permission: PermissionCode | readonly PermissionCode[], target: ScopeTarget) =>
   RequirePermissionMeta({ permission, ...target });
 
 export interface CapabilityRequirement {

@@ -101,6 +101,12 @@ describe('navigation by permission (display only — the server enforces access)
     expect(labels(['org.read', 'platform.organization.create', 'platform.license.read'])).toEqual(['首頁', '組織管理', '系統授權']);
   });
 
+  it('audit: staff see "稽核紀錄", learners with audit.read_self see "帳號活動"', () => {
+    expect(labels(['audit.read_org'])).toContain('稽核紀錄');
+    expect(labels(['audit.read_self'])).toContain('帳號活動');
+    expect(labels(['audit.read_self', 'audit.read_course'])).not.toContain('帳號活動');
+  });
+
   it('can() is false without a session', () => {
     expect(can(null, 'org.read')).toBe(false);
   });

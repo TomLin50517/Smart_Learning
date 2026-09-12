@@ -1,5 +1,6 @@
 import { createBrowserRouter, Navigate } from 'react-router';
 import { RequireAuth } from './components/AppShell';
+import { AuditPage } from './pages/AuditPage';
 import { ForgotPasswordPage, LoginPage, SetPasswordPage } from './pages/auth-pages';
 import { NotFoundPage, RouteError } from './pages/errors-pages';
 import { HomePage } from './pages/HomePage';
@@ -30,6 +31,8 @@ export const router = createBrowserRouter([
       { path: 'platform/organizations', element: <OrganizationsPage /> },
       { path: 'platform/organizations/:orgId/users', element: <OrgMembersPage /> },
       { path: 'platform/license', element: <LicensePage /> },
+      // 稽核紀錄／帳號活動（所有 audit.read_* 共用，SD §12.4）
+      { path: 'audit', element: <AuditPage /> },
       { path: '*', element: <NotFoundPage /> },
     ],
   },

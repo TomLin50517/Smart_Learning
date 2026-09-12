@@ -48,7 +48,8 @@ export default defineConfig({
           hookTimeout: 180_000,
           fileParallelism: false,
           // 不啟用 Ryuk 清理容器（避免額外映像下載）；各測試於 afterAll 自行 stop
-          env: { TESTCONTAINERS_RYUK_DISABLED: 'true' },
+          // LOG_LEVEL=warn：每請求一筆的存取 log（info）會淹沒測試輸出；需要時可於命令列覆寫
+          env: { TESTCONTAINERS_RYUK_DISABLED: 'true', LOG_LEVEL: process.env['LOG_LEVEL'] ?? 'warn' },
         },
       },
     ],

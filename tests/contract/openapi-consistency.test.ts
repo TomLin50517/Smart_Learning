@@ -21,7 +21,8 @@ import { ENV, loadEnv } from '../../apps/api/src/config/env.js';
 type Op = {
   operationId?: string;
   security?: unknown[];
-  'x-required-permission'?: string;
+  /** 字串，或陣列表示「任一即可」 */
+  'x-required-permission'?: string | string[];
   'x-required-capability'?: string;
   'x-required-limit'?: string;
   'x-audit'?: string;
@@ -37,10 +38,18 @@ const ops = Object.entries(spec.paths).flatMap(([path, item]) =>
 );
 const opByKey = new Map(ops.map((o) => [o.key, o.op]));
 
+/** 權限標註正規化：陣列（任一即可）以排序後的集合比較，順序不影響 */
+const permKey = (p: unknown): string | undefined =>
+  p === undefined ? undefined : Array.isArray(p) ? [...(p as string[])].sort().join(' | ') : String(p);
+
 describe('A. openapi.yaml is internally consistent', () => {
   it('every x-required-permission exists in the permission catalog (SA §6.2)', () => {
-    const unknown = ops.filter((o) => o.op['x-required-permission'] && !(o.op['x-required-permission'] in PERMISSIONS));
-    expect(unknown.map((o) => `${o.key} → ${o.op['x-required-permission']}`)).toEqual([]);
+    const unknown = ops.flatMap((o) => {
+      const p = o.op['x-required-permission'];
+      const list = p === undefined ? [] : Array.isArray(p) ? p : [p];
+      return list.filter((x) => !(x in PERMISSIONS)).map((x) => `${o.key} → ${x}`);
+    });
+    expect(unknown).toEqual([]);
   });
 
   it('every x-audit exists in the audit action catalog (SD §12.2)', () => {
@@ -111,7 +120,7 @@ describe('B. implemented routes match openapi.yaml', () => {
       if (!op) continue;
       const t = [r.handler as never, r.cls as never];
       const actual = {
-        permission: reflector.getAllAndOverride(RequirePermissionMeta, t)?.permission,
+        permission: permKey(reflector.getAllAndOverride(RequirePermissionMeta, t)?.permission),
         capability: reflector.getAllAndOverride(RequireCapability, t)?.capability,
         limit: reflector.getAllAndOverride(RequireCapability, t)?.limit,
         audit: reflector.getAllAndOverride(Audit, t)?.action,
@@ -119,7 +128,7 @@ describe('B. implemented routes match openapi.yaml', () => {
         authOnly: reflector.getAllAndOverride(AuthOnly, t) === true,
       };
       const expected = {
-        permission: op['x-required-permission'],
+        permission: permKey(op['x-required-permission']),
         capability: op['x-required-capability'],
         limit: op['x-required-limit'],
         audit: op['x-audit'],

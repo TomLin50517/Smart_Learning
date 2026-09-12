@@ -32,7 +32,7 @@ const UpdateOrg = z
       })
       .optional(),
   })
-  .refine((v) => v.name !== undefined || v.branding !== undefined, 'nothing to update');
+  .refine((v) => v.name !== undefined || v.branding !== undefined, 'nothing_to_update');
 
 /** 直接新增成員時只能給組織層級角色；課程角色經由角色指派端點設定 */
 const AddMember = Person.extend({ role: z.enum(['learner', 'org_admin', 'auditor']).default('learner') });
@@ -43,7 +43,8 @@ const RoleSpecSchema = z
     courseId: z.guid().optional(),
   })
   .refine((r) => COURSE_ROLES.includes(r.role) === (r.courseId !== undefined), {
-    message: 'courseId is required for course roles and not allowed otherwise',
+    // 課程角色必須指定 courseId，其他角色不可指定（issue 代碼，見 validation.ts）
+    message: 'course_id_mismatch',
     path: ['courseId'],
   });
 const SetRoles = z.strictObject({ roles: z.array(RoleSpecSchema).max(50) });
