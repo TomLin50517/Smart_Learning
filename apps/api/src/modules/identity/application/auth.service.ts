@@ -5,6 +5,7 @@ import type { AuthUser } from '../../../common/context.js';
 import { DB_API } from '../../../common/database.module.js';
 import { DomainError } from '../../../common/domain-error.js';
 import { logger } from '../../../common/logger.js';
+import { metrics } from '../../../common/metrics.js';
 import { RateLimiter, accountBucket } from '../../../common/rate-limit.js';
 import { hashToken, newToken } from '../../../common/tokens.js';
 import { ENV, type Env } from '../../../config/env.js';
@@ -78,6 +79,7 @@ export class AuthService implements OnModuleInit, UserInvitations {
               : null;
 
     if (reason) {
+      metrics.loginFailures.inc();
       if (reason === 'bad_password') await this.recordFailure(u!.id);
       await this.audit.write({
         action: 'auth.login.failed',

@@ -1,15 +1,17 @@
-import { Controller, Get, Inject, Res } from '@nestjs/common';
+import { Controller, Get, Header, Inject, Res } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
 import pg from 'pg';
 import { DB_API } from '../../../common/database.module.js';
-import { Public } from '../../../common/decorators.js';
+import { Public, RequirePermission } from '../../../common/decorators.js';
 import { ENV, type Env } from '../../../config/env.js';
+import { MetricsCollector } from '../application/metrics-collector.js';
 
 @Controller('api/system')
 export class SystemController {
   constructor(
     @Inject(DB_API) private readonly db: pg.Pool,
     @Inject(ENV) private readonly env: Env,
+    private readonly collector: MetricsCollector,
   ) {}
 
   /** liveness：只確認進程存活 */
@@ -48,5 +50,14 @@ export class SystemController {
         ai_provider: this.env.AI_PROVIDER,
       },
     };
+  }
+
+  /** openapi: getMetrics——Prometheus text format 0.0.4（SD §13.2） */
+  @Get('metrics')
+  @RequirePermission('platform.health.read', { scope: 'platform' })
+  @Header('Content-Type', 'text/plain; version=0.0.4; charset=utf-8')
+  @Header('Cache-Control', 'no-store')
+  metrics(): Promise<string> {
+    return this.collector.render();
   }
 }

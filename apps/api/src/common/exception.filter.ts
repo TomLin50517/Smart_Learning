@@ -54,6 +54,7 @@ export class AppExceptionFilter implements ExceptionFilter {
     }
 
     const status = ERROR_CODES[code];
+    if (req.ctx) req.ctx.errorCode = code; // 請求 log 的 outcome
     if (status >= 500) {
       logger.error({ err: exception, correlation_id: correlationId, url: req.url }, 'unhandled error');
       message = 'Internal error';

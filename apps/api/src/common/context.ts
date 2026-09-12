@@ -29,6 +29,8 @@ export interface RequestContext {
   target?: { organizationId: string | null; courseId: string | null; resourceId: string | null };
   /** handler 可補充稽核細節（新建資源的 id、變更前後），AuditInterceptor 會一併寫入 */
   audit?: { resourceId?: string; before?: unknown; after?: unknown; metadata?: Record<string, unknown> };
+  /** AppExceptionFilter 寫入的錯誤碼，供請求 log 的 outcome 欄位使用 */
+  errorCode?: string;
 }
 
 declare module 'fastify' {

@@ -6,6 +6,7 @@ import pg from 'pg';
 import { DB_API } from './database.module.js';
 import { DomainError } from './domain-error.js';
 import { logger } from './logger.js';
+import { metrics } from './metrics.js';
 
 /**
  * 流量限制（SD §8.8、THR-S-001、THR-D-*）：PostgreSQL 固定時間窗計數，不引入 Redis（ADR-011）。
@@ -39,7 +40,11 @@ export class RateLimiter {
   /** 超過限額即拋出 429 RATE_LIMITED（附 Retry-After） */
   async enforce(bucket: string, limit: number, windowSec: number): Promise<void> {
     const r = await this.hit(bucket, limit, windowSec);
-    if (!r.allowed) throw new DomainError('RATE_LIMITED', undefined, undefined, { retryAfterSec: r.retryAfterSec });
+    if (!r.allowed) {
+      // endpoint_group 只取 bucket 前綴（login／pwreset…），不含 IP 或帳號雜湊，避免 label 基數爆炸
+      metrics.rateLimitHits.inc({ endpoint_group: bucket.split(':')[0] ?? 'unknown' });
+      throw new DomainError('RATE_LIMITED', undefined, undefined, { retryAfterSec: r.retryAfterSec });
+    }
   }
 }
 
