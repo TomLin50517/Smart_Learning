@@ -1,0 +1,23 @@
+# =============================================================================
+# Docker 建置 context 排除清單（infra/docker/Dockerfile、Dockerfile.web 共用，context = repo 根目錄）
+# - node_modules／dist：由映像內 npm ci、tsc、vite 重新產生；本機的是 Windows 版原生套件，不可帶入
+# - .env：密碼不得進入映像層
+# =============================================================================
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+**/coverage
+**/*.log
+
+.git
+.github
+.claude
+.vscode
+
+.env
+.env.*
+!.env.example
+
+docs
+tests
+Interactive_AI_Coach_System_Architecture_v1.0.md

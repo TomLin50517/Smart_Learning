@@ -16,7 +16,9 @@ COPY apps/worker/package.json        apps/worker/
 COPY apps/web/package.json           apps/web/
 RUN npm ci --no-audit --no-fund
 
-# web 只依賴 contracts 的原始碼（型別與常數）
+# web 只依賴 contracts 的原始碼（型別與常數）。
+# Vite 轉譯 contracts 的 .ts 時會讀它的 tsconfig，而它 extends 根目錄的 tsconfig.base.json
+COPY tsconfig.base.json ./
 COPY packages/contracts packages/contracts
 COPY apps/web apps/web
 RUN npm run build -w @iac/web
