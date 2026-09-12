@@ -755,7 +755,7 @@ ALLOW  ⇔  ∃ grant ∈ effectivePermissions(user)
 | Role | 預設 scope | 預設 Permission（摘要） |
 |---|---|---|
 | `platform_admin` | platform | `platform.*`, `org.read`, `org.user.read`（§5.3 UC-ORG-003；v1.5 補列，migration 0016）, `cms.*`, `audit.read_platform`, `audit.export`, `course.read`, `course.version.read`, `coach.interact_test` |
-| `org_admin` | organization | `org.*`, `cms.*`（可委派）, `course.create`, `course.archive`, `course.staff.assign`, `course.read`, `course.version.read`, `enrollment.*`（可設定）, `learning.result.read_all`, `coach.transcript_policy.write`, `audit.read_org` |
+| `org_admin` | organization | `org.*`, `cms.*`（可委派）, `course.create`, `course.archive`, `course.staff.assign`, `course.read`, `course.version.read`, `enrollment.*`（可設定）, `learning.result.read_all`, `coach.transcript_policy.write`, `audit.read_org`, `audit.export`（限本組織；v1.8 依 migration 0012 補列） |
 | `course_admin` | course | `course.*`（除 `course.create` 由 org 授予）, `enrollment.*`, `learning.result.read_all`, `learning.timeline.read_all`, `certificate.read_all`, `certificate.revoke`, `knowledge.document.*`, `derived.read`, `coach.conversation.read_course`†, `audit.read_course` |
 | `instructor` | course | `course.version.write/validate/create`, `course.completion_rule.write`, `course.coach_policy.write`, `knowledge.*`, `derived.*`, `learning.result.read_all`, `learning.timeline.read_all`, `coach.interact_test`, `coach.usage_stats.read`, `coach.conversation.read_course`†, `audit.read_course` |
 | `learner` | self | `self.profile.*`, `enrollment.self_enroll`, `learning.*_self`, `coach.interact_self`, `coach.conversation.read_self`, `coach.citation.open`, `certificate.read_self`, `audit.read_self`, `notification.*_self` |
@@ -2857,3 +2857,4 @@ Browser (X-Request-Id) → Nginx → API (correlation_id)
 | v1.5 | 2026-09-11 | 授權啟用實作：§12.3 新增 `LICENSE_ACTIVATION_UNAVAILABLE`；§6.3 platform_admin 補列 `org.user.read`（原與 §5.3 不一致） | System Analyst |
 | v1.6 | 2026-09-11 | 組織管理實作：§5.3 新增 UC-ORG-008（建立組織時指定首位管理員，SD ADR-030） | System Analyst |
 | v1.7 | 2026-09-11 | SMTP 寄信實作：§2.2 註明帳號安全信件不經佇列；§22 #7 SMTP 設定位置改為環境變數（SD ADR-031） | System Analyst |
+| v1.8 | 2026-09-12 | 稽核查詢與匯出實作：UC-AUD-002 匯出於 Phase 0 為同步 CSV（SD ADR-032）；UC-AUD-001 學員僅見本人相關摘要且欄位裁剪（SD §12.4）；§6.3 org_admin 補列 `audit.export`（與 migration 0012 一致，限本組織） | System Analyst |

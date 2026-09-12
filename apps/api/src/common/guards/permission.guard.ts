@@ -59,7 +59,7 @@ export class PermissionGuard implements CanActivate {
         return { scope: 'platform', exists: true, organizationId: null, courseId: null, userId: null };
 
       case 'any':
-        return { scope: 'any', exists: true, organizationId: null, courseId: null, userId: null };
+        return { scope: 'any', exists: true, organizationId: null, courseId: null, userId: null, includeSelf: r.includeSelf === true };
 
       case 'self':
         return { scope: 'self', exists: true, organizationId: user.activeOrganizationId, courseId: null, userId: user.id };

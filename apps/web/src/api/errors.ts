@@ -77,6 +77,12 @@ const FIELD_LABELS: Record<string, string> = {
   courseId: '課程',
   licenseFile: '授權檔',
   activationCode: '啟用碼',
+  from: '開始時間',
+  to: '結束時間',
+  action: '動作',
+  cursor: '分頁位置',
+  limit: '每頁筆數',
+  organizationId: '組織',
 };
 
 /** 伺服器 details.issue → 文案。未列出的沿用原文（多為 zod 的驗證訊息） */
@@ -85,6 +91,13 @@ const ISSUE_MESSAGES: Record<string, string> = {
   already_member: '已是此組織的成員',
   last_org_admin: '組織至少需要保留一位管理員',
   not_in_organization: '不屬於此組織',
+  range_too_large: '日期區間最多 366 天',
+  too_many_rows: '符合條件的紀錄超過 50,000 筆，請縮小日期區間或加上動作篩選',
+  invalid: '格式不正確',
+  must_be_after_from: '結束時間必須晚於開始時間',
+  nothing_to_update: '沒有需要更新的內容',
+  course_id_mismatch: '課程角色必須指定課程，其他角色不可指定課程',
+  course_not_in_organization: '課程不屬於此組織',
 };
 
 export function describeDetail(d: ErrorDetail): string {

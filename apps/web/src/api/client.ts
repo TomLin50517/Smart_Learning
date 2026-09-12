@@ -37,20 +37,18 @@ function parseJson(text: string): unknown {
 }
 
 /**
- * 同源呼叫 API。session 在 HttpOnly cookie 內，JS 讀不到也不需要；
+ * session 在 HttpOnly cookie 內，JS 讀不到也不需要；
  * 狀態變更請求從非 HttpOnly 的 CSRF cookie 讀出 token 放進 X-CSRF-Token。
  */
-export async function api<T>(method: Method, path: string, body?: unknown, opts: RequestOptions = {}): Promise<T> {
-  const headers: Record<string, string> = { Accept: 'application/json' };
+async function send(method: Method, path: string, body: unknown, opts: RequestOptions, accept: string): Promise<Response> {
+  const headers: Record<string, string> = { Accept: accept };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (method !== 'GET') {
     const csrf = readCookie(document.cookie, CSRF_COOKIE);
     if (csrf) headers['X-CSRF-Token'] = csrf;
   }
-
-  let res: Response;
   try {
-    res = await fetch(path, {
+    return await fetch(path, {
       method,
       headers,
       credentials: 'same-origin',
@@ -61,21 +59,45 @@ export async function api<T>(method: Method, path: string, body?: unknown, opts:
     if (e instanceof DOMException && e.name === 'AbortError') throw e;
     throw new ApiError(0, 'NETWORK_ERROR', 'network error', null);
   }
+}
 
+async function failure(res: Response, opts: RequestOptions): Promise<ApiError> {
+  const env = (parseJson(await res.text()) as Partial<ErrorEnvelope> | null)?.error;
+  if (res.status === 401 && !opts.quiet401) unauthorizedHandler?.();
+  return new ApiError(
+    res.status,
+    env?.code ?? 'INTERNAL_ERROR',
+    env?.message ?? res.statusText,
+    env?.correlation_id ?? res.headers.get('x-request-id'),
+    env?.details ?? [],
+  );
+}
+
+/** 同源呼叫 API，回傳 JSON（204 → undefined） */
+export async function api<T>(method: Method, path: string, body?: unknown, opts: RequestOptions = {}): Promise<T> {
+  const res = await send(method, path, body, opts, 'application/json');
+  if (!res.ok) throw await failure(res, opts);
   const text = res.status === 204 ? '' : await res.text();
-  const data = text ? parseJson(text) : undefined;
+  return (text ? parseJson(text) : undefined) as T;
+}
 
-  if (!res.ok) {
-    const env = (data as Partial<ErrorEnvelope> | undefined)?.error;
-    const err = new ApiError(
-      res.status,
-      env?.code ?? 'INTERNAL_ERROR',
-      env?.message ?? res.statusText,
-      env?.correlation_id ?? res.headers.get('x-request-id'),
-      env?.details ?? [],
-    );
-    if (res.status === 401 && !opts.quiet401) unauthorizedHandler?.();
-    throw err;
-  }
-  return data as T;
+/** 下載檔案（例：稽核 CSV）。檔名取自 Content-Disposition */
+export async function apiDownload(method: Method, path: string, body?: unknown, opts: RequestOptions = {}): Promise<{ blob: Blob; filename: string }> {
+  const res = await send(method, path, body, opts, '*/*');
+  if (!res.ok) throw await failure(res, opts);
+  const cd = res.headers.get('content-disposition') ?? '';
+  const filename = /filename="([^"]+)"/.exec(cd)?.[1] ?? 'download';
+  return { blob: await res.blob(), filename };
+}
+
+/** 觸發瀏覽器儲存檔案 */
+export function saveBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

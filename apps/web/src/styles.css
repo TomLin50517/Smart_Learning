@@ -584,6 +584,24 @@ fieldset {
 .challenge {
   margin-top: 10px;
 }
+.nowrap {
+  white-space: nowrap;
+}
+pre {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.8rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  overflow-x: auto;
+  margin: 0 0 10px;
+}
+.diff {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
 
 /* ---- 窄螢幕 -------------------------------------------------------------- */
 @media (max-width: 760px) {

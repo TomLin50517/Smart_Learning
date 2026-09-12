@@ -1974,16 +1974,20 @@ paths:
     get:
       operationId: listAuditLogs
       tags: [System]
-      x-required-permission: audit.read_org
-      description: 依 scope 解析為 platform / org / course / self 四種可見範圍
+      x-required-permission: [audit.read_platform, audit.read_org, audit.read_course, audit.read_self]
+      description: |
+        持有任一 audit.read_* 即可進入（SA UC-AUD-001），結果依授權過濾為四種可見範圍：
+        platform（全部）／organization／course／self（僅與本人相關，`visibility: self`，
+        移除 IP、User-Agent、變更前後、metadata 與執行者 email）。依 occurred_at 由新到舊，keyset 分頁。
       parameters:
         - $ref: '#/components/parameters/Cursor'
-        - $ref: '#/components/parameters/Limit'
-        - { name: action, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - { name: action, in: query, description: '精確比對；以 `.*` 結尾為前綴（例：`org.*`）', schema: { type: string, pattern: '^[a-z][a-z_.]*(\.\*)?$' } }
         - { name: from, in: query, schema: { type: string, format: date-time } }
-        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, description: 不含（exclusive）, schema: { type: string, format: date-time } }
       responses:
-        '200': { description: OK }
+        '200': { description: '`{ data: AuditLogDto[], meta: { next_cursor } }`（packages/contracts/src/audit.ts）' }
+        '400': { description: '`VALIDATION_FAILED`（limit、cursor、action 或時間區間不合法）' }
 
   /audit-logs/export:
     post:
@@ -1991,8 +1995,31 @@ paths:
       tags: [System]
       x-required-permission: audit.export
       x-audit: audit.exported
+      description: |
+        同步 CSV 匯出（ADR-032；物件儲存上線後改為非同步 job）。區間最多 366 天、最多 50,000 列，
+        超過回 400 不做部分匯出。CSV 以 UTF-8 BOM 開頭；以 = + - @ 開頭的儲存格加上單引號（防公式注入）。
+        查詢條件與筆數寫入 audit.exported 的 metadata。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [from, to]
+              properties:
+                from: { type: string, format: date-time }
+                to: { type: string, format: date-time, description: 不含（exclusive） }
+                action: { type: string }
+                organizationId: { type: string, format: uuid, description: 限定單一組織；須在呼叫者的匯出範圍內，否則 404 }
       responses:
-        '202': { description: 已排入佇列 }
+        '200':
+          description: CSV 檔（Content-Disposition attachment）
+          content:
+            text/csv:
+              schema: { type: string }
+        '400': { description: '`VALIDATION_FAILED`：`to: range_too_large`（超過 366 天）或 `to: too_many_rows`（超過 50,000 列）' }
+        '404': { description: organizationId 不在匯出範圍內 }
 
   /notifications:
     get:

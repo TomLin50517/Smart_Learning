@@ -65,7 +65,10 @@ export class AppExceptionFilter implements ExceptionFilter {
     }
 
     const body: ErrorEnvelope = { error: { code, message, correlation_id: correlationId, ...(details && { details }) } };
-    void reply.status(status).header('x-request-id', correlationId).send(body);
+    // 明確設定 JSON：路由若以 @Header 宣告了其他 Content-Type（CSV 匯出、metrics），
+    // 錯誤回應仍必須以 JSON 送出，否則 Fastify 會以該型別序列化物件而失敗成 500
+    reply.removeHeader('content-disposition');
+    void reply.status(status).header('x-request-id', correlationId).header('content-type', 'application/json; charset=utf-8').send(body);
   }
 }
 

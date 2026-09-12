@@ -36,7 +36,7 @@ abstract class Metric {
   ) {}
 
   protected key(labels: Labels): string | null {
-    const k = this.labelNames.map((n) => labels[n] ?? '').join('');
+    const k = this.labelNames.map((n) => labels[n] ?? '').join('\u0001');
     if (!this.series.has(k) && this.series.size >= MAX_SERIES) return null;
     return k;
   }
