@@ -45,5 +45,5 @@ jobs:
       - name: E2E — guard chain against real PostgreSQL 18
         run: npm run test:e2e
 
-      - name: DB invariant tests (migrations 0001-0016)
+      - name: DB invariant tests (migrations 0001-0017)
         run: bash tests/db/run-db-tests.sh

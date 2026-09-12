@@ -1803,7 +1803,7 @@ erDiagram
 | `roles` | `id` | `code`, `name`, `is_system` | — | `UNIQUE(code)` |
 | `permissions` | `id` | `code`, `description`, `required_capability` | — | `UNIQUE(code)` |
 | `role_permissions` | `(role_id, permission_id)` | — | roles, permissions | — |
-| `user_org_roles` | `id` | `scope_type`（platform/org/course/self）, `scope_id`, `granted_by`, `expires_at` | users, organizations, roles | `UNIQUE(user_id, role_id, scope_type, scope_id)`；`idx_uor_user`；`idx_uor_scope` |
+| `user_org_roles` | `id` | `scope_type`（platform/org/course/self）, `scope_id`, `granted_by`, `expires_at` | users, organizations, roles | `UNIQUE(user_id, role_id, scope_type, scope_id, organization_id) NULLS NOT DISTINCT`（v1.10，migration 0017：同一人可在多個組織擔任 learner）；`idx_uor_user`；`idx_uor_scope` |
 | `user_sessions` | `id` | `session_token_hash`（只存 hash）, `active_organization_id`, `issued_at`, `expires_at`, `last_seen_at`（閒置逾時，0015）, `revoked_at`, `ip`, `user_agent` | users, organizations | `UNIQUE(session_token_hash)`；`idx_sessions_user_active WHERE revoked_at IS NULL` |
 | `password_reset_tokens` | `id` | `user_id`, `token_hash`（只存 SHA-256）, `expires_at`, `used_at`, `requested_ip` | users | `UNIQUE(token_hash)`；`idx_prt_user_open WHERE used_at IS NULL`；僅 `app_api` 可讀（0015） |
 | `rate_limit_counters` | `(bucket, window_start)` | `hits` | — | UNLOGGED；bucket 內帳號識別先雜湊；僅 `app_api` 可讀寫（0015） |
@@ -2859,3 +2859,4 @@ Browser (X-Request-Id) → Nginx → API (correlation_id)
 | v1.7 | 2026-09-11 | SMTP 寄信實作：§2.2 註明帳號安全信件不經佇列；§22 #7 SMTP 設定位置改為環境變數（SD ADR-031） | System Analyst |
 | v1.8 | 2026-09-12 | 稽核查詢與匯出實作：UC-AUD-002 匯出於 Phase 0 為同步 CSV（SD ADR-032）；UC-AUD-001 學員僅見本人相關摘要且欄位裁剪（SD §12.4）；§6.3 org_admin 補列 `audit.export`（與 migration 0012 一致，限本組織） | System Analyst |
 | v1.9 | 2026-09-12 | 平台設定實作：設定鍵以白名單目錄管理（SD §8.11）；§22 #2 `upload.max_size`、#12 `derived.min_threshold` 已可設定，於對應 Phase 起生效 | System Analyst |
+| v1.10 | 2026-09-12 | 規格缺口補齊：UC-ORG-005 個人資料與變更密碼實作為本人端點（不以 `self.profile.*` 把關，SD §8.12）；新增切換組織；ADR-030 的復原缺口由 SD ADR-033 補上；§11.3.1 `user_org_roles` 唯一約束納入 organization_id（修正多組織學員） | System Analyst |

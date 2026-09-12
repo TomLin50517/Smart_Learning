@@ -75,4 +75,5 @@ npm run dev:web           # http://localhost:5173，/api 代理到 IAC_API_URL�
 ## 開發備註
 
 - 專案位於 OneDrive 同步資料夾，`node_modules` 會被同步；若 `npm install` 遇到 `EPERM`，暫停 OneDrive 同步後重試。
+- Windows：`npm run test:db` 須從 **Git Bash** 執行。在 PowerShell／cmd 中，`bash` 會解析成 System32 的 WSL bash（通常沒有 docker），腳本會在建立容器時直接失敗。
 - npm 11 預設不執行套件的 install script（`@swc/core`、`esbuild` 等）；其原生 binary 由平台 optional dependency 提供，目前不需核准。

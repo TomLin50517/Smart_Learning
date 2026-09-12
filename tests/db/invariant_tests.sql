@@ -268,8 +268,8 @@ SELECT pg_temp.t('T58 4 monthly partitions per table', NULL,
      OR (SELECT count(*) FROM pg_inherits i JOIN pg_class c ON c.oid=i.inhrelid
           WHERE i.inhparent='audit_logs'::regclass AND c.relname ~ '_\d{4}_\d{2}$') <> 4
      THEN RAISE EXCEPTION 'PARTITIONS'; END IF; END $d$ $$, 'OK');
-SELECT pg_temp.t('T59 16 migrations recorded', NULL,
- $$DO $d$ BEGIN IF (SELECT count(*) FROM schema_migrations) <> 16 THEN RAISE EXCEPTION 'COUNT'; END IF; END $d$ $$, 'OK');
+SELECT pg_temp.t('T59 17 migrations recorded', NULL,
+ $$DO $d$ BEGIN IF (SELECT count(*) FROM schema_migrations) <> 17 THEN RAISE EXCEPTION 'COUNT'; END IF; END $d$ $$, 'OK');
 
 -- ============================================================ 0015 auth tables
 SELECT pg_temp.t('T60 app_coach cannot read password_reset_tokens', 'app_coach',
@@ -295,6 +295,25 @@ SELECT pg_temp.t('T66 platform_admin can read org users (SA §5.3 UC-ORG-003)', 
 SELECT pg_temp.t('T67 token purpose restricted to reset/invite', NULL,
  $$INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, purpose)
    VALUES ('aaaaaaaa-0000-0000-0000-000000000001', repeat('a', 64), now(), 'bogus')$$, '23514');
+
+-- ============================================================ 0017 multi-org roles
+SELECT pg_temp.t('T68 learner (self scope) in org alpha', NULL,
+ $$INSERT INTO user_org_roles (user_id, role_id, scope_type, scope_id, organization_id)
+   VALUES ('aaaaaaaa-0000-0000-0000-000000000003',(SELECT id FROM roles WHERE code='learner'),'self',
+           'aaaaaaaa-0000-0000-0000-000000000003','11111111-0000-0000-0000-000000000001')$$, 'OK');
+SELECT pg_temp.t('T69 same learner also in org beta (was 23505 before 0017)', NULL,
+ $$INSERT INTO user_org_roles (user_id, role_id, scope_type, scope_id, organization_id)
+   VALUES ('aaaaaaaa-0000-0000-0000-000000000003',(SELECT id FROM roles WHERE code='learner'),'self',
+           'aaaaaaaa-0000-0000-0000-000000000003','11111111-0000-0000-0000-000000000002')$$, 'OK');
+SELECT pg_temp.t('T70 duplicate learner grant in the same org', NULL,
+ $$INSERT INTO user_org_roles (user_id, role_id, scope_type, scope_id, organization_id)
+   VALUES ('aaaaaaaa-0000-0000-0000-000000000003',(SELECT id FROM roles WHERE code='learner'),'self',
+           'aaaaaaaa-0000-0000-0000-000000000003','11111111-0000-0000-0000-000000000001')$$, '23505');
+SELECT pg_temp.t('T71 duplicate platform grant still rejected (NULLS NOT DISTINCT)', NULL,
+ $$INSERT INTO user_org_roles (user_id, role_id, scope_type)
+   SELECT 'aaaaaaaa-0000-0000-0000-000000000002'::uuid, id, 'platform'::scope_type FROM roles WHERE code='platform_admin'
+   UNION ALL
+   SELECT 'aaaaaaaa-0000-0000-0000-000000000002'::uuid, id, 'platform'::scope_type FROM roles WHERE code='platform_admin'$$, '23505');
 
 -- ------------------------------------------------------------------ report
 \pset border 1

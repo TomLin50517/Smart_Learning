@@ -872,6 +872,34 @@ paths:
         '201': { description: '回傳 `{ userId, invited, emailSent }`。新帳號 `invited: true` 並寄出設定密碼邀請，`emailSent` 表示信件是否已交給郵件伺服器（失敗時對方可改用「忘記密碼」）；既有帳號 `invited: false`、`emailSent: false`（直接加入）' }
         '400': { description: '已是成員時 details 為 `email: already_member`' }
 
+  /organizations/{id}/admin-recovery:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    post:
+      operationId: recoverOrganizationAdmin
+      tags: [Organization]
+      x-required-permission: platform.organization.create
+      x-required-capability: configurationWriteAllowed
+      x-audit: org.role.assigned
+      description: |
+        管理員復原（ADR-033）：組織已沒有任何啟用中的 org_admin 時，由平台管理員指定一位。
+        仍有啟用中的管理員時回 400 `org_has_active_admin`。對象為新帳號時寄設定密碼邀請；
+        既有帳號直接加上 org_admin。稽核記在該組織之下，metadata.reason = admin_recovery。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email, displayName]
+              properties:
+                email: { type: string, format: email }
+                displayName: { type: string, maxLength: 200, description: 僅在建立新帳號時使用 }
+      responses:
+        '200': { description: '`{ userId, invited, emailSent }`' }
+        '400': { description: '`org_has_active_admin` 或 `email: user_not_active`' }
+        '404': { description: 組織不存在 }
+
   /organizations/{id}/users/{userId}/roles:
     parameters:
       - $ref: '#/components/parameters/OrgId'
@@ -1260,6 +1288,77 @@ paths:
         - $ref: '#/components/parameters/Limit'
       responses:
         '200': { description: OK }
+
+  /me/active-organization:
+    put:
+      operationId: setActiveOrganization
+      tags: [Identity]
+      x-auth-only: true
+      description: 切換目前 session 的 active organization（SD §8.12）。只能切到本人有角色且為啟用狀態的組織，其他一律 404（ADR-019）；不影響其他 session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [organizationId]
+              properties:
+                organizationId: { type: string, format: uuid }
+      responses:
+        '200':
+          description: 切換後的 MeResponse
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MeResponse' }
+        '404': { description: 非本人所屬、已停用或不存在的組織 }
+
+  /me/profile:
+    patch:
+      operationId: updateMyProfile
+      tags: [Identity]
+      x-auth-only: true
+      x-audit: user.profile.updated
+      description: 編輯本人的顯示名稱與語系（SA UC-ORG-005）。email 不可自行變更
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                displayName: { type: string, minLength: 1, maxLength: 200 }
+                locale: { type: string, enum: [zh-TW, en] }
+      responses:
+        '200': { description: '`{ displayName, locale }`' }
+        '400': { description: '`VALIDATION_FAILED`（含 `nothing_to_update`、`unrecognized_key`）' }
+
+  /me/password:
+    post:
+      operationId: changeMyPassword
+      tags: [Identity]
+      x-auth-only: true
+      x-audit: auth.password.changed
+      description: |
+        變更本人密碼：需目前密碼；帳號每 15 分鐘 5 次。成功後撤銷本人其他所有 session（目前的保留），
+        並作廢尚未使用的重設／邀請連結。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [currentPassword, newPassword]
+              properties:
+                currentPassword: { type: string, minLength: 1, maxLength: 1024 }
+                newPassword: { type: string, minLength: 8, maxLength: 128 }
+      responses:
+        '204': { description: 已變更 }
+        '400': { description: '`currentPassword: incorrect`、`newPassword: same_as_current` 或長度不符' }
+        '429': { description: '`RATE_LIMITED`' }
 
   /me/enrollments:
     get:
