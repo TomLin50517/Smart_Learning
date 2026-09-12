@@ -4,6 +4,8 @@ import { AuditPage } from './pages/AuditPage';
 import { ForgotPasswordPage, LoginPage, SetPasswordPage } from './pages/auth-pages';
 import { NotFoundPage, RouteError } from './pages/errors-pages';
 import { HomePage } from './pages/HomePage';
+import { JobsPage } from './pages/JobsPage';
+import { SettingsPage } from './pages/SettingsPage';
 import { LicensePage } from './pages/LicensePage';
 import { OrganizationsPage } from './pages/OrganizationsPage';
 import { OrgMembersPage } from './pages/OrgMembersPage';
@@ -31,6 +33,8 @@ export const router = createBrowserRouter([
       { path: 'platform/organizations', element: <OrganizationsPage /> },
       { path: 'platform/organizations/:orgId/users', element: <OrgMembersPage /> },
       { path: 'platform/license', element: <LicensePage /> },
+      { path: 'platform/system', element: <SettingsPage /> },
+      { path: 'platform/jobs', element: <JobsPage /> },
       // 稽核紀錄／帳號活動（所有 audit.read_* 共用，SD §12.4）
       { path: 'audit', element: <AuditPage /> },
       { path: '*', element: <NotFoundPage /> },

@@ -597,6 +597,24 @@ pre {
   overflow-x: auto;
   margin: 0 0 10px;
 }
+.setting-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.setting-head h2 {
+  margin-bottom: 4px;
+}
+.setting-input {
+  max-width: 180px;
+}
+.error-text {
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 8em;
+  overflow-y: auto;
+}
 .diff {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));

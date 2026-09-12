@@ -2858,3 +2858,4 @@ Browser (X-Request-Id) → Nginx → API (correlation_id)
 | v1.6 | 2026-09-11 | 組織管理實作：§5.3 新增 UC-ORG-008（建立組織時指定首位管理員，SD ADR-030） | System Analyst |
 | v1.7 | 2026-09-11 | SMTP 寄信實作：§2.2 註明帳號安全信件不經佇列；§22 #7 SMTP 設定位置改為環境變數（SD ADR-031） | System Analyst |
 | v1.8 | 2026-09-12 | 稽核查詢與匯出實作：UC-AUD-002 匯出於 Phase 0 為同步 CSV（SD ADR-032）；UC-AUD-001 學員僅見本人相關摘要且欄位裁剪（SD §12.4）；§6.3 org_admin 補列 `audit.export`（與 migration 0012 一致，限本組織） | System Analyst |
+| v1.9 | 2026-09-12 | 平台設定實作：設定鍵以白名單目錄管理（SD §8.11）；§22 #2 `upload.max_size`、#12 `derived.min_threshold` 已可設定，於對應 Phase 起生效 | System Analyst |

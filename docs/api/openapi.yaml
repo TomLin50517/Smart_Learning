@@ -2034,16 +2034,32 @@ paths:
       operationId: getPlatformSettings
       tags: [System]
       x-required-permission: platform.settings.read
+      description: 設定目錄（packages/contracts/src/settings.ts）內每個鍵的生效值、預設值、是否為預設與最後修改者
       responses:
-        '200': { description: OK }
+        '200': { description: '`PlatformSettingDto[]`' }
     put:
       operationId: updatePlatformSettings
       tags: [System]
       x-required-permission: platform.settings.write
       x-required-capability: configurationWriteAllowed
       x-audit: system.settings.updated
+      description: |
+        部分更新。只接受設定目錄內的鍵（不接受任意鍵）；值為目錄範圍內的整數，`null` 表示恢復預設（刪除該列）。
+        稽核只記錄實際有變更之鍵的 before／after。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                upload.max_size: { type: [integer, 'null'], minimum: 1048576, maximum: 10737418240 }
+                derived.min_threshold: { type: [integer, 'null'], minimum: 2, maximum: 100 }
       responses:
-        '200': { description: OK }
+        '200': { description: '更新後的 `PlatformSettingDto[]`' }
+        '400': { description: '`VALIDATION_FAILED`：未知的鍵、超出範圍、非整數，或 `nothing_to_update`' }
         '403':
           $ref: '#/components/responses/Forbidden'
 
@@ -2086,8 +2102,9 @@ paths:
       operationId: getJobQueueStatus
       tags: [System]
       x-required-permission: platform.health.read
+      description: 依佇列與工作類型統計 pending／running／24 小時內 succeeded、最舊待處理等待秒數、過期鎖數量與 DLQ（最近 20 筆，錯誤截斷 500 字元）
       responses:
-        '200': { description: OK }
+        '200': { description: '`JobQueueStatus`（packages/contracts/src/settings.ts）' }
 
   /system/health:
     get:
