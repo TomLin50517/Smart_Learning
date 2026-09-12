@@ -1,10 +1,10 @@
 import { Controller, Get, Header, Inject, Res } from '@nestjs/common';
+import type { JobQueueStatus } from '@iac/contracts';
 import type { FastifyReply } from 'fastify';
 import pg from 'pg';
 import { DB_API } from '../../../common/database.module.js';
 import { Public, RequirePermission } from '../../../common/decorators.js';
 import { ENV, type Env } from '../../../config/env.js';
-import type { JobQueueStatus } from '@iac/contracts';
 import { JobStatusService } from '../application/job-status.service.js';
 import { MetricsCollector } from '../application/metrics-collector.js';
 
@@ -17,7 +17,7 @@ export class SystemController {
     private readonly jobStatus: JobStatusService,
   ) {}
 
-  /** liveness：只確認進程存活 */
+  /** openapi: getHealth——liveness：只確認進程存活 */
   @Get('health')
   @Public()
   health(): { status: 'ok' } {
@@ -25,7 +25,7 @@ export class SystemController {
   }
 
   /**
-   * readiness（ADR-023）：只以 PostgreSQL 決定是否 ready。
+   * openapi: getReadiness——readiness（ADR-023）：只以 PostgreSQL 決定是否 ready。
    * Elasticsearch / LLM 故障不讓整個 API 被判定不可用——學習不依賴它們（INV-4）。
    */
   @Get('ready')
