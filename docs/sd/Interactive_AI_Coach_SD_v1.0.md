@@ -3781,6 +3781,18 @@ AsyncLocalStorage.run({ correlationId, userId, organizationId }, () => next.hand
 
 Job 入列時將 `correlationId` 寫入 `job_queue.correlation_id`；worker 執行時重建同一 ALS context。LLM 呼叫寫入 `ai_usage_records.correlation_id`。一次學員提問的完整鏈路（retrieval → prompt → 驗證 → fallback）可用單一 id 串起。
 
+## 13.5 Phase 0 實作現況（v1.9）
+
+| 項目 | 實作 |
+|---|---|
+| Correlation | `common/als.ts`：AsyncLocalStorage 直接以 `req.ctx` 為 store，`onRequest` 以 `als.run()` 包住整個請求生命週期；guard 之後寫入的 user／target 即時反映。logger 的 `mixin` 讓請求內每筆 log 自動帶 `correlation_id`、`actor_user_id`、`organization_id`（呼叫端明確傳入的同名欄位優先）。worker 以 child logger 帶 job 的 `correlation_id` |
+| 存取 log | `onResponse` 每個請求一筆：`module`、`operation`（method + 路由樣板）、`status`、`duration_ms`、`outcome`（AppExceptionFilter 寫入的錯誤碼，否則 `success`）。**只記路由樣板、不記原始 URL**（query 與路徑參數可能含識別資料）。health／ready／metrics 成功時降為 debug；5xx 以 error 等級輸出 |
+| redact | 補上 `newPassword`、`token`、`SMTP_PASSWORD` |
+| Metrics 實作 | 自製最小 registry（`common/metrics.ts`，不引入 prom-client），text format 0.0.4；每個指標最多 2000 組 label，未命中路由一律記為 `route="unmatched"` |
+| 已輸出 | `iac_http_requests_total`、`iac_http_request_duration_seconds`（histogram）、`iac_login_failures_total`、`iac_rate_limit_hits_total{endpoint_group}`（僅取 bucket 前綴，不含 IP 或帳號雜湊）、`iac_job_queue_depth`、`iac_job_oldest_pending_seconds`（只計已到執行時間者）、`iac_job_dead_total`（尚未 requeue 的 `failed_jobs`）、`iac_license_days_remaining{kind=expiry｜maintenance}`。佇列與授權值在抓取時從 DB 計算，抓取失敗保留上次的值並記 warn，不讓端點 500 |
+| 尚未輸出 | ES、AI、Coach、儲存用量相關指標——對應 Phase 的功能完成時加入 |
+| 權限與待決事項 | `GET /api/system/metrics` 需 `platform.health.read`（session cookie）。Prometheus 以 session 抓取不便；Phase 1.5 正式接 Prometheus 時需另訂機器憑證方案（另立 ADR），在此之前可由 nginx 限制來源 |
+
 ---
 
 # 14. 測試設計
@@ -4057,3 +4069,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.6 | 2026-09-11 | 組織管理實作：新增 §8.9（`any` scope、首位管理員、邀請、角色指派護欄、ID 以 `z.guid()` 驗證）；新增 ADR-030 | Software Designer |
 | v1.7 | 2026-09-11 | SMTP 寄信實作：新增 §8.10（介面移至 NotificationModule、強制 TLS、zh-TW／en 模板、log 規範、邀請信失敗以 `emailSent` 回報）；新增 ADR-031（SMTP 設定走環境變數）；§8.1、§8.9、§9.3 同步 | Software Designer |
 | v1.8 | 2026-09-11 | React 前端實作：新增 §7.1.3（實作路由與差異、session／CSRF、錯誤文案、token 連結處理、部署與 nginx 修正） | Software Designer |
+| v1.9 | 2026-09-12 | 可觀測性實作：新增 §13.5（AsyncLocalStorage 關聯、存取 log、redact 補強、Prometheus metrics 與已輸出指標、metrics 端點的機器憑證待決） | Software Designer |
