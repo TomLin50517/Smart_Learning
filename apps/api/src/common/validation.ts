@@ -14,7 +14,12 @@ export function parseInput<S extends z.ZodType>(schema: S, input: unknown): z.in
     throw new DomainError(
       'VALIDATION_FAILED',
       'Request validation failed',
-      r.error.issues.map((i) => ({ field: i.path.map(String).join('.'), issue: i.code === 'custom' ? i.message : i.code })),
+      r.error.issues.flatMap((i) => {
+        const at = i.path.map(String);
+        // strictObject 的多餘欄位：zod 把鍵名放在 keys（path 為物件本身），逐一展開才看得出是哪個欄位
+        if (i.code === 'unrecognized_keys') return i.keys.map((k) => ({ field: [...at, k].join('.'), issue: 'unrecognized_key' }));
+        return [{ field: at.join('.'), issue: i.code === 'custom' ? i.message : i.code }];
+      }),
     );
   }
   return r.data;

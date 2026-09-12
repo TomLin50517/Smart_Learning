@@ -4,6 +4,8 @@ import pg from 'pg';
 import { DB_API } from '../../../common/database.module.js';
 import { Public, RequirePermission } from '../../../common/decorators.js';
 import { ENV, type Env } from '../../../config/env.js';
+import type { JobQueueStatus } from '@iac/contracts';
+import { JobStatusService } from '../application/job-status.service.js';
 import { MetricsCollector } from '../application/metrics-collector.js';
 
 @Controller('api/system')
@@ -12,6 +14,7 @@ export class SystemController {
     @Inject(DB_API) private readonly db: pg.Pool,
     @Inject(ENV) private readonly env: Env,
     private readonly collector: MetricsCollector,
+    private readonly jobStatus: JobStatusService,
   ) {}
 
   /** liveness：只確認進程存活 */
@@ -50,6 +53,13 @@ export class SystemController {
         ai_provider: this.env.AI_PROVIDER,
       },
     };
+  }
+
+  /** openapi: getJobQueueStatus——佇列、stale lock、DLQ（SD §8.11） */
+  @Get('jobs')
+  @RequirePermission('platform.health.read', { scope: 'platform' })
+  jobs(): Promise<JobQueueStatus> {
+    return this.jobStatus.status();
   }
 
   /** openapi: getMetrics——Prometheus text format 0.0.4（SD §13.2） */

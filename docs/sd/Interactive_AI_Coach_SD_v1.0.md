@@ -2233,7 +2233,7 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 項目 | 實作 |
 |---|---|
 | 技術 | Vite 8 + React 19 + react-router 8（data router；v8 起 `RouterProvider` 自 `react-router/dom` 匯入，`react-router-dom` 已移除）。XState（§7.2）於學習 Runtime 階段導入 |
-| 已實作路由 | `/login`、`/forgot-password`、`/password-reset`、`/set-password`；`/app`（首頁）、`/app/org/users`（目前組織的成員與角色）、`/app/platform/organizations`、`/app/platform/organizations/:orgId/users`、`/app/platform/license`、`/app/audit`（v1.10）。`/` 在 CMS 首頁完成前暫時導向 `/app` |
+| 已實作路由 | `/login`、`/forgot-password`、`/password-reset`、`/set-password`；`/app`（首頁）、`/app/org/users`（目前組織的成員與角色）、`/app/platform/organizations`、`/app/platform/organizations/:orgId/users`、`/app/platform/license`、`/app/audit`（v1.10）、`/app/platform/system`、`/app/platform/jobs`（v1.11）。`/` 在 CMS 首頁完成前暫時導向 `/app` |
 | 與上表的差異 | 新增 `/forgot-password`（申請重設）與 `/set-password`（組織邀請；與 `/password-reset` 共用 confirm 端點，文案不同）；角色指派併入成員頁，不另設 `/app/org/roles`；平台管理員檢視特定組織成員使用 `/app/platform/organizations/:orgId/users` |
 | 角色編輯 | 目前只能勾選組織層級角色（org_admin／learner／auditor）；指派為「整組取代」，因此既有課程角色原樣送回，避免被清除。課程角色的指派待課程 API 完成後提供 |
 | Session | 啟動時以 `GET /api/me` 探測；任何 API 回 401（逾時、閒置、撤銷）→ 回到未登入並導向 `/login?next=`。`next` 只接受站內相對路徑（拒絕 `//`、`/\`、絕對 URL、控制字元），防止開放式重導向 |
@@ -2999,6 +2999,22 @@ IP 判定依 `TRUST_PROXY`：預設不信任 `X-Forwarded-For`；只有確定位
 | 設定來源 | 環境變數 `SMTP_*`，不存於 `system_settings`（ADR-031）；變更需重啟 API |
 | 設定驗證 | 設了 `SMTP_HOST` 必須有含地址的 `SMTP_FROM`；設了 `SMTP_USER` 必須有 `SMTP_PASSWORD`；違反即拒絕啟動 |
 | 測試 | `tests/e2e/smtp-mail.test.ts` 以行程內 `smtp-server` 驗證：實際送達、MIME 解碼後的內容與語系、信中連結可完成密碼重設、header／HTML 注入無效、收件者被拒時 `invite()` 回 `false`、無 STARTTLS 時拒寄、帳密錯誤拒寄 |
+
+
+## 8.11 平台設定與背景工作狀態（v1.11）
+
+實作：`apps/api/src/modules/system/`、`packages/contracts/src/settings.ts`。
+
+| 規則 | 說明 |
+|---|---|
+| 設定目錄 | 平台設定只接受 `PLATFORM_SETTINGS` 目錄內的鍵，每個鍵有型別、範圍、預設值與「自哪個 Phase 起生效」。PUT 以目錄動態產生 zod strict schema，未知的鍵一律 400——設定端點不是可寫入任意資料的存放區 |
+| 目前的鍵 | `upload.max_size`（bytes，預設 512 MB，Phase 2 文件上傳起生效；調高時需同步調整 nginx `client_max_body_size`）、`derived.min_threshold`（預設 5，Phase 3 起生效）。在生效之前只是預先設定，不影響系統行為，畫面上明示 |
+| 預設值語意 | 「無列」即預設值；`null` 恢復預設 = 刪除該列。預設值日後調整時，未自訂的環境自動跟上。列中若有超出目前範圍的舊值，以預設值生效 |
+| 稽核 | `system.settings.updated`：只記實際有變更之鍵的 before／after（值相同的寫入不列入）。更新在交易內以 `FOR UPDATE` 鎖定平台設定列，避免並行修改使 before 失準 |
+| 授權能力 | PUT 需 `configurationWriteAllowed`（授權凍結時只能檢視） |
+| 不在此處 | 機密（SMTP、AI key，ADR-031）；AI Provider（`/platform/ai-provider`，Phase 2）；組織層級設定（對話可見性等有各自端點） |
+| 佇列狀態 | `GET /api/system/jobs`（`platform.health.read`）：依佇列 × 工作類型統計 pending／running／24 小時內 succeeded、最舊「已到執行時間」的待處理等待秒數、running 但鎖已過期的數量、DLQ 總數與最近 20 筆（錯誤截斷 500 字元）。只讀；重送 DLQ 屬後續項目 |
+| 前端 | `/app/platform/system`（平台設定，bytes 以 MB 顯示）、`/app/platform/jobs`（背景工作，最久等待超過 30 分鐘時標示，對應 SA §18.2 告警起點） |
 
 ---
 
@@ -4093,3 +4109,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.8 | 2026-09-11 | React 前端實作：新增 §7.1.3（實作路由與差異、session／CSRF、錯誤文案、token 連結處理、部署與 nginx 修正） | Software Designer |
 | v1.9 | 2026-09-12 | 可觀測性實作：新增 §13.5（AsyncLocalStorage 關聯、存取 log、redact 補強、Prometheus metrics 與已輸出指標、metrics 端點的機器憑證待決） | Software Designer |
 | v1.10 | 2026-09-12 | 稽核查詢與匯出：新增 §12.4（任一權限進入 + includeSelf、四種可見範圍、本人相關紀錄的欄位裁剪、微秒精度 keyset 分頁、同步 CSV 與公式注入防護）；新增 ADR-032；§7.1.3 補 `/app/audit` | Software Designer |
+| v1.11 | 2026-09-12 | 平台設定與背景工作狀態：新增 §8.11（設定白名單目錄、預設值語意、只記實際變更的稽核、授權凍結時唯讀、佇列與 DLQ 狀態）；§7.1.3 補路由 | Software Designer |

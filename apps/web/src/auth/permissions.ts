@@ -27,6 +27,8 @@ export function navItems(me: MeResponse): NavItem[] {
     items.push({ to: '/app/platform/organizations', label: '組織管理' });
   }
   if (can(me, 'platform.license.read')) items.push({ to: '/app/platform/license', label: '系統授權' });
+  if (can(me, 'platform.settings.read')) items.push({ to: '/app/platform/system', label: '平台設定' });
+  if (can(me, 'platform.health.read')) items.push({ to: '/app/platform/jobs', label: '背景工作' });
   // 稽核：管理範圍者看「稽核紀錄」，只有 audit.read_self 者看「帳號活動」（同一頁，SD §12.4）
   if (can(me, 'audit.read_platform') || can(me, 'audit.read_org') || can(me, 'audit.read_course')) {
     items.push({ to: '/app/audit', label: '稽核紀錄' });
