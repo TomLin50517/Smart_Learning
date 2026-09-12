@@ -23,6 +23,7 @@ export function navItems(me: MeResponse): NavItem[] {
   if (me.activeOrganization && can(me, 'org.user.read')) {
     items.push({ to: '/app/org/users', label: '成員管理' });
   }
+  if (can(me, 'course.read')) items.push({ to: '/app/courses', label: '課程管理' });
   if (can(me, 'platform.organization.create') || can(me, 'platform.organization.disable')) {
     items.push({ to: '/app/platform/organizations', label: '組織管理' });
   }

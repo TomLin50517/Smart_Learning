@@ -1,6 +1,9 @@
 import { createBrowserRouter, Navigate } from 'react-router';
 import { RequireAuth } from './components/AppShell';
 import { AuditPage } from './pages/AuditPage';
+import { CoursePage } from './pages/CoursePage';
+import { CoursesPage } from './pages/CoursesPage';
+import { VersionEditorPage } from './pages/VersionEditorPage';
 import { ForgotPasswordPage, LoginPage, SetPasswordPage } from './pages/auth-pages';
 import { NotFoundPage, RouteError } from './pages/errors-pages';
 import { HomePage } from './pages/HomePage';
@@ -29,6 +32,10 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <HomePage /> },
       { path: 'profile', element: <ProfilePage /> },
+      // 課程（SD §7.1）
+      { path: 'courses', element: <CoursesPage /> },
+      { path: 'courses/:courseId', element: <CoursePage /> },
+      { path: 'courses/:courseId/versions/:versionId/edit', element: <VersionEditorPage /> },
       // Org Admin：目前組織的成員與角色（SD 的 /app/org/roles 併入此頁）
       { path: 'org/users', element: <OrgMembersPage /> },
       // Platform Admin

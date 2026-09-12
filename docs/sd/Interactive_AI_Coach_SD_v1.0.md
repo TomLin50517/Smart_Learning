@@ -2156,6 +2156,30 @@ paths:
 
 SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重複，實作時以該表為準；`docs/api/openapi.yaml` 必須涵蓋其中每一個 path。
 
+
+## 6.5 課程與版本編輯實作（Phase 1-1，v1.13）
+
+實作：`apps/api/src/modules/course/`、`packages/contracts/src/course.ts`。validate／publish／completion rules／coach policy 屬 Phase 1-2；hotfix 與強制遷移學員待選課功能完成後實作。
+
+| 項目 | 實作 |
+|---|---|
+| 權限（migration 0012） | org_admin：建立課程、封存、指派人員、唯讀內容——**不能**建立或編輯版本；instructor／course_admin：建立、編輯、複製版本（course_admin 另可封存與指派）。SA §6.3 的角色表為節錄，以種子為準 |
+| 課程列表 | `grantScopes(grants, 'course.read')`：platform → 全部；組織範圍 → 該組織；課程範圍 → 被指派的課程。self 授權不擴大列表（學員的課程目錄另有端點）。依 code 排序、keyset 分頁；OpenAPI 的 `sort` 參數目前不支援 |
+| 建立課程 | 建於 session 的 active organization（organization scope 未指定參數時取 active org） |
+| `PATCH /courses/{id}` | 只做封存（權限 course.archive、稽核 course.archived）。課程名稱／說明編輯需另立權限碼，屬後續項目；版本名稱於版本內維護 |
+| 一次一個編輯中版本 | create 與 clone 前檢查同課程是否已有 draft／review，有則 400 `draft_exists`——避免兩份草稿各自發布而互相覆蓋。課程列以 `FOR UPDATE` 鎖定，並行建立也只有一個成功 |
+| 草稿編輯 | 應用層以 `FOR UPDATE` 鎖定版本並確認 `status = 'draft'`，否則 409 `COURSE_VERSION_IMMUTABLE`（DB 觸發器為第二層）。`modules` 整組取代：刪除本版全部 module（lesson／activity／先修條件 CASCADE）後依輸入重建，以 `jsonb_to_recordset` 每表一次寫入。草稿沒有選課或作答，重建不影響學習資料 |
+| id 規則 | 項目 id 由前端產生（`crypto.randomUUID()`）並保留——完成條件以 id 引用活動，且內容區塊需能在儲存前引用新活動。伺服器檢查：id 在整份內容中唯一（`duplicate_id`）、不可沿用其他版本的 id（`id_conflict`）、活動區塊只能引用同課節的活動（`activity_not_in_lesson`）、互動元件存在且啟用（`unknown_interactive_definition`） |
+| 上限 | 50 單元、每單元 100 課節、每課節 50 活動與 200 區塊、總計 2000 活動；Markdown 50,000 字、JSON 欄位 64 KB |
+| 內容區塊 | lesson 子集：`richtext`（只存 Markdown，前端 allowlist 渲染）、`image`／`video`（以 assetId 引用，不接受外部 URL）、`callout`、`activity`。hero／announcement／course_list／footer 為 CMS 專用，一律拒絕 |
+| 新版本預設 | 建立時附預設 Coach Policy（欄位預設即保守設定：hint_first、citation_required），validator C4 檢查其存在 |
+| 複製 | 來源須為 published／superseded。所有 module／lesson／activity 換新 id；`remapIds()`（純函式）把 JSON 內等於舊 id 的**字串值與物件鍵**全部改寫——涵蓋完成條件、先修條件、內容區塊、config／answerKey，新增的條件型別自動涵蓋（UUID 全域唯一，替換安全）。複製完成條件、Coach Policy、知識綁定（照原樣；SEQ-02 所述「改指向最新 Ready 文件版本」待知識模組）。既有選課不動（AC-CRS-002） |
+| 影響範圍 | 選課狀態 pending／active／suspended／reopened 計為進行中，completed 為已完成 |
+| 課程人員 | 權限依據為 `user_org_roles` 的課程範圍角色；`course_staff` 是同步維護的名冊——課程端指派（`POST /courses/{id}/staff`）與組織成員角色編輯（`setRoles`）兩處都同步。以 email 指派，對象須為課程所屬組織的成員。目前支援 instructor／course_admin（assistant 無對應權限角色，暫不開放） |
+| answerKey | 課程人員的版本內容含 answerKey（持 course.version.read）；學員的活動 runtime 另有白名單端點，永不含 answerKey（§7.3.4） |
+| 互動元件目錄 | 新增 `GET /api/interactive-definitions`（course.version.read，any scope），供編輯器選擇 |
+| 前端 | `/app/courses`（列表、建立）、`/app/courses/:courseId`（版本、複製前顯示影響範圍、人員、封存）、`/app/courses/:courseId/versions/:versionId/edit`（結構編輯器；非草稿唯讀）。錯誤路徑轉為「第 1 單元 › 第 2 課節 › 第 3 活動」 |
+
 ---
 
 # 7. Frontend 設計
@@ -2234,7 +2258,7 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 項目 | 實作 |
 |---|---|
 | 技術 | Vite 8 + React 19 + react-router 8（data router；v8 起 `RouterProvider` 自 `react-router/dom` 匯入，`react-router-dom` 已移除）。XState（§7.2）於學習 Runtime 階段導入 |
-| 已實作路由 | `/login`、`/forgot-password`、`/password-reset`、`/set-password`；`/app`（首頁）、`/app/org/users`（目前組織的成員與角色）、`/app/platform/organizations`、`/app/platform/organizations/:orgId/users`、`/app/platform/license`、`/app/audit`（v1.10）、`/app/platform/system`、`/app/platform/jobs`（v1.11）、`/app/profile`（v1.12）。`/` 在 CMS 首頁完成前暫時導向 `/app` |
+| 已實作路由 | `/login`、`/forgot-password`、`/password-reset`、`/set-password`；`/app`（首頁）、`/app/org/users`（目前組織的成員與角色）、`/app/platform/organizations`、`/app/platform/organizations/:orgId/users`、`/app/platform/license`、`/app/audit`（v1.10）、`/app/platform/system`、`/app/platform/jobs`（v1.11）、`/app/profile`（v1.12）、`/app/courses`、`/app/courses/:courseId`、`/app/courses/:courseId/versions/:versionId/edit`（v1.13）。`/` 在 CMS 首頁完成前暫時導向 `/app` |
 | 與上表的差異 | 新增 `/forgot-password`（申請重設）與 `/set-password`（組織邀請；與 `/password-reset` 共用 confirm 端點，文案不同）；角色指派併入成員頁，不另設 `/app/org/roles`；平台管理員檢視特定組織成員使用 `/app/platform/organizations/:orgId/users` |
 | 角色編輯 | 目前只能勾選組織層級角色（org_admin／learner／auditor）；指派為「整組取代」，因此既有課程角色原樣送回，避免被清除。課程角色的指派待課程 API 完成後提供 |
 | Session | 啟動時以 `GET /api/me` 探測；任何 API 回 401（逾時、閒置、撤銷）→ 回到未登入並導向 `/login?next=`。`next` 只接受站內相對路徑（拒絕 `//`、`/\`、絕對 URL、控制字元），防止開放式重導向 |
@@ -4133,3 +4157,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.10 | 2026-09-12 | 稽核查詢與匯出：新增 §12.4（任一權限進入 + includeSelf、四種可見範圍、本人相關紀錄的欄位裁剪、微秒精度 keyset 分頁、同步 CSV 與公式注入防護）；新增 ADR-032；§7.1.3 補 `/app/audit` | Software Designer |
 | v1.11 | 2026-09-12 | 平台設定與背景工作狀態：新增 §8.11（設定白名單目錄、預設值語意、只記實際變更的稽核、授權凍結時唯讀、佇列與 DLQ 狀態）；§7.1.3 補路由 | Software Designer |
 | v1.12 | 2026-09-12 | 規格缺口補齊：新增 §8.12（切換組織、個人資料、變更密碼、管理員復原；本人端點為 AuthOnly 的理由）；新增 ADR-033；§12.2 新增 `auth.password.changed`、`user.profile.updated`；ADR-030 後果更新；§2.9 新增 0017（修正同一人無法在多個組織擔任 learner） | Software Designer |
+| v1.13 | 2026-09-13 | Phase 1-1 課程與版本編輯：新增 §6.5（角色權限、列表範圍、PATCH 課程僅封存、一次一個編輯中版本、草稿整組取代與 id 規則、內容區塊子集、複製時 JSON 引用改寫、課程人員雙表同步、互動元件目錄端點）；§7.1.3 補路由 | Software Designer |

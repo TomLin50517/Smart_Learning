@@ -1,4 +1,51 @@
-import type { CapabilityName, LicenseState, LicenseType, OrgRole } from '@iac/contracts';
+import type {
+  ActivityType,
+  CapabilityName,
+  CourseStatus,
+  CourseVersionStatus,
+  LicenseState,
+  LicenseType,
+  NavigationMode,
+  OrgRole,
+} from '@iac/contracts';
+
+export const COURSE_STATUS_LABELS: Record<CourseStatus, string> = {
+  draft: '尚未發布',
+  active: '開放中',
+  archived: '已封存',
+};
+
+export const VERSION_STATUS_LABELS: Record<CourseVersionStatus, string> = {
+  draft: '草稿',
+  review: '審閱中',
+  published: '已發布',
+  superseded: '已被取代',
+  archived: '已封存',
+};
+
+/** 狀態徽章的樣式（沿用授權狀態的配色） */
+export const VERSION_STATUS_BADGE: Record<CourseVersionStatus, string> = {
+  draft: 'badge-grace',
+  review: 'badge-grace',
+  published: 'badge-active',
+  superseded: '',
+  archived: '',
+};
+
+export const ACTIVITY_TYPE_LABELS: Record<ActivityType, string> = {
+  video: '影片',
+  quiz: '測驗',
+  interactive: '互動活動',
+  reading: '閱讀',
+  assignment: '作業',
+};
+
+export const NAVIGATION_MODE_LABELS: Record<NavigationMode, string> = {
+  strict: '依序：每個活動都要先完成前一個',
+  prerequisite: '依先修條件：只套用各活動設定的先修條件',
+  free: '自由：不限順序',
+  mixed: '單元依序、單元內自由（預設）',
+};
 
 export const LICENSE_STATE_LABELS: Record<LicenseState, string> = {
   unlicensed: '尚未啟用',

@@ -1048,6 +1048,10 @@ paths:
       operationId: listCourses
       tags: [Course]
       x-required-permission: course.read
+      description: |
+        依 course.read 的授權範圍過濾：平台全部／組織內全部／被指派的課程（self 授權不擴大列表；
+        學員的課程目錄另有端點）。依 code 排序、keyset 分頁，回 `{ data: CourseDto[], meta: { next_cursor } }`。
+        `sort` 參數目前不支援（SD §6.5）。
       parameters:
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
@@ -1060,8 +1064,22 @@ paths:
       x-required-permission: course.create
       x-required-capability: authoringAllowed
       x-audit: course.created
+      description: 建立於目前 session 的組織（organization scope 未指定參數時取 active organization）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [code, title]
+              properties:
+                code: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$', description: 組織內唯一 }
+                title: { type: string, maxLength: 200 }
+                description: { type: string, maxLength: 5000 }
       responses:
-        '201': { description: 已建立 }
+        '201': { description: '`CourseDto`' }
+        '400': { description: '`code: already_exists`／`invalid_code`' }
 
   /courses/{id}:
     parameters: [{ $ref: '#/components/parameters/CourseId' }]
@@ -1070,7 +1088,7 @@ paths:
       tags: [Course]
       x-required-permission: course.read
       responses:
-        '200': { description: OK }
+        '200': { description: '`CourseDetailDto`（含版本清單）' }
         '404': { $ref: '#/components/responses/NotFound' }
     patch:
       operationId: updateCourse
@@ -1078,8 +1096,21 @@ paths:
       x-required-permission: course.archive
       x-required-capability: authoringAllowed
       x-audit: course.archived
+      description: |
+        **只做封存**（權限 course.archive、稽核 course.archived）：阻擋新選課，既有選課仍可完成，版本本身不變。
+        課程名稱與說明的編輯需另立權限碼，屬後續項目（SD §6.5）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [status]
+              properties:
+                status: { type: string, enum: [archived] }
       responses:
-        '200': { description: OK }
+        '200': { description: '封存後的 `CourseDetailDto`' }
 
   /courses/{id}/versions:
     parameters: [{ $ref: '#/components/parameters/CourseId' }]
@@ -1089,8 +1120,22 @@ paths:
       x-required-permission: course.version.create
       x-required-capability: authoringAllowed
       x-audit: course.version.created
+      description: 建立草稿（version_no = max+1），附預設 Coach Policy。同一課程同時至多一個 draft／review 版本。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [title]
+              properties:
+                title: { type: string, maxLength: 200 }
+                summary: { type: string, maxLength: 5000 }
+                navigationMode: { type: string, enum: [strict, prerequisite, free, mixed], default: mixed }
       responses:
-        '201': { description: 已建立 draft }
+        '201': { description: '已建立 draft（`CourseVersionDetail`）' }
+        '400': { description: '`draft_exists`（已有編輯中版本）／`course_archived`' }
 
   /courses/{id}/staff:
     parameters: [{ $ref: '#/components/parameters/CourseId' }]
@@ -1098,6 +1143,7 @@ paths:
       operationId: listCourseStaff
       tags: [Course]
       x-required-permission: course.staff.assign
+      description: 課程範圍的 instructor／course_admin（權限依據為 user_org_roles，course_staff 為同步名冊）
       responses:
         '200': { description: OK }
     post:
@@ -1106,8 +1152,21 @@ paths:
       x-required-permission: course.staff.assign
       x-required-capability: configurationWriteAllowed
       x-audit: course.staff.assigned
+      description: 以 email 指派，對象須為課程所屬組織的成員；回傳更新後的人員清單。移除請於組織成員角色編輯（會同步 course_staff）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email, role]
+              properties:
+                email: { type: string, format: email }
+                role: { type: string, enum: [instructor, course_admin] }
       responses:
-        '201': { description: 已指派 }
+        '201': { description: '`CourseStaffDto[]`' }
+        '400': { description: '`email: not_in_organization`' }
 
   /course-versions/{id}:
     parameters: [{ $ref: '#/components/parameters/ResourceId' }]
@@ -1115,6 +1174,7 @@ paths:
       operationId: getCourseVersion
       tags: [Course]
       x-required-permission: course.version.read
+      description: 課程人員用的完整內容（含 answerKey）；學員的活動 runtime 另有白名單端點，永不含 answerKey。
       responses:
         '200':
           description: OK
@@ -1131,9 +1191,33 @@ paths:
       description: |
         **僅 Draft 可寫**。對 published/superseded/archived 版本寫入回
         409 `COURSE_VERSION_IMMUTABLE`——由應用層 Guard 與 DB 觸發器
-        雙層阻擋（INV-2、AC-CRS-001）。
+        雙層阻擋（INV-2、AC-CRS-001）。`modules` 提供時整組取代課程結構（SD §6.5）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                title: { type: string, maxLength: 200 }
+                summary: { type: [string, 'null'], maxLength: 5000 }
+                navigationMode: { type: string, enum: [strict, prerequisite, free, mixed] }
+                modules:
+                  type: array
+                  maxItems: 50
+                  description: |
+                    ModuleDto 形狀。既有項目以 id 保留（完成條件以 id 引用活動），新項目由前端產生 UUID。
+                    lesson 內容區塊限 richtext／image／video／callout／activity。
+                    上限：50 單元、每單元 100 課節、每課節 50 活動、總計 2000 活動。
+                  items: { type: object }
       responses:
-        '200': { description: OK }
+        '200': { description: 更新後的 `CourseVersionDetail` }
+        '400':
+          description: |
+            `VALIDATION_FAILED`：`duplicate_id`、`id_conflict`（沿用其他版本的 id）、`activity_not_in_lesson`、
+            `interactive_requires_definition`、`unknown_interactive_definition`、`too_many_activities`、`json_too_large`
         '409': { $ref: '#/components/responses/Conflict' }
 
   /course-versions/{id}/validate:
@@ -1175,9 +1259,13 @@ paths:
       x-required-permission: course.version.create
       x-required-capability: authoringAllowed
       x-audit: course.version.cloned
-      description: 既有 enrollment 仍指向原版本（AC-CRS-002）
+      description: |
+        來源須為 published／superseded。深拷貝結構並換成新 id，JSON 內（完成條件、先修條件、內容區塊、
+        config／answerKey）等於舊 id 的值一併改寫；複製完成條件、Coach Policy 與知識綁定。
+        既有 enrollment 仍指向原版本（AC-CRS-002）。
       responses:
-        '201': { description: 已建立新 draft }
+        '201': { description: 已建立新 draft（`CourseVersionDetail`） }
+        '400': { description: '`source_not_published`／`draft_exists`／`course_archived`' }
 
   /course-versions/{id}/hotfix:
     parameters: [{ $ref: '#/components/parameters/ResourceId' }]
@@ -1207,6 +1295,15 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/VersionImpact' }
+
+  /interactive-definitions:
+    get:
+      operationId: listInteractiveDefinitions
+      tags: [Course]
+      x-required-permission: course.version.read
+      description: 啟用中的互動元件（id、componentType、schemaVersion、displayName、configSchema），供課程編輯器選擇（SD §6.5）
+      responses:
+        '200': { description: '`InteractiveDefinitionDto[]`' }
 
   /course-versions/{id}/completion-rules:
     parameters: [{ $ref: '#/components/parameters/ResourceId' }]

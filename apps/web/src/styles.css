@@ -614,6 +614,62 @@ pre {
   overflow-x: auto;
   margin: 0 0 10px;
 }
+/* ---- 課程結構編輯器 ------------------------------------------------------ */
+.editor-root {
+  display: block;
+}
+.grow {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.structure-head {
+  margin-bottom: 8px;
+}
+.structure-head input:not([type='checkbox']) {
+  width: auto;
+}
+.mover {
+  display: inline-flex;
+  gap: 2px;
+}
+.module-card > textarea {
+  margin-bottom: 12px;
+}
+.lesson {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin: 10px 0;
+  background: var(--surface-2);
+}
+.lesson > summary {
+  cursor: pointer;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.lesson h4 {
+  font-size: 0.9rem;
+  margin: 14px 0 6px;
+  color: var(--muted);
+}
+.block,
+.activity {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+.block > :first-child {
+  flex: 1;
+}
+.activity {
+  flex-direction: column;
+  align-items: stretch;
+}
 .setting-head {
   display: flex;
   align-items: baseline;
