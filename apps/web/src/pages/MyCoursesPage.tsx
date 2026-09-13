@@ -1,4 +1,5 @@
 import type { MyEnrollmentDto } from '@iac/contracts';
+import { Link } from 'react-router';
 import { can } from '../auth/permissions';
 import { useMe } from '../auth/session';
 import { ErrorAlert, Forbidden, PageHeader, Spinner } from '../components/ui';
@@ -17,7 +18,7 @@ export function MyCoursesPage() {
 
   return (
     <>
-      <PageHeader title="我的課程" subtitle="被指派或加入的課程。學習畫面將於下一階段開放。" />
+      <PageHeader title="我的課程" subtitle="被指派或加入的課程。" />
       <ErrorAlert error={list.error} />
       {list.loading && !list.data && <Spinner />}
       {list.data && list.data.length === 0 && (
@@ -42,9 +43,15 @@ export function MyCoursesPage() {
               {e.dueDate && <>・期限：{formatDate(e.dueDate)}</>}
               {e.completedAt && <>・完成：{formatDate(e.completedAt)}</>}
             </p>
-            <button type="button" className="btn btn-primary" disabled title="學習畫面將於下一階段開放">
-              {e.canLearn ? '進入課程（即將開放）' : '目前無法學習'}
-            </button>
+            {e.canLearn || e.status === 'completed' ? (
+              <Link className="btn btn-primary" to={`/app/learn/${e.id}`}>
+                {e.status === 'completed' ? '回顧課程' : '進入課程'}
+              </Link>
+            ) : (
+              <button type="button" className="btn" disabled>
+                目前無法學習
+              </button>
+            )}
           </section>
         ))}
       </div>
