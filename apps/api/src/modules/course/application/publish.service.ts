@@ -8,7 +8,14 @@ import {
   type ValidationIssueDto,
   type ValidationReportDto,
 } from '@iac/contracts';
-import { canonicalJson, checkReachability, validateJsonSchema, validateRule } from '@iac/domain';
+import {
+  CHOICE_QUIZ_ANSWER_KEY_SCHEMA,
+  CHOICE_QUIZ_CONFIG_SCHEMA,
+  canonicalJson,
+  checkReachability,
+  validateJsonSchema,
+  validateRule,
+} from '@iac/domain';
 import pg from 'pg';
 import { DB_API } from '../../../common/database.module.js';
 import { DomainError } from '../../../common/domain-error.js';
@@ -139,20 +146,27 @@ export class CoursePublishService {
     const defById = new Map(defs.rows.map((d) => [d.id, d]));
     const partial = new Set<string>();
     eachActivity(v, (a, base) => {
+      let schemas: { name: string; defId: string | null; config: unknown; answerKey: unknown };
       if (!a.interactiveDefinitionId) {
         if (a.activityType === 'interactive') {
           errors.push({ check: 'C5', code: 'C5_DEFINITION_REQUIRED', path: `${base}.interactiveDefinitionId`, message: `互動活動「${a.title}」沒有選擇互動元件`, targetId: a.id });
+          return;
         }
-        return;
+        // 原生選擇題（無互動元件）以內建 schema 檢查（SD §6.9）
+        if (a.activityType !== 'quiz') return;
+        schemas = { name: '選擇題', defId: null, config: CHOICE_QUIZ_CONFIG_SCHEMA, answerKey: CHOICE_QUIZ_ANSWER_KEY_SCHEMA };
+      } else {
+        const def = defById.get(a.interactiveDefinitionId);
+        if (!def || !def.is_enabled) {
+          errors.push({ check: 'C5', code: 'C5_DEFINITION_UNAVAILABLE', path: `${base}.interactiveDefinitionId`, message: `活動「${a.title}」使用的互動元件不存在或已停用`, targetId: a.id });
+          return;
+        }
+        schemas = { name: def.display_name, defId: def.id, config: def.config_schema, answerKey: def.answer_key_schema };
       }
-      const def = defById.get(a.interactiveDefinitionId);
-      if (!def || !def.is_enabled) {
-        errors.push({ check: 'C5', code: 'C5_DEFINITION_UNAVAILABLE', path: `${base}.interactiveDefinitionId`, message: `活動「${a.title}」使用的互動元件不存在或已停用`, targetId: a.id });
-        return;
-      }
+      const def = { id: schemas.defId ?? 'builtin.quiz', display_name: schemas.name };
       const targets: [string, 'C5_CONFIG_INVALID' | 'C5_ANSWER_KEY_INVALID', unknown, unknown, string][] = [
-        ['config', 'C5_CONFIG_INVALID', def.config_schema, a.config, '設定'],
-        ['answerKey', 'C5_ANSWER_KEY_INVALID', def.answer_key_schema, a.answerKey, '答案'],
+        ['config', 'C5_CONFIG_INVALID', schemas.config, a.config, '設定'],
+        ['answerKey', 'C5_ANSWER_KEY_INVALID', schemas.answerKey, a.answerKey, '答案'],
       ];
       for (const [field, code, schema, value, label] of targets) {
         if (schema == null || value == null) continue;
