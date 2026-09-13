@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
 import { IdentityModule } from '../identity/identity.module.js';
+import { BrandingController, PublicBrandingController } from './api/branding.controller.js';
 import { CohortController } from './api/cohort.controller.js';
 import { OrganizationController } from './api/organization.controller.js';
+import { BrandingService } from './application/branding.service.js';
 import { CohortService } from './application/cohort.service.js';
 import { OrganizationService } from './application/organization.service.js';
 import { ORG_MEMBERSHIP } from './organization.contracts.js';
@@ -11,12 +13,12 @@ import { ORG_MEMBERSHIP } from './organization.contracts.js';
  * 護欄：organization_id 一律由路由參數 + PermissionGuard 的 scope 驗證取得，不採信 body（INV-1）。
  * 依賴 IdentityModule 的 USER_INVITATIONS 寄送邀請（只經由 identity.contracts）。
  * 對外提供 ORG_MEMBERSHIP（交易內的成員處理，供選課模組的批次匯入使用）。
- * 班級／梯次與學號（SD §6.15）：CohortService。
+ * 班級／梯次與學號（SD §6.15）：CohortService。品牌（SD §6.16）：BrandingService。
  */
 @Module({
   imports: [IdentityModule],
-  controllers: [OrganizationController, CohortController],
-  providers: [OrganizationService, CohortService, { provide: ORG_MEMBERSHIP, useExisting: OrganizationService }],
+  controllers: [OrganizationController, CohortController, BrandingController, PublicBrandingController],
+  providers: [OrganizationService, CohortService, BrandingService, { provide: ORG_MEMBERSHIP, useExisting: OrganizationService }],
   exports: [ORG_MEMBERSHIP],
 })
 export class OrganizationModule {}

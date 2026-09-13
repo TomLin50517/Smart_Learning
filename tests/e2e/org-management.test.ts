@@ -225,16 +225,16 @@ describe('visibility (INV-1 / ADR-019)', () => {
 });
 
 describe('organization settings', () => {
-  it('org admin renames and rebrands; audit keeps before/after', async () => {
-    const res = await call('PATCH', `/api/organizations/${ORG_A}`, s.adminA, { name: 'Org A Renamed', branding: { primaryColor: '#123456' } });
+  it('org admin renames the organization; audit keeps before/after', async () => {
+    const res = await call('PATCH', `/api/organizations/${ORG_A}`, s.adminA, { name: 'Org A Renamed' });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ name: 'Org A Renamed', branding: { primaryColor: '#123456' } });
+    expect(res.json()).toMatchObject({ name: 'Org A Renamed' });
     const audit = await lastAudit('org.updated');
     expect(audit.before_state).toMatchObject({ name: 'Org A' });
     expect(audit.after_state).toMatchObject({ name: 'Org A Renamed' });
   });
 
-  it('arbitrary branding keys are rejected (no raw CSS / HTML)', async () => {
+  it('branding is not accepted here (it has its own endpoint, SD §6.16) — no raw CSS / HTML either way', async () => {
     const res = await call('PATCH', `/api/organizations/${ORG_A}`, s.adminA, { branding: { css: 'body{display:none}' } });
     expect(res.statusCode).toBe(400);
   });

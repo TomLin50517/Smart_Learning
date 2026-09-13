@@ -21,18 +21,8 @@ const CreateOrg = z.strictObject({
   initialAdmin: Person.optional(),
 });
 
-const UpdateOrg = z
-  .strictObject({
-    name: z.string().trim().min(1).max(200).optional(),
-    // 只允許品牌 token，禁止任意 HTML／CSS（SD §7.5 精神）
-    branding: z
-      .strictObject({
-        primaryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
-        logoAssetId: z.guid().optional(),
-      })
-      .optional(),
-  })
-  .refine((v) => v.name !== undefined || v.branding !== undefined, 'nothing_to_update');
+/** 品牌改由 PATCH /organizations/{id}/branding 設定（SD §6.16）；這裡只改名稱 */
+const UpdateOrg = z.strictObject({ name: z.string().trim().min(1).max(200) });
 
 const Role = z.enum(['org_admin', 'course_admin', 'instructor', 'learner', 'auditor']);
 /** 課程角色必須指定 courseId，其他角色不可指定（issue 代碼，見 validation.ts） */
