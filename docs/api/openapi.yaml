@@ -909,6 +909,121 @@ paths:
         '201': { description: '回傳 `{ userId, invited, emailSent }`。新帳號 `invited: true` 並寄出設定密碼邀請，`emailSent` 表示信件是否已交給郵件伺服器（失敗時對方可改用「忘記密碼」）；既有帳號 `invited: false`、`emailSent: false`（直接加入）' }
         '400': { description: '`email: already_member`；`courseId: course_id_mismatch`／`course_not_in_organization`' }
 
+  /organizations/{id}/cohorts:
+    parameters: [{ $ref: '#/components/parameters/OrgId' }]
+    get:
+      operationId: listCohorts
+      tags: [Organization]
+      x-required-permission: org.user.read
+      description: 班級／梯次（SD §6.15），含成員數。status：active（預設）／archived／all
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [active, archived, all] } }
+      responses:
+        '200': { description: '`CohortDto[]`' }
+    post:
+      operationId: createCohort
+      tags: [Organization]
+      x-required-permission: org.user.write
+      x-required-capability: configurationWriteAllowed
+      x-audit: org.cohort.created
+      description: 使用中的班級名稱在組織內不可重複（不分大小寫；`already_exists`）；封存的班級可以同名
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 100 }
+                term: { type: string, maxLength: 50, description: 學年／期別（選填） }
+      responses:
+        '201': { description: '`CohortDto`' }
+        '400': { description: '`already_exists`' }
+
+  /organizations/{id}/cohorts/{cohortId}:
+    parameters:
+      - $ref: '#/components/parameters/OrgId'
+      - { name: cohortId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      operationId: updateCohort
+      tags: [Organization]
+      x-required-permission: org.user.write
+      x-required-capability: configurationWriteAllowed
+      x-audit: org.cohort.updated
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                name: { type: string, minLength: 1, maxLength: 100 }
+                term: { type: string, maxLength: 50, description: 空字串或 null＝清除 }
+      responses:
+        '200': { description: '`CohortDto`' }
+        '400': { description: '`already_exists`／`nothing_to_update`' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /organizations/{id}/cohorts/{cohortId}/archive:
+    parameters:
+      - $ref: '#/components/parameters/OrgId'
+      - { name: cohortId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      operationId: archiveCohort
+      tags: [Organization]
+      x-required-permission: org.user.write
+      x-required-capability: configurationWriteAllowed
+      x-audit: org.cohort.archived
+      description: 封存後不再是成員的「目前班級」、不能整班加入；成員紀錄與選課上的班級名稱保留
+      responses:
+        '200': { description: '`CohortDto`' }
+        '400': { description: '`cohort_already_archived`' }
+
+  /organizations/{id}/cohorts/{cohortId}/restore:
+    parameters:
+      - $ref: '#/components/parameters/OrgId'
+      - { name: cohortId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      operationId: restoreCohort
+      tags: [Organization]
+      x-required-permission: org.user.write
+      x-required-capability: configurationWriteAllowed
+      x-audit: org.cohort.restored
+      responses:
+        '200': { description: '`CohortDto`' }
+        '400': { description: '`cohort_not_archived`／`already_exists`（已有同名的使用中班級）' }
+
+  /organizations/{id}/users/{userId}/profile:
+    parameters:
+      - $ref: '#/components/parameters/OrgId'
+      - { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      operationId: updateMemberProfile
+      tags: [Organization]
+      x-required-permission: org.user.write
+      x-required-capability: configurationWriteAllowed
+      x-audit: org.member.updated
+      description: |
+        學號／員工編號與目前班級（SD §6.15）。cohortIds 整組取代「使用中」班級的成員資格，封存班級的紀錄保留。
+        不改角色、不寄邀請。對象須為本組織成員（否則 404）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                memberNo:  { type: string, maxLength: 64, description: 空字串或 null＝清除；組織內不可重複（`member_no_taken`） }
+                cohortIds: { type: array, maxItems: 50, items: { type: string, format: uuid } }
+      responses:
+        '200': { description: '`MemberProfileDto`' }
+        '400': { description: '`member_no_taken`／`cohort_not_found`／`nothing_to_update`' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
   /organizations/{id}/users/import:
     parameters: [{ $ref: '#/components/parameters/OrgId' }]
     post:
@@ -944,6 +1059,9 @@ paths:
                       displayName: { type: string, maxLength: 200 }
                       role:        { type: string, description: 'learner／instructor／course_admin／org_admin／auditor；其他值該列回 invalid_role' }
                       courseCode:  { type: string }
+                      memberNo:    { type: string, description: 學號／員工編號（設定或更新；與他人重複時該列 member_no_taken） }
+                      cohort:      { type: string, description: 班級名稱（加入；不存在時 cohort_not_found，或依 createMissingCohorts 建立） }
+                createMissingCohorts: { type: boolean, description: 班級名稱找不到時自動建立（SD §6.15） }
       responses:
         '200': { description: '`ImportReportDto`（逐列 outcome ok／skipped／error、actions、issue；summary；license）' }
         '400': { description: 格式錯誤或超過 500 列 }
@@ -1554,6 +1672,42 @@ paths:
         '201': { description: '`EnrollmentDto`' }
         '400': { description: '`course_not_published`／`course_archived`；`email: not_in_organization`／`member_disabled`／`already_enrolled`' }
         '403': { description: '`LICENSE_LIMIT_EXCEEDED`（進行中的學員數達授權上限）或無權限' }
+
+  /courses/{id}/cohorts:
+    parameters: [{ $ref: '#/components/parameters/CourseId' }]
+    get:
+      operationId: listCourseCohorts
+      tags: [Enrollment]
+      x-required-permission: enrollment.assign
+      description: 課程所屬組織的使用中班級（供整班加入；SD §6.15）。課程人員不需組織的成員讀取權限
+      responses:
+        '200': { description: '`CohortDto[]`' }
+
+  /courses/{id}/enrollments/cohort:
+    parameters: [{ $ref: '#/components/parameters/CourseId' }]
+    post:
+      operationId: enrollCohort
+      tags: [Enrollment]
+      x-required-permission: enrollment.assign
+      x-required-capability: configurationWriteAllowed
+      description: |
+        整班加入（SD §6.15）：班級目前的成員全部選這門課，與課程學員匯入同一段程式——dryRun 預覽、逐列結果、
+        授權上限、稽核；不建立帳號。選課記下當時的班級（cohort_label 快照）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [dryRun, cohortId]
+              properties:
+                dryRun:   { type: boolean }
+                cohortId: { type: string, format: uuid }
+      responses:
+        '200': { description: '`ImportReportDto`' }
+        '400': { description: '`cohort_not_found`（不存在、不屬於此組織或已封存）／`cohort_empty`／`cohort_too_large`' }
+        '403': { description: '`LICENSE_LIMIT_EXCEEDED`（實際加入）或無權限' }
 
   /courses/{id}/enrollments/import:
     parameters: [{ $ref: '#/components/parameters/CourseId' }]
