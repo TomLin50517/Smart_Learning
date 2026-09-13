@@ -1,14 +1,50 @@
 import { Body, Controller, Get, HttpCode, Param, Patch, Post, Put, Req } from '@nestjs/common';
-import type { CoachPolicyDto, CourseVersionDetailDto, InteractiveDefinitionDto, ValidationIssueDto, VersionImpactDto } from '@iac/contracts';
+import type {
+  CoachPolicyDto,
+  CourseVersionDetailDto,
+  InteractiveDefinitionDto,
+  ValidationIssueDto,
+  ValidationReportDto,
+  VersionImpactDto,
+} from '@iac/contracts';
 import type { FastifyRequest } from 'fastify';
-import { Audit, RequireCapability, RequirePermission } from '../../../common/decorators.js';
+import type { AuthUser } from '../../../common/context.js';
+import { Audit, CurrentUser, RequireCapability, RequirePermission } from '../../../common/decorators.js';
 import { parseInput } from '../../../common/validation.js';
 import { CoachPolicyInput, CompletionRulesInput, DraftPatch } from '../application/course-inputs.js';
 import { CourseService } from '../application/course.service.js';
+import { CoursePublishService } from '../application/publish.service.js';
 
 @Controller('api/course-versions')
 export class CourseVersionController {
-  constructor(private readonly courses: CourseService) {}
+  constructor(
+    private readonly courses: CourseService,
+    private readonly publishing: CoursePublishService,
+  ) {}
+
+  /** openapi: validateCourseVersion——發布前檢查 C1–C5；有問題時 valid 為 false，仍回 200（UI 先預覽問題） */
+  @Post(':id/validate')
+  @RequirePermission('course.version.validate', { scope: 'course', resource: 'course_version' })
+  @HttpCode(200)
+  validate(@Param('id') id: string): Promise<ValidationReportDto> {
+    return this.publishing.validate(id);
+  }
+
+  /** openapi: publishCourseVersion——原子操作；同一交易內重跑檢查，有錯誤 422 */
+  @Post(':id/publish')
+  @RequirePermission('course.version.publish', { scope: 'course', resource: 'course_version' })
+  @RequireCapability({ capability: 'authoringAllowed' })
+  @Audit({ action: 'course.version.published', resourceType: 'course_version' })
+  @HttpCode(200)
+  async publish(@Param('id') id: string, @CurrentUser() user: AuthUser, @Req() req: FastifyRequest): Promise<CourseVersionDetailDto> {
+    const r = await this.publishing.publish(id, user.id);
+    req.ctx.audit = {
+      before: { status: r.previousStatus },
+      after: { status: 'published', contentSnapshotHash: r.contentSnapshotHash },
+      metadata: { superseded_version_id: r.supersededVersionId },
+    };
+    return r.version;
+  }
 
   /** openapi: getCourseVersion——課程人員用（含 answerKey）；學員 runtime 另有端點 */
   @Get(':id')

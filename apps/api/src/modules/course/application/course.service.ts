@@ -283,8 +283,10 @@ export class CourseService {
   }
 
   async getVersion(id: string, q: Q = this.db): Promise<CourseVersionDetailDto> {
-    const v = await q.query<VersionRow & { course_id: string; organization_id: string; summary: string | null; navigation_mode: NavigationMode }>(
-      `SELECT ${VERSION_COLUMNS}, course_id, organization_id, summary, navigation_mode FROM course_versions WHERE id = $1`,
+    const v = await q.query<
+      VersionRow & { course_id: string; organization_id: string; summary: string | null; navigation_mode: NavigationMode; content_snapshot_hash: string | null }
+    >(
+      `SELECT ${VERSION_COLUMNS}, course_id, organization_id, summary, navigation_mode, content_snapshot_hash FROM course_versions WHERE id = $1`,
       [id],
     );
     const row = v.rows[0];
@@ -355,6 +357,7 @@ export class CourseService {
       completionRuleSet: rules.rows[0] ? { grammarVersion: rules.rows[0].grammar_version, rule: rules.rows[0].rule_json as unknown as RuleNode } : null,
       coachPolicy: p ? toPolicy(p as unknown as PolicyRow) : null,
       knowledgeBindings: bindings.rows.map((b) => ({ documentVersionId: b.document_version_id, bindingType: b.binding_type, priority: b.priority })),
+      contentSnapshotHash: row.content_snapshot_hash,
       editable: row.status === 'draft',
     };
   }
