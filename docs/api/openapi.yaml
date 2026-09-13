@@ -1772,12 +1772,42 @@ paths:
       operationId: getEnrollmentTimeline
       tags: [Enrollment]
       x-required-permission: learning.timeline.read_all
-      description: 學員讀自己的 timeline 時所需權限為 `learning.timeline.read_self`
+      description: |
+        課程人員檢視學員的學習歷程（SD §6.12）：新到舊、keyset 分頁；高頻事件（video.progressed、activity.input_changed、
+        activity.heartbeat）不列出，改以學習時間呈現；payload 只挑白名單欄位。學員讀自己的走 `/me/enrollments/{id}/timeline`
+        （self 授權不被上層範圍涵蓋，ADR-016）。
       parameters:
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
       responses:
-        '200': { description: OK }
+        '200': { description: '`EnrollmentTimelineDto`（data、meta.next_cursor、time）' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /me/enrollments/{id}/timeline:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      operationId: getMyEnrollmentTimeline
+      tags: [Enrollment]
+      x-required-permission: learning.timeline.read_self
+      description: 學員自己的學習歷程（內容同 getEnrollmentTimeline）。self 範圍：不是本人的選課一律 404
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { description: '`EnrollmentTimelineDto`' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /enrollments/{id}/progress:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      operationId: getEnrollmentProgress
+      tags: [Enrollment]
+      x-required-permission: learning.result.read_all
+      description: |
+        課程人員檢視單一學員（SD §6.12）：與學員看到的大綱相同——各活動狀態、最佳成績、次數、影片觀看比例、
+        進度與未完成原因、學習時間——另附學員資料。
+      responses:
+        '200': { description: '`LearnerProgressDto`' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /enrollments/{id}/completion:
@@ -1856,8 +1886,11 @@ paths:
       x-required-permission: learning.event.write_self
       x-required-capability: runtimeAllowed
       description: |
-        每 enrollment 每分鐘上限 120 筆；超額回 429 並丟棄，
-        **不阻斷學習**（THR-D-002）。
+        學員端事件（SD §6.12）：只收進行中作答的 video.started、video.progressed、activity.input_changed、activity.heartbeat；
+        其餘事件只由伺服器產生。身分欄位由作答與選課推導；occurredAt 限未來 1 分鐘～過去 24 小時。
+        逐筆回報 rejected（unknown_event_type、invalid_payload、payload_too_large、activity_mismatch、
+        occurred_at_out_of_range、attempt_closed）；event_id 重送算 duplicated。
+        每 enrollment 每分鐘上限 120 筆（以事件數計）；超額回 429 並丟棄，**不阻斷學習**（THR-D-002）。
       requestBody:
         required: true
         content:
