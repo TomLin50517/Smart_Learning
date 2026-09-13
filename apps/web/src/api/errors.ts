@@ -108,6 +108,9 @@ const FIELD_LABELS: Record<string, string> = {
   cohortId: '班級',
   cohort: '班級',
   term: '學年／期別',
+  customColor: '自訂主色',
+  platformName: '平台名稱',
+  dataBase64: '圖片',
 };
 
 /** 伺服器 details.issue → 文案。未列出的沿用原文（多為 zod 的驗證訊息） */
@@ -162,6 +165,9 @@ const ISSUE_MESSAGES: Record<string, string> = {
   cohort_not_archived: '班級未封存，不需要恢復',
   cohort_empty: '這個班級目前沒有成員',
   cohort_too_large: '班級人數超過 500 人，請改用批次匯入分批加入',
+  color_contrast_too_low: '顏色太淺，與白字的對比度只有 {ratio}（需達 4.5）',
+  image_too_large: '圖片超過 512 KB',
+  unsupported_image_type: '只接受 PNG、JPG 或 WebP（不接受 SVG）',
   // 完成條件驗證（SD §3.6）：伺服器於 params.message 附上具體說明
   RULE_SCHEMA_INVALID: '{message}',
   RULE_DEPTH_EXCEEDED: '{message}',

@@ -2,7 +2,7 @@
  * 前端純邏輯的單元測試（錯誤文案、CSRF cookie、導向安全、導覽權限）。
  * 元件本身由 Browser 實測；這裡只測不需 DOM 的部分。
  */
-import { ERROR_CODES, type MeResponse } from '@iac/contracts';
+import { ERROR_CODES, resolveBranding, type MeResponse } from '@iac/contracts';
 import { describe, expect, it } from 'vitest';
 import { readCookie } from './api/client';
 import { ApiError, describeError, ERROR_MESSAGES, humanizeRulePath, humanizeStructurePath } from './api/errors';
@@ -250,7 +250,7 @@ describe('passwordProblem', () => {
 describe('navigation by permission (display only — the server enforces access)', () => {
   const base: MeResponse = {
     user: { id: 'u', email: 'u@x.test', displayName: 'U', locale: 'zh-TW' },
-    activeOrganization: { id: 'org-1', name: 'Org', branding: {} },
+    activeOrganization: { id: 'org-1', code: 'org-1', name: 'Org', branding: resolveBranding({ code: 'org-1', branding: {} }) },
     organizations: [{ id: 'org-1', name: 'Org' }],
     permissions: [],
     scopes: [],

@@ -4,7 +4,8 @@ import { AuditPage } from './pages/AuditPage';
 import { CoursePage } from './pages/CoursePage';
 import { CoursesPage } from './pages/CoursesPage';
 import { VersionEditorPage } from './pages/VersionEditorPage';
-import { ForgotPasswordPage, LoginPage, SetPasswordPage } from './pages/auth-pages';
+import { ForgotPasswordPage, LoginPage, OrgLoginPage, SetPasswordPage } from './pages/auth-pages';
+import { BrandingPage } from './pages/BrandingPage';
 import { NotFoundPage, RouteError } from './pages/errors-pages';
 import { HomePage } from './pages/HomePage';
 import { JobsPage } from './pages/JobsPage';
@@ -29,6 +30,8 @@ import { ProfilePage } from './pages/ProfilePage';
 export const router = createBrowserRouter([
   { path: '/', element: <Navigate to="/app" replace /> },
   { path: '/login', element: <LoginPage />, errorElement: <RouteError /> },
+  // 組織登入網址：組織的 Logo、名稱與配色（SD §6.16）
+  { path: '/o/:code', element: <OrgLoginPage />, errorElement: <RouteError /> },
   { path: '/forgot-password', element: <ForgotPasswordPage />, errorElement: <RouteError /> },
   { path: '/password-reset', element: <SetPasswordPage mode="reset" />, errorElement: <RouteError /> },
   { path: '/set-password', element: <SetPasswordPage mode="invite" />, errorElement: <RouteError /> },
@@ -55,9 +58,11 @@ export const router = createBrowserRouter([
       // Org Admin：目前組織的成員與角色（SD 的 /app/org/roles 併入此頁）
       { path: 'org/users', element: <OrgMembersPage /> },
       { path: 'org/cohorts', element: <CohortsPage /> },
+      { path: 'org/branding', element: <BrandingPage /> },
       // Platform Admin
       { path: 'platform/organizations', element: <OrganizationsPage /> },
       { path: 'platform/organizations/:orgId/users', element: <OrgMembersPage /> },
+      { path: 'platform/organizations/:orgId/branding', element: <BrandingPage /> },
       { path: 'platform/license', element: <LicensePage /> },
       { path: 'platform/system', element: <SettingsPage /> },
       { path: 'platform/jobs', element: <JobsPage /> },

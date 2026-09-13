@@ -1,6 +1,8 @@
+import { DEFAULT_PLATFORM_NAME, type ResolvedBrandingDto } from '@iac/contracts';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 import { describeError, ERROR_MESSAGES, type ClientErrorCode, ApiError } from '../api/errors';
+import { brandStyle } from '../branding';
 
 export function ErrorAlert({ error, overrides }: { error: unknown; overrides?: Partial<Record<ClientErrorCode, string>> }) {
   if (!error) return null;
@@ -81,14 +83,19 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
   );
 }
 
-export function AuthLayout({ title, children }: { title: string; children: ReactNode }) {
+/** 登入等未登入頁面的版面；brand：組織登入網址（/o/{code}）時的組織品牌 */
+export function AuthLayout({ title, children, brand }: { title: string; children: ReactNode; brand?: Pick<ResolvedBrandingDto, 'platformName' | 'logoUrl' | 'colors'> | null }) {
   return (
-    <main className="auth-page">
+    <main className="auth-page" {...(brand && { 'data-brand': '' })} style={brandStyle(brand)}>
       <div className="auth-card">
-        <div className="brand-mark" aria-hidden="true">
-          <img src="/favicon.svg" alt="" width={36} height={36} />
-        </div>
-        <p className="auth-product">互動學習平台</p>
+        {brand?.logoUrl ? (
+          <img className="auth-logo" src={brand.logoUrl} alt={brand.platformName} />
+        ) : (
+          <div className="brand-mark" aria-hidden="true">
+            <img src="/favicon.svg" alt="" width={36} height={36} />
+          </div>
+        )}
+        <p className="auth-product">{brand?.platformName ?? DEFAULT_PLATFORM_NAME}</p>
         <h1>{title}</h1>
         {children}
       </div>

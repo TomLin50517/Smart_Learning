@@ -1,14 +1,15 @@
-import type { CSSProperties } from 'react';
-import { useState } from 'react';
+import { DEFAULT_PLATFORM_NAME } from '@iac/contracts';
+import { useEffect, useState } from 'react';
 import { Link, Navigate, NavLink, Outlet, useLocation, useNavigate } from 'react-router';
 import { api } from '../api/client';
 import { can, HOME, navItems } from '../auth/permissions';
 import { useSession } from '../auth/session';
-import { brandColor } from '../format';
+import { brandStyle, loginPath, rememberLoginOrg, setFavicon } from '../branding';
+import { setAppName } from '../hooks';
 import { useNewVersionAvailable } from '../version-check';
 import { Spinner } from './ui';
 
-/** 需登入的版面：未登入導向登入頁（帶 ?next= 以便登入後回到原頁） */
+/** 需登入的版面：未登入導向登入頁（記得組織時回到該組織的登入網址；帶 ?next= 以便登入後回到原頁） */
 export function RequireAuth() {
   const { status, endedBy, reload } = useSession();
   const location = useLocation();
@@ -36,7 +37,7 @@ export function RequireAuth() {
   if (status === 'anonymous') {
     const here = location.pathname + location.search;
     const next = endedBy === 'logout' || here === HOME ? '' : `?next=${encodeURIComponent(here)}`;
-    return <Navigate to={`/login${next}`} replace />;
+    return <Navigate to={`${loginPath()}${next}`} replace />;
   }
   return <AppShell />;
 }
@@ -46,26 +47,40 @@ function AppShell() {
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
   const updateAvailable = useNewVersionAvailable();
-  if (!me) return null;
+  const org = me?.activeOrganization ?? null;
+  const brand = org?.branding ?? null;
+  const platformName = brand?.platformName ?? DEFAULT_PLATFORM_NAME;
 
-  const color = brandColor(me.activeOrganization?.branding);
-  const style = color ? ({ '--brand': color } as CSSProperties) : undefined;
+  // 平台名稱（分頁標題）、分頁小圖示、登出後回到的組織登入網址
+  useEffect(() => {
+    setAppName(platformName);
+    setFavicon(brand?.iconUrl ?? null);
+    if (org) rememberLoginOrg(org.code);
+  }, [platformName, brand?.iconUrl, org]);
+
+  if (!me) return null;
 
   async function onLogout() {
     setBusy(true);
     try {
       await logout();
     } finally {
-      navigate('/login', { replace: true });
+      navigate(loginPath(), { replace: true });
     }
   }
 
   return (
-    <div className="shell" style={style}>
+    <div className="shell" {...(brand && { 'data-brand': '' })} style={brandStyle(brand)}>
       <header className="topbar">
         <Link to={HOME} className="product">
-          <img src="/favicon.svg" alt="" width={24} height={24} />
-          <span>互動學習平台</span>
+          {brand?.logoUrl ? (
+            <img className="brand-logo" src={brand.logoUrl} alt={platformName} />
+          ) : (
+            <>
+              <img src="/favicon.svg" alt="" width={24} height={24} />
+              <span>{platformName}</span>
+            </>
+          )}
         </Link>
         <OrgSwitcher />
         <div className="topbar-user">

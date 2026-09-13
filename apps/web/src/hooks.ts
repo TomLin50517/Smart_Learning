@@ -1,11 +1,17 @@
+import { DEFAULT_PLATFORM_NAME } from '@iac/contracts';
 import { useCallback, useEffect, useState } from 'react';
 import { api } from './api/client';
 
-const APP_NAME = '互動學習平台';
+let appName: string = DEFAULT_PLATFORM_NAME;
+
+/** 分頁標題後綴的平台名稱：組織可自訂（SD §6.16），由 AppShell／組織登入頁設定 */
+export function setAppName(name: string): void {
+  appName = name;
+}
 
 export function useTitle(title: string): void {
   useEffect(() => {
-    document.title = title ? `${title} · ${APP_NAME}` : APP_NAME;
+    document.title = title ? `${title} · ${appName}` : appName;
   }, [title]);
 }
 

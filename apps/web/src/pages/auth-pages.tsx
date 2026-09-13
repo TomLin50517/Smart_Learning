@@ -1,17 +1,56 @@
+import type { PublicBrandingDto } from '@iac/contracts';
 import { useEffect, useState, type FormEvent } from 'react';
-import { Link, Navigate, useSearchParams } from 'react-router';
+import { Link, Navigate, useParams, useSearchParams } from 'react-router';
 import { api } from '../api/client';
 import { ApiError } from '../api/errors';
 import { PASSWORD_MAX, PASSWORD_MIN, passwordProblem } from '../auth/password';
 import { safeNext } from '../auth/redirect';
 import { useSession } from '../auth/session';
-import { AuthLayout, ErrorAlert, Field, Notice } from '../components/ui';
-import { useTitle } from '../hooks';
+import { rememberLoginOrg, setFavicon } from '../branding';
+import { AuthLayout, ErrorAlert, Field, Notice, Spinner } from '../components/ui';
+import { setAppName, useApi, useTitle } from '../hooks';
+
+// ---------------------------------------------------------------------------
+// 組織登入網址 /o/:code：組織的 Logo、平台名稱與配色（SD §6.16）
+// ---------------------------------------------------------------------------
+export function OrgLoginPage() {
+  const { code = '' } = useParams();
+  const b = useApi<PublicBrandingDto>(`/api/branding/${encodeURIComponent(code)}`);
+  const notFound = b.error instanceof ApiError && b.error.status === 404;
+  useEffect(() => {
+    if (b.data) {
+      setAppName(b.data.platformName);
+      setFavicon(b.data.iconUrl);
+      rememberLoginOrg(b.data.organizationCode);
+    } else if (notFound) {
+      rememberLoginOrg(null);
+    }
+  }, [b.data, notFound]);
+
+  if (b.loading && !b.data) {
+    return (
+      <main className="boot">
+        <Spinner />
+      </main>
+    );
+  }
+  if (!b.data) {
+    return (
+      <AuthLayout title={notFound ? '找不到這個組織' : '無法載入'}>
+        {notFound ? <Notice kind="warn">登入網址可能有誤，或這個組織已停用。</Notice> : <ErrorAlert error={b.error} />}
+        <p className="auth-links">
+          <Link to="/login">前往一般登入頁</Link>
+        </p>
+      </AuthLayout>
+    );
+  }
+  return <LoginPage org={b.data} />;
+}
 
 // ---------------------------------------------------------------------------
 // 登入
 // ---------------------------------------------------------------------------
-export function LoginPage() {
+export function LoginPage({ org }: { org?: PublicBrandingDto }) {
   useTitle('登入');
   const { status, endedBy, login } = useSession();
   const [params] = useSearchParams();
@@ -28,7 +67,7 @@ export function LoginPage() {
     setBusy(true);
     setError(null);
     try {
-      await login(email.trim(), password);
+      await login(email.trim(), password, org?.organizationId);
     } catch (err) {
       setError(err);
       setPassword('');
@@ -38,7 +77,7 @@ export function LoginPage() {
   }
 
   return (
-    <AuthLayout title="登入">
+    <AuthLayout title={org ? `登入${org.organizationName}` : '登入'} brand={org ?? null}>
       {endedBy === 'expired' && !error && <Notice kind="info">登入已逾時，請重新登入。</Notice>}
       {endedBy === 'logout' && !error && <Notice kind="ok">您已登出。</Notice>}
       {/* 伺服器對所有登入失敗回同一訊息（不透露帳號是否存在），這裡也維持一致 */}
