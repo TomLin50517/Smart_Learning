@@ -2184,6 +2184,22 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 互動元件目錄 | 新增 `GET /api/interactive-definitions`（course.version.read，any scope），供編輯器選擇 |
 | 前端 | `/app/courses`（列表、建立）、`/app/courses/:courseId`（版本、複製前顯示影響範圍、人員、封存）、`/app/courses/:courseId/versions/:versionId/edit`（結構編輯器；非草稿唯讀）。錯誤路徑轉為「第 1 單元 › 第 2 課節 › 第 3 活動」 |
 
+## 6.6 完成條件與 AI 教練設定實作（Phase 1-2a，v1.16）
+
+實作：`packages/domain/src/completion/`（`validateRule`、`evaluateRule`，純函式）、`packages/contracts/src/completion.ts`（語法型別，前端共用）、`apps/api/src/modules/course/`。
+
+| 項目 | 實作 |
+|---|---|
+| 型別位置 | `RuleNode` 等語法型別放在 contracts（前端條件編輯器與 API 共用；前端不得依賴 domain）；驗證與評估在 domain |
+| 儲存時驗證 | `PUT /course-versions/{id}/completion-rules` 以 `validateRule` 檢查 §3.6 全部項目：錯誤 → 422 `COURSE_VALIDATION_FAILED`，`details[].field` 為 JSON 路徑（如 `$.conditions[1].activity_id`）、`issue` 為 `RULE_*`、`params.message` 為中文說明；警告（`RULE_UNSATISFIABLE`）照存並隨回應回傳。之後編輯結構可能讓引用失效，發布前 C2 會再檢查一次。`rule: null` 清除 |
+| 驗證器補充規則 | 條件與群組的欄位採白名單，多出的欄位（打錯字）一律報錯，不默默忽略；**NOT 群組只能有一個條件**（多條件的 NOT 語意不明）；`minimum_activity_score` 上限為活動滿分；`time_spent_minimum` 只有 `scope: module` 時可帶 `scope_id`；`manual_approval` 核可者限 instructor／course_admin／org_admin；單元／課節內沒有必修活動時警告恆不成立 |
+| 必修活動 | 活動、所在課節、所在單元三者皆為必修才算（`requiredActivityIds` 與 `module_completed` 的範圍同此定義） |
+| 評估器補充語意 | `minimum_score` 只計必修且有分數的活動——閱讀等不計分活動（完成但 `score` 為 null）不列入分子分母；有必修活動尚未作答時總分未知 → UNKNOWN。`attempt_status`：passed＝狀態為 passed；completed＝passed 或 completed；scored＝已有分數。`blockingReasons` 列出所有未成立的葉節點（OR 分支中未成立者也列，讓學員看到每條可行的路還差什麼）；negate 的條件不成立時為 `NEGATED_CONDITION_MET` |
+| 先修條件 | 共用驗證器，以 `PREREQUISITE_CONDITION_TYPES` 限定子集（specific_activities_completed、minimum_activity_score、attempt_status、module_completed、lesson_completed）；於發布前 C2 驗證（1-2b） |
+| Coach Policy | `PUT /course-versions/{id}/coach-policy` 整組取代；稽核只記變更欄位。值域白名單（會組進 §10.1.2 的提示詞）：回應模式 3 種、語氣 supportive／neutral／concise、語言 zh-TW／en、知識範圍 course_source／verified_faq／common_error／platform（至少一項，對應 §4.2 的 knowledge_type）、禁止主題 ≤ 20 個 × 100 字、補充說明 ≤ 1000 字（附在 POLICY 段之後，不能覆寫 SYSTEM 段的安全規則） |
+| 僅草稿可寫 | 兩個端點都先 `FOR UPDATE` 鎖定版本並確認為 draft，否則 409 `COURSE_VERSION_IMMUTABLE`（DB 觸發器 `trg_crs_immutable`／`trg_cp_immutable` 為第二層） |
+| 前端 | 版本編輯頁新增「完成條件」卡片（遞迴的群組／條件編輯器，引用對象取自**已儲存**的結構，結構有未儲存變更時提示）與「AI 教練設定」卡片，各自獨立儲存 |
+
 ---
 
 # 7. Frontend 設計
@@ -4167,3 +4183,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.13 | 2026-09-13 | Phase 1-1 課程與版本編輯：新增 §6.5（角色權限、列表範圍、PATCH 課程僅封存、一次一個編輯中版本、草稿整組取代與 id 規則、內容區塊子集、複製時 JSON 引用改寫、課程人員雙表同步、互動元件目錄端點）；§7.1.3 補路由 | Software Designer |
 | v1.14 | 2026-09-13 | 成員管理與管理員保護：§8.9 新增可直接邀請講師＋課程、成員清單的角色篩選／搜尋與課程資訊、管理員保護（不能移除自己、只計啟用中管理員、鎖定組織列防並行互相移除）；§6.5 課程代碼選填並自動編號、代碼衝突帶出課程名稱、課程列表 `organizationId` 篩選；錯誤細節新增選填 `params` | Software Designer |
 | v1.15 | 2026-09-13 | 停用成員與恢復課程：§2.9 新增 0018（`disabled_memberships`）；§8.9 新增停用／恢復成員資格（只影響本組織、角色保留、GrantLoader 排除、啟用中管理員的共同定義）；§6.5 新增恢復封存與列表 `status` 篩選；§12.2 新增 `org.user.enabled`、`course.restored` | Software Designer |
+| v1.16 | 2026-09-13 | Phase 1-2a 完成條件與 AI 教練設定：新增 §6.6（語法型別位置、儲存時驗證與 422 明細格式、驗證器補充規則、必修活動定義、評估器補充語意、先修條件子集、Coach Policy 值域白名單、僅草稿可寫、前端卡片） | Software Designer |

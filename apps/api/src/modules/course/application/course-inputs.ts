@@ -1,4 +1,15 @@
-import { ACTIVITY_TYPES, COURSE_LIMITS, COURSE_STAFF_ROLES, NAVIGATION_MODES } from '@iac/contracts';
+import {
+  ACTIVITY_TYPES,
+  COACH_KNOWLEDGE_SCOPES,
+  COACH_LANGUAGES,
+  COACH_POLICY_LIMITS,
+  COACH_RESPONSE_MODES,
+  COACH_TONE_PROFILES,
+  COURSE_LIMITS,
+  COURSE_STAFF_ROLES,
+  NAVIGATION_MODES,
+  RULE_GRAMMAR_VERSION,
+} from '@iac/contracts';
 import { z } from 'zod';
 
 /**
@@ -89,6 +100,37 @@ export const CreateVersion = z.strictObject({
 export const AssignStaff = z.strictObject({
   email: z.email().max(254),
   role: z.enum(COURSE_STAFF_ROLES),
+});
+
+/**
+ * PUT /course-versions/{id}/completion-rules。rule 的語法由 @iac/domain 的 validateRule 檢查
+ * （需要課程結構，故在 service 內）；此處只限大小。null＝清除完成條件。
+ */
+export const CompletionRulesInput = z.strictObject({
+  grammarVersion: z.literal(RULE_GRAMMAR_VERSION).default(RULE_GRAMMAR_VERSION),
+  rule: JsonObject.nullable(),
+});
+
+/** PUT /course-versions/{id}/coach-policy：整組取代。值域白名單——這些值會組進 AI 提示詞（SD §10.1.2） */
+export const CoachPolicyInput = z.strictObject({
+  responseMode: z.enum(COACH_RESPONSE_MODES),
+  maxDirectnessLevel: z.number().int().min(1).max(5),
+  allowAnswerRevealAfterAttempts: z.number().int().min(1).max(COACH_POLICY_LIMITS.revealAfterMax).nullable(),
+  preferredLanguage: z.enum(COACH_LANGUAGES),
+  citationRequired: z.boolean(),
+  allowedKnowledgeScopes: z
+    .array(z.enum(COACH_KNOWLEDGE_SCOPES))
+    .min(1)
+    .refine((v) => new Set(v).size === v.length, 'duplicate'),
+  toneProfile: z.enum(COACH_TONE_PROFILES),
+  followUpQuestions: z.boolean(),
+  prohibitedTopics: z.array(z.string().trim().min(1).max(COACH_POLICY_LIMITS.topicChars)).max(COACH_POLICY_LIMITS.prohibitedTopics),
+  extraInstructions: z
+    .string()
+    .trim()
+    .max(COACH_POLICY_LIMITS.extraInstructionsChars)
+    .nullable()
+    .transform((v) => v || null),
 });
 
 export const CoursePaging = z.object({

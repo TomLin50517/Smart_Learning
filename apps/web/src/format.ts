@@ -1,6 +1,13 @@
 import type {
   ActivityType,
+  AttemptStatusTarget,
   CapabilityName,
+  CoachKnowledgeScope,
+  CoachLanguage,
+  CoachResponseMode,
+  CoachToneProfile,
+  RuleConditionType,
+  RuleOperator,
   CourseStatus,
   CourseVersionStatus,
   LicenseState,
@@ -47,6 +54,56 @@ export const NAVIGATION_MODE_LABELS: Record<NavigationMode, string> = {
   mixed: '單元依序、單元內自由（預設）',
 };
 
+export const RULE_OPERATOR_LABELS: Record<RuleOperator, string> = {
+  AND: '全部符合',
+  OR: '任一符合',
+  NOT: '不符合',
+};
+
+export const RULE_CONDITION_LABELS: Record<RuleConditionType, string> = {
+  required_activities_completed: '完成所有必修活動',
+  specific_activities_completed: '完成指定活動',
+  minimum_score: '總分達到',
+  minimum_activity_score: '活動分數達到',
+  video_watch_ratio: '影片觀看比例達到',
+  attempt_status: '活動作答狀態',
+  module_completed: '完成單元',
+  lesson_completed: '完成課節',
+  time_spent_minimum: '學習時間至少',
+  attempt_count_maximum: '作答次數不超過',
+  manual_approval: '人工核可',
+};
+
+export const ATTEMPT_STATUS_TARGET_LABELS: Record<AttemptStatusTarget, string> = {
+  passed: '通過',
+  completed: '完成（含通過）',
+  scored: '已有分數',
+};
+
+export const COACH_RESPONSE_MODE_LABELS: Record<CoachResponseMode, string> = {
+  hint_first: '先給提示（建議）：引導學員自己想，達到嘗試次數才可給答案',
+  coach_first: '引導為主：可提供部分解說',
+  direct_allowed: '可直接解說：仍須附引用',
+};
+
+export const COACH_TONE_LABELS: Record<CoachToneProfile, string> = {
+  supportive: '溫和鼓勵',
+  neutral: '中性',
+  concise: '簡潔',
+};
+
+export const COACH_KNOWLEDGE_SCOPE_LABELS: Record<CoachKnowledgeScope, string> = {
+  course_source: '課程教材',
+  verified_faq: '已驗證的常見問答',
+  common_error: '常見錯誤說明',
+  platform: '平台共用知識',
+};
+
+export const COACH_LANGUAGE_LABELS: Record<CoachLanguage, string> = {
+  'zh-TW': '繁體中文',
+  en: 'English',
+};
+
 export const LICENSE_STATE_LABELS: Record<LicenseState, string> = {
   unlicensed: '尚未啟用',
   active: '有效',
@@ -90,6 +147,14 @@ const ACTION_LABELS: Record<string, string> = {
   'org.disabled': '停用組織',
   'org.user.created': '新增成員',
   'org.user.disabled': '停用成員',
+  'org.user.enabled': '恢復成員',
+  'course.created': '建立課程',
+  'course.archived': '封存課程',
+  'course.restored': '恢復課程',
+  'course.version.created': '建立課程版本',
+  'course.version.updated': '編輯課程版本',
+  'course.completion_rule.updated': '更新完成條件',
+  'course.coach_policy.updated': '更新 AI 教練設定',
   'org.role.assigned': '指派角色',
   'org.role.revoked': '移除角色',
   'coach.transcript.read': '檢視 Coach 對話',

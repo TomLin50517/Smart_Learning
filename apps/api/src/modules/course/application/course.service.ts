@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
+import { validateRule, type RuleStructure } from '@iac/domain';
 import {
   COURSE_LIMITS,
+  type CoachPolicyDto,
+  type RuleNode,
+  type ValidationIssueDto,
   type ActivityDto,
   type ActivityType,
   type CourseDetailDto,
@@ -94,6 +98,37 @@ async function inOrder<T extends unknown[]>(...jobs: { [K in keyof T]: () => Pro
   const out: unknown[] = [];
   for (const job of jobs) out.push(await job());
   return out as T;
+}
+
+const POLICY_COLUMNS = `response_mode, max_directness_level, allow_answer_reveal_after_attempts, preferred_language, citation_required,
+  allowed_knowledge_scopes, tone_profile, follow_up_questions, prohibited_topics, extra_instructions`;
+
+interface PolicyRow {
+  response_mode: CoachPolicyDto['responseMode'];
+  max_directness_level: number;
+  allow_answer_reveal_after_attempts: number | null;
+  preferred_language: CoachPolicyDto['preferredLanguage'];
+  citation_required: boolean;
+  allowed_knowledge_scopes: CoachPolicyDto['allowedKnowledgeScopes'];
+  tone_profile: CoachPolicyDto['toneProfile'];
+  follow_up_questions: boolean;
+  prohibited_topics: string[];
+  extra_instructions: string | null;
+}
+
+function toPolicy(r: PolicyRow): CoachPolicyDto {
+  return {
+    responseMode: r.response_mode,
+    maxDirectnessLevel: r.max_directness_level,
+    allowAnswerRevealAfterAttempts: r.allow_answer_reveal_after_attempts,
+    preferredLanguage: r.preferred_language,
+    citationRequired: r.citation_required,
+    allowedKnowledgeScopes: r.allowed_knowledge_scopes,
+    toneProfile: r.tone_profile,
+    followUpQuestions: r.follow_up_questions,
+    prohibitedTopics: r.prohibited_topics,
+    extraInstructions: r.extra_instructions,
+  };
 }
 
 /** 自動編號的課程代碼：C-0001、C-0002…（超過 9999 時自然延長位數） */
@@ -317,8 +352,8 @@ export class CourseService {
       summary: row.summary,
       navigationMode: row.navigation_mode,
       modules,
-      completionRuleSet: rules.rows[0] ? { grammarVersion: rules.rows[0].grammar_version, rule: rules.rows[0].rule_json } : null,
-      coachPolicy: p ? camelize(p) : null,
+      completionRuleSet: rules.rows[0] ? { grammarVersion: rules.rows[0].grammar_version, rule: rules.rows[0].rule_json as unknown as RuleNode } : null,
+      coachPolicy: p ? toPolicy(p as unknown as PolicyRow) : null,
       knowledgeBindings: bindings.rows.map((b) => ({ documentVersionId: b.document_version_id, bindingType: b.binding_type, priority: b.priority })),
       editable: row.status === 'draft',
     };
@@ -458,6 +493,110 @@ export class CourseService {
     }));
   }
 
+  // ------------------------------------------------------- completion / policy
+
+  /**
+   * 規則驗證用的課程結構（SD §3.6）。「必修活動」＝活動、所在課節、所在單元三者皆為必修。
+   * 發布前 validator（C2）與規則儲存共用。
+   */
+  async ruleStructure(id: string, q: Q = this.db): Promise<RuleStructure> {
+    const [acts, mods, lessons] = await inOrder(
+      () =>
+        q.query<{ id: string; activity_type: string; is_required: boolean; max_score: string; lesson_id: string; module_id: string }>(
+          `SELECT a.id, a.activity_type, (a.is_required AND l.is_required AND m.is_required) AS is_required, a.max_score, a.lesson_id, l.module_id
+             FROM activities a JOIN lessons l ON l.id = a.lesson_id JOIN modules m ON m.id = l.module_id
+            WHERE a.course_version_id = $1`,
+          [id],
+        ),
+      () => q.query<{ id: string }>(`SELECT id FROM modules WHERE course_version_id = $1`, [id]),
+      () => q.query<{ id: string }>(`SELECT id FROM lessons WHERE course_version_id = $1`, [id]),
+    );
+    return {
+      activities: Object.fromEntries(
+        acts.rows.map((a) => [a.id, { activityType: a.activity_type, moduleId: a.module_id, lessonId: a.lesson_id, isRequired: a.is_required, maxScore: Number(a.max_score) }]),
+      ),
+      moduleIds: mods.rows.map((m) => m.id),
+      lessonIds: lessons.rows.map((l) => l.id),
+    };
+  }
+
+  /**
+   * 設定完成條件（UC-CRS-004）。儲存前以 validateRule 驗證：錯誤 → 422 COURSE_VALIDATION_FAILED
+   * （details[].issue 為 RULE_* 子代碼、field 為 JSON 路徑）；警告（如恆不成立）照存並隨回應回傳。
+   * 之後編輯結構可能讓引用失效，發布前 validator（C2）會再檢查一次。
+   */
+  async updateCompletionRules(
+    id: string,
+    input: { grammarVersion: string; rule: Record<string, unknown> | null },
+  ): Promise<{ completionRuleSet: CourseVersionDetailDto['completionRuleSet']; warnings: ValidationIssueDto[]; before: unknown; after: unknown }> {
+    return this.tx(async (c) => {
+      await this.lockDraft(c, id);
+      const cur = await c.query<{ grammar_version: string; rule_json: RuleNode }>(`SELECT grammar_version, rule_json FROM completion_rule_sets WHERE course_version_id = $1`, [id]);
+      const before = cur.rows[0] ? { grammarVersion: cur.rows[0].grammar_version, rule: cur.rows[0].rule_json } : null;
+
+      if (input.rule === null) {
+        await c.query(`DELETE FROM completion_rule_sets WHERE course_version_id = $1`, [id]);
+        return { completionRuleSet: null, warnings: [], before: { completionRuleSet: before }, after: { completionRuleSet: null } };
+      }
+      const check = validateRule(input.rule, await this.ruleStructure(id, c));
+      if (check.errors.length) {
+        throw new DomainError(
+          'COURSE_VALIDATION_FAILED',
+          'Completion rule is invalid',
+          check.errors.map((e) => ({ field: e.path, issue: e.code, params: { message: e.message } })),
+        );
+      }
+      await c.query(
+        `INSERT INTO completion_rule_sets (course_version_id, grammar_version, rule_json) VALUES ($1, $2, $3::jsonb)
+         ON CONFLICT (course_version_id) DO UPDATE SET grammar_version = EXCLUDED.grammar_version, rule_json = EXCLUDED.rule_json, updated_at = now()`,
+        [id, input.grammarVersion, JSON.stringify(input.rule)],
+      );
+      const after = { grammarVersion: input.grammarVersion, rule: input.rule as unknown as RuleNode };
+      return { completionRuleSet: after, warnings: check.warnings, before: { completionRuleSet: before }, after: { completionRuleSet: after } };
+    });
+  }
+
+  /** 設定 AI 教練（UC-CRS-005）：整組取代；稽核只記變更的欄位 */
+  async updateCoachPolicy(id: string, input: CoachPolicyDto): Promise<{ policy: CoachPolicyDto; before: Record<string, unknown>; after: Record<string, unknown> }> {
+    return this.tx(async (c) => {
+      await this.lockDraft(c, id);
+      const cur = await c.query<PolicyRow>(`SELECT ${POLICY_COLUMNS} FROM coach_policies WHERE course_version_id = $1`, [id]);
+      const old = cur.rows[0] ? toPolicy(cur.rows[0]) : null;
+      await c.query(
+        `INSERT INTO coach_policies (course_version_id, response_mode, max_directness_level, allow_answer_reveal_after_attempts, preferred_language,
+                                     citation_required, allowed_knowledge_scopes, tone_profile, follow_up_questions, prohibited_topics, extra_instructions)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb, $11)
+         ON CONFLICT (course_version_id) DO UPDATE SET
+           response_mode = EXCLUDED.response_mode, max_directness_level = EXCLUDED.max_directness_level,
+           allow_answer_reveal_after_attempts = EXCLUDED.allow_answer_reveal_after_attempts, preferred_language = EXCLUDED.preferred_language,
+           citation_required = EXCLUDED.citation_required, allowed_knowledge_scopes = EXCLUDED.allowed_knowledge_scopes,
+           tone_profile = EXCLUDED.tone_profile, follow_up_questions = EXCLUDED.follow_up_questions,
+           prohibited_topics = EXCLUDED.prohibited_topics, extra_instructions = EXCLUDED.extra_instructions, updated_at = now()`,
+        [
+          id,
+          input.responseMode,
+          input.maxDirectnessLevel,
+          input.allowAnswerRevealAfterAttempts,
+          input.preferredLanguage,
+          input.citationRequired,
+          JSON.stringify(input.allowedKnowledgeScopes),
+          input.toneProfile,
+          input.followUpQuestions,
+          JSON.stringify(input.prohibitedTopics),
+          input.extraInstructions,
+        ],
+      );
+      const before: Record<string, unknown> = {};
+      const after: Record<string, unknown> = {};
+      for (const k of Object.keys(input) as (keyof CoachPolicyDto)[]) {
+        if (JSON.stringify(old?.[k]) === JSON.stringify(input[k])) continue;
+        before[k] = old?.[k] ?? null;
+        after[k] = input[k];
+      }
+      return { policy: input, before, after };
+    });
+  }
+
   // ------------------------------------------------------------------ staff
 
   /**
@@ -526,6 +665,13 @@ export class CourseService {
   }
 
   /** 同一課程同時至多一個編輯中版本，避免兩份草稿各自發布而互相覆蓋 */
+  /** 鎖定版本並確認為草稿；否則 409 COURSE_VERSION_IMMUTABLE（應用層；DB 觸發器為第二層） */
+  private async lockDraft(c: Tx, id: string): Promise<void> {
+    const v = await c.query<{ status: CourseVersionStatus }>(`SELECT status FROM course_versions WHERE id = $1 FOR UPDATE`, [id]);
+    if (!v.rows[0]) throw new DomainError('NOT_FOUND');
+    if (v.rows[0].status !== 'draft') throw new DomainError('COURSE_VERSION_IMMUTABLE');
+  }
+
   private async assertNoWorkingVersion(c: Tx, courseId: string): Promise<void> {
     const r = await c.query(`SELECT 1 FROM course_versions WHERE course_id = $1 AND status = ANY($2::course_version_status[])`, [courseId, WORKING]);
     if (r.rowCount) throw rejected('draft_exists');

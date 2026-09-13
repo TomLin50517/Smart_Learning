@@ -420,19 +420,26 @@ components:
 
     CoachPolicy:
       type: object
+      additionalProperties: false
+      required: [responseMode, maxDirectnessLevel, allowAnswerRevealAfterAttempts, preferredLanguage, citationRequired,
+                 allowedKnowledgeScopes, toneProfile, followUpQuestions, prohibitedTopics, extraInstructions]
       properties:
         responseMode:
           type: string
           enum: [hint_first, coach_first, direct_allowed]
         maxDirectnessLevel:             { type: integer, minimum: 1, maximum: 5 }
-        allowAnswerRevealAfterAttempts: { type: [integer, 'null'] }
-        preferredLanguage:              { type: string }
+        allowAnswerRevealAfterAttempts: { type: [integer, 'null'], minimum: 1, maximum: 20, description: null＝永不直接給答案 }
+        preferredLanguage:              { type: string, enum: [zh-TW, en] }
         citationRequired:               { type: boolean }
-        allowedKnowledgeScopes:         { type: array, items: { type: string } }
-        toneProfile:                    { type: string }
+        allowedKnowledgeScopes:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: { type: string, enum: [course_source, verified_faq, common_error, platform] }
+        toneProfile:                    { type: string, enum: [supportive, neutral, concise] }
         followUpQuestions:              { type: boolean }
-        prohibitedTopics:               { type: array, items: { type: string } }
-        extraInstructions:              { type: string }
+        prohibitedTopics:               { type: array, maxItems: 20, items: { type: string, maxLength: 100 } }
+        extraInstructions:              { type: [string, 'null'], maxLength: 1000 }
 
     # ---------------------------------------------------------------- Runtime
     ActivityRuntime:
@@ -1399,20 +1406,36 @@ paths:
       x-required-permission: course.completion_rule.write
       x-required-capability: authoringAllowed
       x-audit: course.completion_rule.updated
+      description: |
+        儲存前以 SD §3.6 驗證器檢查（SD §6.6）：錯誤回 422，警告（恆不成立等）照存並隨回應回傳。
+        之後編輯結構可能讓引用失效，發布前 validator（C2）會再檢查。`rule: null` 清除完成條件。
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [rule]
               properties:
-                grammarVersion: { type: string, default: '1.0' }
-                rule: { $ref: '#/components/schemas/RuleNode' }
+                grammarVersion: { type: string, enum: ['1.0'], default: '1.0' }
+                rule:
+                  oneOf:
+                    - $ref: '#/components/schemas/RuleNode'
+                    - { type: 'null' }
       responses:
-        '200': { description: OK }
+        '200':
+          description: '`{ completionRuleSet: { grammarVersion, rule } | null, warnings: ValidationIssue[] }`'
+        '400': { description: '欄位格式（未知欄位、grammarVersion 不支援、JSON 超過 64 KB）' }
         '409': { $ref: '#/components/responses/Conflict' }
-        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '422':
+          description: |
+            `COURSE_VALIDATION_FAILED`：`details[].field` 為 JSON 路徑（如 `$.conditions[1].activity_id`）、
+            `issue` 為 `RULE_SCHEMA_INVALID`／`RULE_DEPTH_EXCEEDED`／`RULE_TOO_COMPLEX`／`RULE_REFERENCE_NOT_FOUND`／
+            `RULE_TYPE_MISMATCH`／`RULE_VALUE_OUT_OF_RANGE`，`params.message` 為說明
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
 
   /course-versions/{id}/coach-policy:
     parameters: [{ $ref: '#/components/parameters/ResourceId' }]
@@ -1422,13 +1445,15 @@ paths:
       x-required-permission: course.coach_policy.write
       x-required-capability: authoringAllowed
       x-audit: course.coach_policy.updated
+      description: 整組取代（所有欄位必填）；值域白名單，會組進 AI 提示詞（SD §6.6、§10.1.2）。稽核只記變更的欄位。
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: '#/components/schemas/CoachPolicy' }
       responses:
-        '200': { description: OK }
+        '200': { description: '儲存後的 `CoachPolicy`' }
+        '400': { description: 欄位缺漏或超出值域 }
         '409': { $ref: '#/components/responses/Conflict' }
 
   /course-versions/{id}/migrate-learners:

@@ -5,7 +5,7 @@
 import { ERROR_CODES, type MeResponse } from '@iac/contracts';
 import { describe, expect, it } from 'vitest';
 import { readCookie } from './api/client';
-import { ApiError, describeError, ERROR_MESSAGES, humanizeStructurePath } from './api/errors';
+import { ApiError, describeError, ERROR_MESSAGES, humanizeRulePath, humanizeStructurePath } from './api/errors';
 import { can, navItems } from './auth/permissions';
 import { safeNext } from './auth/redirect';
 import { passwordProblem } from './auth/password';
@@ -46,6 +46,22 @@ describe('humanizeStructurePath', () => {
     expect(humanizeStructurePath('modules.0.lessons.1.activities.2.interactiveDefinitionId')).toBe('第 1 單元 › 第 2 課節 › 第 3 活動 › 互動元件');
     expect(humanizeStructurePath('modules.3.id')).toBe('第 4 單元 › id');
     expect(humanizeStructurePath('email')).toBeNull();
+  });
+});
+
+describe('humanizeRulePath', () => {
+  it('turns completion-rule JSON paths into readable locations', () => {
+    expect(humanizeRulePath('$')).toBe('完成條件');
+    expect(humanizeRulePath('$.conditions[1].conditions[0].value')).toBe('完成條件 › 第 2 項 › 第 1 項 › 數值');
+    expect(humanizeRulePath('$.activity_ids[0]')).toBe('完成條件 › 活動');
+    expect(humanizeRulePath('modules.0.id')).toBeNull();
+  });
+
+  it('rule errors show the server-provided message at a readable location', () => {
+    const e = new ApiError(422, 'COURSE_VALIDATION_FAILED', 'x', null, [
+      { field: '$.conditions[0].activity_id', issue: 'RULE_REFERENCE_NOT_FOUND', params: { message: '引用的活動不在此版本中' } },
+    ]);
+    expect(describeError(e).details).toEqual(['完成條件 › 第 1 項 › 活動：引用的活動不在此版本中']);
   });
 });
 

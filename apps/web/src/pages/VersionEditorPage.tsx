@@ -18,6 +18,7 @@ import { useMe } from '../auth/session';
 import { ErrorAlert, Field, Forbidden, Notice, PageHeader, Spinner } from '../components/ui';
 import { ACTIVITY_TYPE_LABELS, NAVIGATION_MODE_LABELS, VERSION_STATUS_LABELS } from '../format';
 import { useApi, useTitle } from '../hooks';
+import { CoachPolicyCard, CompletionRulesCard } from './version-settings';
 
 interface EditState {
   title: string;
@@ -92,6 +93,8 @@ export function VersionEditorPage() {
   const [error, setError] = useState<unknown>(null);
   const [localError, setLocalError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  // 最近一次儲存後的版本內容：完成條件以「已儲存」的結構選擇引用對象
+  const [latest, setLatest] = useState<CourseVersionDetailDto | null>(null);
   useTitle(version.data ? `編輯 v${version.data.versionNo}` : '課程版本');
 
   useEffect(() => {
@@ -154,6 +157,7 @@ export function VersionEditorPage() {
       const s = toState(r);
       setState(s.state);
       setJson(s.json);
+      setLatest(r);
       setDirty(false);
       setSaved(true);
     } catch (e) {
@@ -261,6 +265,14 @@ export function VersionEditorPage() {
           ＋ 新增單元
         </button>
       </fieldset>
+
+      <CompletionRulesCard
+        key={`rules-${(latest ?? v).id}-${latest ? 'saved' : 'loaded'}`}
+        version={latest ?? v}
+        editable={v.editable && can(me, 'course.completion_rule.write') && me.licenseCapabilities.authoringAllowed}
+        structureDirty={dirty}
+      />
+      <CoachPolicyCard key={`policy-${v.id}`} version={v} editable={v.editable && can(me, 'course.coach_policy.write') && me.licenseCapabilities.authoringAllowed} />
     </>
   );
 }

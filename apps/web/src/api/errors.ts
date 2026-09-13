@@ -139,7 +139,41 @@ const ISSUE_MESSAGES: Record<string, string> = {
   nothing_to_update: '沒有需要更新的內容',
   course_id_mismatch: '課程角色必須指定課程，其他角色不可指定課程',
   course_not_in_organization: '課程不屬於此組織',
+  duplicate: '不可重複',
+  // 完成條件驗證（SD §3.6）：伺服器於 params.message 附上具體說明
+  RULE_SCHEMA_INVALID: '{message}',
+  RULE_DEPTH_EXCEEDED: '{message}',
+  RULE_TOO_COMPLEX: '{message}',
+  RULE_REFERENCE_NOT_FOUND: '{message}',
+  RULE_TYPE_MISMATCH: '{message}',
+  RULE_VALUE_OUT_OF_RANGE: '{message}',
+  RULE_UNSATISFIABLE: '{message}',
 };
+
+const RULE_FIELD_LABELS: Record<string, string> = {
+  activity_id: '活動',
+  activity_ids: '活動',
+  module_id: '單元',
+  lesson_id: '課節',
+  scope_id: '單元',
+  scope: '範圍',
+  value: '數值',
+  operator: '運算方式',
+  type: '條件類型',
+  approver_role: '核可者',
+  negate: '反向',
+};
+
+/** 完成條件的 JSON 路徑 → 中文位置：$.conditions[1].conditions[0].value → 完成條件 › 第 2 項 › 第 1 項 › 數值 */
+export function humanizeRulePath(field: string): string | null {
+  if (!field.startsWith('$')) return null;
+  const out = ['完成條件'];
+  for (const [, key, idx] of field.slice(1).matchAll(/\.(\w+)(?:\[(\d+)\])?/g)) {
+    if (key === 'conditions' && idx !== undefined) out.push(`第 ${Number(idx) + 1} 項`);
+    else out.push(RULE_FIELD_LABELS[key!] ?? key!);
+  }
+  return out.join(' › ');
+}
 
 const STRUCTURE_SEGMENTS: Record<string, string> = { modules: '單元', lessons: '課節', activities: '活動', contentBlocks: '內容區塊' };
 
@@ -162,7 +196,7 @@ export function humanizeStructurePath(field: string): string | null {
 }
 
 export function describeDetail(d: ErrorDetail): string {
-  const structural = d.field ? humanizeStructurePath(d.field) : null;
+  const structural = d.field ? (humanizeStructurePath(d.field) ?? humanizeRulePath(d.field)) : null;
   const label = d.field ? (structural ?? FIELD_LABELS[d.field.split('.')[0] ?? ''] ?? d.field) : '';
   const template = ISSUE_MESSAGES[d.issue] ?? d.issue;
   const issue = template.replace(/\{(\w+)\}/g, (_, k: string) => d.params?.[k] ?? '');

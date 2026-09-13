@@ -2863,3 +2863,4 @@ Browser (X-Request-Id) → Nginx → API (correlation_id)
 | v1.11 | 2026-09-13 | Phase 1-1 課程與版本編輯實作：UC-CRS-012 以 email 指派且對象須為組織成員；同一課程同時至多一個編輯中版本；`PATCH /courses/{id}` 僅封存（SD §6.5）。§6.3 角色表為節錄，instructor 實際另有 course.read／course.version.read／publish 等（以 migration 0012 為準） | System Analyst |
 | v1.12 | 2026-09-13 | 成員管理與管理員保護：UC-ORG-003 新增成員時可直接指定講師／課程管理員與課程（不必先為學員）；成員清單可依角色篩選、依姓名／email 搜尋，課程角色顯示課程代碼與名稱；UC-ORG-004 不能移除自己的組織管理員角色、組織不得失去最後一位啟用中的管理員（含並行情境）；UC-CRS-001 課程代碼改為選填並依組織自動編號（SD §6.5、§8.9） | System Analyst |
 | v1.13 | 2026-09-13 | UC-ORG-003 的「停用」定義為停用**在本組織的成員資格**（角色保留、可恢復，帳號與其他組織不受影響）；停用整個帳號屬平台管理（後續）。UC-CRS-010 封存可恢復，恢復後依是否有已發布版本回到開放中／尚未發布（SD §6.5、§8.9） | System Analyst |
+| v1.14 | 2026-09-13 | UC-CRS-004 完成條件於儲存時即驗證（錯誤拒絕、恆不成立警告），發布前 C2 再驗一次；「必修活動」定義為活動、課節、單元皆必修；UC-CRS-005 Coach Policy 值域以白名單限定（SD §6.6） | System Analyst |
