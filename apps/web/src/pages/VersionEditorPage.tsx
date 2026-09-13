@@ -18,6 +18,7 @@ import { useMe } from '../auth/session';
 import { ErrorAlert, Field, Forbidden, Notice, PageHeader, Spinner } from '../components/ui';
 import { ACTIVITY_TYPE_LABELS, NAVIGATION_MODE_LABELS, VERSION_STATUS_LABELS } from '../format';
 import { useApi, useTitle } from '../hooks';
+import { PublishPanel } from './publish-panel';
 import { CoachPolicyCard, CompletionRulesCard } from './version-settings';
 
 interface EditState {
@@ -186,7 +187,16 @@ export function VersionEditorPage() {
       <p>
         <Link to={`/app/courses/${courseId}`}>← 課程總覽</Link>
       </p>
-      {!v.editable && <Notice kind="info">此版本為「{VERSION_STATUS_LABELS[v.status]}」，內容不可修改。要調整請回到課程總覽，將已發布的版本複製為新版本。</Notice>}
+      {!v.editable && (
+        <Notice kind="info">
+          此版本為「{VERSION_STATUS_LABELS[v.status]}」，內容不可修改。要調整請回到課程總覽，將已發布的版本複製為新版本。
+          {v.contentSnapshotHash && (
+            <div className="muted small" title={v.contentSnapshotHash}>
+              內容雜湊：{v.contentSnapshotHash.slice(0, 23)}…（發布時計算，可用來確認內容未被竄改）
+            </div>
+          )}
+        </Notice>
+      )}
       {v.editable && !canWrite && <Notice kind="info">您可以檢視此草稿，但沒有編輯權限。</Notice>}
       {saved && <Notice kind="ok">已儲存。</Notice>}
       {localError && (
@@ -273,6 +283,19 @@ export function VersionEditorPage() {
         structureDirty={dirty}
       />
       <CoachPolicyCard key={`policy-${v.id}`} version={v} editable={v.editable && can(me, 'course.coach_policy.write') && me.licenseCapabilities.authoringAllowed} />
+
+      {(v.status === 'draft' || v.status === 'review') && can(me, 'course.version.validate') && (
+        <PublishPanel
+          version={latest ?? v}
+          canValidate
+          canPublish={can(me, 'course.version.publish') && me.licenseCapabilities.authoringAllowed}
+          blocked={dirty ? '課程結構有尚未儲存的變更，請先儲存再發布。' : null}
+          onPublished={() => {
+            setLatest(null);
+            version.reload();
+          }}
+        />
+      )}
     </>
   );
 }

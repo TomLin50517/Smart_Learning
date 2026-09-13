@@ -199,6 +199,18 @@ fieldset {
 .role-list li + li {
   margin-top: 2px;
 }
+.check-group h4 {
+  margin: 14px 0 4px;
+}
+.issue-list {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+}
+.issue-list li {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
 .rule-group {
   border-left: 3px solid var(--border);
   padding: 4px 0 4px 12px;

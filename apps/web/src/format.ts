@@ -153,6 +153,8 @@ const ACTION_LABELS: Record<string, string> = {
   'course.restored': '恢復課程',
   'course.version.created': '建立課程版本',
   'course.version.updated': '編輯課程版本',
+  'course.version.cloned': '複製課程版本',
+  'course.version.published': '發布課程版本',
   'course.completion_rule.updated': '更新完成條件',
   'course.coach_policy.updated': '更新 AI 教練設定',
   'org.role.assigned': '指派角色',

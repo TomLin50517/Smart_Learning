@@ -99,6 +99,8 @@ const FIELD_LABELS: Record<string, string> = {
   cursor: '分頁位置',
   limit: '每頁筆數',
   organizationId: '組織',
+  coachPolicy: 'AI 教練設定',
+  knowledgeBindings: '教材綁定',
 };
 
 /** 伺服器 details.issue → 文案。未列出的沿用原文（多為 zod 的驗證訊息） */
@@ -148,6 +150,19 @@ const ISSUE_MESSAGES: Record<string, string> = {
   RULE_TYPE_MISMATCH: '{message}',
   RULE_VALUE_OUT_OF_RANGE: '{message}',
   RULE_UNSATISFIABLE: '{message}',
+  // 發布前檢查（SD §6.7）：發布失敗 422 時逐項列出
+  COMPLETION_RULE_MISSING: '{message}',
+  C1_UNREACHABLE: '{message}',
+  C1_EMPTY_REQUIRED_SCOPE: '{message}',
+  C3_DOCUMENT_NOT_READY: '{message}',
+  C3_NO_KNOWLEDGE: '{message}',
+  C4_POLICY_MISSING: '{message}',
+  C4_POLICY_INVALID: '{message}',
+  C5_DEFINITION_REQUIRED: '{message}',
+  C5_DEFINITION_UNAVAILABLE: '{message}',
+  C5_CONFIG_INVALID: '{message}',
+  C5_ANSWER_KEY_INVALID: '{message}',
+  C5_SCHEMA_PARTIAL: '{message}',
 };
 
 const RULE_FIELD_LABELS: Record<string, string> = {
