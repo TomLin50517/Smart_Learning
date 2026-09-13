@@ -108,22 +108,40 @@ export class EnrollmentService {
       const user = u.rows[0];
       if (!user) throw invalid('email', 'not_in_organization');
       if (user.disabled) throw invalid('email', 'member_disabled');
-      const dup = await c.query(`SELECT 1 FROM enrollments WHERE course_id = $1 AND user_id = $2 AND status NOT IN ('withdrawn', 'rejected')`, [courseId, user.id]);
-      if (dup.rowCount) throw invalid('email', 'already_enrolled');
-
-      const grant = await c.query(
-        `INSERT INTO user_org_roles (user_id, role_id, scope_type, scope_id, organization_id, granted_by)
-         SELECT $1, id, 'self'::scope_type, $1, $2, $3 FROM roles WHERE code = 'learner'
-         ON CONFLICT DO NOTHING`,
-        [user.id, orgId, actorId],
-      );
-      const e = await c.query<{ id: string }>(
-        `INSERT INTO enrollments (organization_id, course_id, course_version_id, user_id, status, enroll_method, assigned_by, due_date)
-         VALUES ($1, $2, $3, $4, 'active', 'assign', $5, $6) RETURNING id`,
-        [orgId, courseId, pv.rows[0].id, user.id, actorId, input.dueDate ?? null],
-      );
-      return { enrollment: await this.get(e.rows[0]!.id, c), learnerRoleGranted: (grant.rowCount ?? 0) > 0 };
+      const r = await this.enrollInTx(c, { id: courseId, organizationId: orgId, publishedVersionId: pv.rows[0].id }, user.id, actorId, input.dueDate ?? null);
+      if (!r.created) throw invalid('email', 'already_enrolled');
+      return { enrollment: await this.get(r.enrollmentId, c), learnerRoleGranted: r.learnerRoleGranted };
     });
+  }
+
+  /**
+   * 在呼叫端的交易內建立選課（單筆指派與批次匯入共用）。呼叫端須已鎖定課程列並確認已發布、未封存。
+   * 已有未退課的選課 → created: false；尚無學員角色者自動補上。
+   */
+  async enrollInTx(
+    c: pg.PoolClient,
+    course: { id: string; organizationId: string; publishedVersionId: string },
+    userId: string,
+    actorId: string,
+    dueDate: string | null = null,
+  ): Promise<{ enrollmentId: string; created: boolean; learnerRoleGranted: boolean }> {
+    const dup = await c.query<{ id: string }>(`SELECT id FROM enrollments WHERE course_id = $1 AND user_id = $2 AND status NOT IN ('withdrawn', 'rejected')`, [
+      course.id,
+      userId,
+    ]);
+    if (dup.rows[0]) return { enrollmentId: dup.rows[0].id, created: false, learnerRoleGranted: false };
+    const grant = await c.query(
+      `INSERT INTO user_org_roles (user_id, role_id, scope_type, scope_id, organization_id, granted_by)
+       SELECT $1, id, 'self'::scope_type, $1, $2, $3 FROM roles WHERE code = 'learner'
+       ON CONFLICT DO NOTHING`,
+      [userId, course.organizationId, actorId],
+    );
+    const e = await c.query<{ id: string }>(
+      `INSERT INTO enrollments (organization_id, course_id, course_version_id, user_id, status, enroll_method, assigned_by, due_date)
+       VALUES ($1, $2, $3, $4, 'active', 'assign', $5, $6) RETURNING id`,
+      [course.organizationId, course.id, course.publishedVersionId, userId, actorId, dueDate],
+    );
+    return { enrollmentId: e.rows[0]!.id, created: true, learnerRoleGranted: (grant.rowCount ?? 0) > 0 };
   }
 
   /** 課程的學員名單（UC-LRN-011 的名單部分）；依 email keyset 分頁 */

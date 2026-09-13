@@ -9,4 +9,5 @@ export * from './course.js';
 export * from './completion.js';
 export * from './enrollment.js';
 export * from './learning.js';
+export * from './bulk-import.js';
 export * from './permissions.generated.js';
