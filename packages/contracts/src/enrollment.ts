@@ -39,4 +39,8 @@ export interface CourseLearnerDto extends EnrollmentDto {
   email: string;
   /** 在課程所屬組織的成員資格已停用 */
   memberDisabled: boolean;
+  /** 最近一次送出作答時的進度快照；尚未作答為 null */
+  progress: { requiredCompleted: number; requiredTotal: number; weightedScore: number | null } | null;
+  /** 最後一筆學習事件的時間 */
+  lastActivityAt: string | null;
 }
