@@ -162,7 +162,7 @@ describe('courses (UC-CRS-001)', () => {
     expect(res.statusCode).toBe(201);
     const c = res.json();
     courseId = c.id;
-    expect(c).toMatchObject({ organizationId: ORG_A, code: 'CA-101', status: 'draft', publishedVersion: null, workingVersion: null });
+    expect(c).toMatchObject({ organizationId: ORG_A, code: 'CA-101', status: 'draft', publishedVersion: null, workingVersion: null, staff: [] });
     expect(await lastAudit('course.created')).toMatchObject({ organization_id: ORG_A, resource_id: courseId });
   });
 
@@ -189,6 +189,9 @@ describe('course staff (UC-CRS-012)', () => {
     expect(res.json()).toEqual([expect.objectContaining({ userId: U.instr, role: 'instructor', displayName: '王講師' })]);
     const roster = await admin.query(`SELECT staff_role FROM course_staff WHERE course_id = $1 AND user_id = $2`, [courseId, U.instr]);
     expect(roster.rows).toEqual([{ staff_role: 'instructor' }]);
+    // 課程列表直接帶出講師，管理員不必逐一點進課程
+    const listed = (await call('GET', '/api/courses', 'adminA')).json().data as { id: string; staff: unknown }[];
+    expect(listed.find((x) => x.id === courseId)?.staff).toEqual([{ userId: U.instr, displayName: '王講師', role: 'instructor' }]);
   });
 
   it('people outside the organization cannot be assigned', async () => {

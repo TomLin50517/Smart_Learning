@@ -48,17 +48,25 @@ interface CourseRow {
   wv_id: string | null;
   wv_no: number | null;
   wv_status: CourseVersionStatus | null;
+  staff: CourseDto['staff'];
 }
 
+/** 課程人員只列啟用中的帳號：已停用的講師不能上課，列出來會讓人以為已有講師 */
 const COURSE_SELECT = `
   SELECT c.id, c.organization_id, c.code, c.title, c.description, c.status, c.created_at,
-         pv.id AS pv_id, pv.version_no AS pv_no, wv.id AS wv_id, wv.version_no AS wv_no, wv.status AS wv_status
+         pv.id AS pv_id, pv.version_no AS pv_no, wv.id AS wv_id, wv.version_no AS wv_no, wv.status AS wv_status, st.staff
     FROM courses c
     LEFT JOIN course_versions pv ON pv.course_id = c.id AND pv.status = 'published'
     LEFT JOIN LATERAL (
       SELECT id, version_no, status FROM course_versions
        WHERE course_id = c.id AND status IN ('draft', 'review') ORDER BY version_no DESC LIMIT 1
-    ) wv ON true`;
+    ) wv ON true
+    LEFT JOIN LATERAL (
+      SELECT COALESCE(json_agg(json_build_object('userId', u.id, 'displayName', u.display_name, 'role', cs.staff_role)
+                               ORDER BY (cs.staff_role = 'instructor') DESC, u.display_name), '[]'::json) AS staff
+        FROM course_staff cs JOIN users u ON u.id = cs.user_id
+       WHERE cs.course_id = c.id AND cs.staff_role IN ('instructor', 'course_admin') AND u.status = 'active'
+    ) st ON true`;
 
 function toCourse(r: CourseRow): CourseDto {
   return {
@@ -71,6 +79,7 @@ function toCourse(r: CourseRow): CourseDto {
     createdAt: r.created_at.toISOString(),
     publishedVersion: r.pv_id ? { id: r.pv_id, versionNo: r.pv_no! } : null,
     workingVersion: r.wv_id ? { id: r.wv_id, versionNo: r.wv_no!, status: r.wv_status! } : null,
+    staff: r.staff,
   };
 }
 

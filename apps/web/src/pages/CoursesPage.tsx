@@ -58,6 +58,7 @@ export function CoursesPage() {
               <tr>
                 <th>代碼</th>
                 <th>名稱</th>
+                <th>講師</th>
                 {multiOrg && <th>組織</th>}
                 <th>狀態</th>
                 <th>已發布版本</th>
@@ -72,6 +73,9 @@ export function CoursesPage() {
                   </td>
                   <td>
                     <Link to={`/app/courses/${c.id}`}>{c.title}</Link>
+                  </td>
+                  <td>
+                    <StaffCell staff={c.staff} />
                   </td>
                   {multiOrg && <td className="muted small">{orgName(c.organizationId)}</td>}
                   <td>
@@ -96,6 +100,24 @@ export function CoursesPage() {
           </button>
         )}
       </section>
+    </>
+  );
+}
+
+/** 講師姓名；尚未指派講師時醒目標示，管理員不必逐一點進課程查看 */
+function StaffCell({ staff }: { staff: CourseDto['staff'] }) {
+  const names = (role: CourseDto['staff'][number]['role']) =>
+    staff
+      .filter((s) => s.role === role)
+      .map((s) => s.displayName)
+      .join('、');
+  const instructors = names('instructor');
+  if (instructors) return <>{instructors}</>;
+  const admins = names('course_admin');
+  return (
+    <>
+      <span className="badge badge-grace">未指派</span>
+      {admins && <div className="muted small">課程管理員：{admins}</div>}
     </>
   );
 }

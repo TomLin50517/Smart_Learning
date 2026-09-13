@@ -2167,6 +2167,7 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 課程列表 | `grantScopes(grants, 'course.read')`：platform → 全部；組織範圍 → 該組織；課程範圍 → 被指派的課程。self 授權不擴大列表（學員的課程目錄另有端點）。依 code 排序、keyset 分頁；OpenAPI 的 `sort` 參數目前不支援 |
 | 建立課程 | 建於 session 的 active organization（organization scope 未指定參數時取 active org）。代碼選填（v1.14）：省略時依組織自動編號 `C-0001` 起（取現有 `C-####` 最大值 + 1，手動用了同格式也會接續）；手動代碼重複回 `code_in_use`，`params.title` 帶出使用中的課程名稱。兩條路徑都先鎖定組織列（`FOR NO KEY UPDATE`），並行建立不會撞號 |
 | 課程列表篩選（v1.14） | `organizationId` 參數只列該組織的課程，仍受 course.read 範圍限制；供成員頁指定講師時的課程選單 |
+| 課程列表的講師（v1.14） | `CourseDto.staff`：以 LATERAL 子查詢從 `course_staff` 帶出**啟用中**的講師／課程管理員（講師在前；停用帳號不列，免得看起來已有講師）。列表的「講師」欄直接顯示，未指派時標示「未指派」 |
 | `PATCH /courses/{id}` | 只做封存（權限 course.archive、稽核 course.archived）。課程名稱／說明編輯需另立權限碼，屬後續項目；版本名稱於版本內維護 |
 | 一次一個編輯中版本 | create 與 clone 前檢查同課程是否已有 draft／review，有則 400 `draft_exists`——避免兩份草稿各自發布而互相覆蓋。課程列以 `FOR UPDATE` 鎖定，並行建立也只有一個成功 |
 | 草稿編輯 | 應用層以 `FOR UPDATE` 鎖定版本並確認 `status = 'draft'`，否則 409 `COURSE_VERSION_IMMUTABLE`（DB 觸發器為第二層）。`modules` 整組取代：刪除本版全部 module（lesson／activity／先修條件 CASCADE）後依輸入重建，以 `jsonb_to_recordset` 每表一次寫入。草稿沒有選課或作答，重建不影響學習資料 |

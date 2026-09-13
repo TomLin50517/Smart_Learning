@@ -108,6 +108,8 @@ export interface CourseDto {
   publishedVersion: { id: string; versionNo: number } | null;
   /** 編輯中的版本（draft／review；同一課程同時至多一個） */
   workingVersion: { id: string; versionNo: number; status: CourseVersionStatus } | null;
+  /** 啟用中的課程人員，講師在前（列表的「講師」欄；完整名冊見 GET /courses/{id}/staff） */
+  staff: { userId: string; displayName: string; role: CourseStaffRole }[];
 }
 
 export interface CourseDetailDto extends CourseDto {

@@ -1073,6 +1073,7 @@ paths:
       description: |
         依 course.read 的授權範圍過濾：平台全部／組織內全部／被指派的課程（self 授權不擴大列表；
         學員的課程目錄另有端點）。依 code 排序、keyset 分頁，回 `{ data: CourseDto[], meta: { next_cursor } }`。
+        每門課附 `staff`（啟用中的講師／課程管理員，講師在前），列表的「講師」欄不必逐一查詢。
         `sort` 參數目前不支援（SD §6.5）。
       parameters:
         - name: organizationId
