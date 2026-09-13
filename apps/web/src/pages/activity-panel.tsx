@@ -4,10 +4,12 @@ import type {
   ChoiceQuizConfig,
   OutlineActivityDto,
 } from '@iac/contracts';
-import { useState } from 'react';
+import { VIDEO_SAMPLE_SEC } from '@iac/contracts';
+import { useRef, useState } from 'react';
 import { api } from '../api/client';
 import { ErrorAlert, Notice } from '../components/ui';
 import { ACTIVITY_STATE_LABELS, ACTIVITY_TYPE_LABELS, RESULT_STATUS_BADGE, RESULT_STATUS_LABELS } from '../format';
+import { useLearningEvents, WatchTracker, type EventQueue } from '../learn-events';
 import { issueText, seededShuffle } from '../learn-lib';
 
 type Obj = Record<string, unknown>;
@@ -34,6 +36,8 @@ export function ActivityPanel({ activity: a, canLearn, onChanged }: { activity: 
   const [result, setResult] = useState<{ r: ActivityResultDto; labels: Record<string, string> } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  // 作答進行中：heartbeat 與影片事件（SD §6.13）
+  const queue = useLearningEvents(runtime && attemptId ? attemptId : null);
 
   const attemptsLeft = a.maxAttempts === null || a.attempts < a.maxAttempts;
   const done = a.state === 'completed';
@@ -59,6 +63,8 @@ export function ActivityPanel({ activity: a, canLearn, onChanged }: { activity: 
     setBusy(true);
     setError(null);
     try {
+      // 先送出尚未送出的學習事件——影片的觀看比例由伺服器依事件計算
+      await queue?.flush();
       const r = await api<ActivityResultDto>('POST', `/api/attempts/${attemptId}/submit`, { input });
       setResult({ r, labels: targetLabels(runtime) });
       setRuntime(null);
@@ -90,6 +96,7 @@ export function ActivityPanel({ activity: a, canLearn, onChanged }: { activity: 
           </>
         )}
         已作答 {a.attempts} 次{a.maxAttempts !== null && `，上限 ${a.maxAttempts} 次`}
+        {a.watchedRatio !== null && a.watchedRatio > 0 && `・已觀看 ${Math.round(a.watchedRatio * 100)}%`}
       </p>
 
       <ErrorAlert error={error} />
@@ -100,7 +107,7 @@ export function ActivityPanel({ activity: a, canLearn, onChanged }: { activity: 
       ) : !a.supported ? (
         <Notice kind="info">這種活動類型的作答介面尚未開放。</Notice>
       ) : !canLearn ? null : runtime && attemptId ? (
-        <ActivityInput runtime={runtime} attemptId={attemptId} busy={busy} onSubmit={(input) => void submit(input)} />
+        <ActivityInput runtime={runtime} attemptId={attemptId} queue={queue} busy={busy} onSubmit={(input) => void submit(input)} />
       ) : attemptsLeft ? (
         <button type="button" className="btn btn-primary" onClick={() => void start()} disabled={busy}>
           {busy ? '載入中…' : a.state === 'in_progress' ? '繼續作答' : a.attempts > 0 || result ? '再做一次' : '開始'}
@@ -142,7 +149,7 @@ function ResultView({ result: r, labels }: { result: ActivityResultDto; labels: 
 }
 
 /** 依 componentType 選擇作答介面；未知的類型不提供作答 */
-function ActivityInput(props: { runtime: ActivityRuntimeDto; attemptId: string; busy: boolean; onSubmit(input: unknown): void }) {
+function ActivityInput(props: { runtime: ActivityRuntimeDto; attemptId: string; queue: EventQueue | null; busy: boolean; onSubmit(input: unknown): void }) {
   const { runtime: rt } = props;
   const instructions = typeof rt.config['instructions'] === 'string' ? rt.config['instructions'] : null;
   const body = (() => {
@@ -154,14 +161,7 @@ function ActivityInput(props: { runtime: ActivityRuntimeDto; attemptId: string; 
           </button>
         );
       case 'builtin.video':
-        return (
-          <>
-            <Notice kind="info">影片播放器將於素材管理上線後提供；目前請依老師提供的方式觀看，看完後按下方按鈕。</Notice>
-            <button type="button" className="btn btn-primary" disabled={props.busy} onClick={() => props.onSubmit({ watchedRatio: 1 })}>
-              我已看完影片
-            </button>
-          </>
-        );
+        return <VideoInput config={rt.config} queue={props.queue} busy={props.busy} onSubmit={props.onSubmit} />;
       case 'builtin.quiz':
         return <QuizInput config={rt.config as unknown as ChoiceQuizConfig} busy={props.busy} onSubmit={props.onSubmit} />;
       case 'native.ParameterControl':
@@ -178,6 +178,86 @@ function ActivityInput(props: { runtime: ActivityRuntimeDto; attemptId: string; 
       {instructions && <p>{instructions}</p>}
       {body}
     </div>
+  );
+}
+
+const round1 = (n: number) => Math.round(n * 10) / 10;
+const pct = (r: number) => `${Math.round(r * 100)}%`;
+
+/**
+ * 影片（SD §6.13）：config.video_url 為 http(s) 網址時以播放器觀看，只有連續播放的片段算看過（拖曳跳過不算）；
+ * 觀看區間每 15 秒或每 10% 以 video.progressed 回報，完成與否由伺服器依事件判定。
+ * 沒有網址（請學員依老師指示在別處觀看）時維持「我已看完影片」的自行確認。
+ */
+function VideoInput({ config, queue, busy, onSubmit }: { config: Obj; queue: EventQueue | null; busy: boolean; onSubmit(input: unknown): void }) {
+  const raw = config['video_url'];
+  const url = typeof raw === 'string' && /^https?:\/\/\S+$/i.test(raw) ? raw : null;
+  const required = typeof config['completion_ratio'] === 'number' ? config['completion_ratio'] : 0.9;
+  const tracker = useRef(new WatchTracker());
+  const sent = useRef({ at: 0, ratio: 0, started: false });
+  const [ratio, setRatio] = useState(0);
+
+  if (!url) {
+    return (
+      <>
+        <Notice kind="info">請依老師提供的方式觀看影片，看完後按下方按鈕。</Notice>
+        <button type="button" className="btn btn-primary" disabled={busy} onClick={() => onSubmit({ watchedRatio: 1 })}>
+          我已看完影片
+        </button>
+      </>
+    );
+  }
+
+  const report = (v: HTMLVideoElement, force = false) => {
+    const dur = v.duration;
+    if (!Number.isFinite(dur) || dur <= 0) return;
+    const r = tracker.current.ratio(dur);
+    setRatio(r);
+    const now = Date.now();
+    if (queue && (force || now - sent.current.at >= VIDEO_SAMPLE_SEC * 1000 || r - sent.current.ratio >= 0.1)) {
+      queue.push('video.progressed', { position_sec: round1(Math.min(v.currentTime, dur)), duration_sec: round1(dur), watched_ranges: tracker.current.watched(dur) });
+      sent.current = { ...sent.current, at: now, ratio: r };
+    }
+  };
+
+  return (
+    <>
+      <video
+        className="video-player"
+        controls
+        preload="metadata"
+        src={url}
+        onPlay={(e) => {
+          const dur = e.currentTarget.duration;
+          if (!sent.current.started && queue && Number.isFinite(dur) && dur > 0) {
+            sent.current.started = true;
+            queue.push('video.started', { duration_sec: round1(dur) });
+          }
+        }}
+        onTimeUpdate={(e) => {
+          if (!e.currentTarget.paused) tracker.current.tick(e.currentTarget.currentTime);
+          report(e.currentTarget);
+        }}
+        onSeeking={() => tracker.current.break()}
+        onPause={(e) => {
+          tracker.current.break();
+          report(e.currentTarget, true);
+          void queue?.flush();
+        }}
+        onEnded={(e) => {
+          report(e.currentTarget, true);
+          void queue?.flush();
+        }}
+      >
+        你的瀏覽器無法播放這個影片。
+      </video>
+      <p className="muted small">
+        已觀看 {pct(ratio)}，需達 {pct(required)} 才算完成（拖曳跳過的部分不計入）。
+      </p>
+      <button type="button" className={`btn ${ratio >= required ? 'btn-primary' : ''}`} disabled={busy} onClick={() => onSubmit({})}>
+        {busy ? '送出中…' : ratio >= required ? '完成觀看' : '先送出目前進度'}
+      </button>
+    </>
   );
 }
 

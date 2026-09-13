@@ -10,8 +10,10 @@ import { HomePage } from './pages/HomePage';
 import { JobsPage } from './pages/JobsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { LicensePage } from './pages/LicensePage';
+import { LearnerDetailPage } from './pages/LearnerDetailPage';
 import { LearnPage } from './pages/LearnPage';
 import { MyCoursesPage } from './pages/MyCoursesPage';
+import { MyTimelinePage } from './pages/MyTimelinePage';
 import { OrganizationsPage } from './pages/OrganizationsPage';
 import { OrgMembersPage } from './pages/OrgMembersPage';
 import { ProfilePage } from './pages/ProfilePage';
@@ -37,9 +39,11 @@ export const router = createBrowserRouter([
       // 學員（SD §6.8）
       { path: 'learn', element: <MyCoursesPage /> },
       { path: 'learn/:enrollmentId', element: <LearnPage /> },
+      { path: 'learn/:enrollmentId/timeline', element: <MyTimelinePage /> },
       // 課程（SD §7.1）
       { path: 'courses', element: <CoursesPage /> },
       { path: 'courses/:courseId', element: <CoursePage /> },
+      { path: 'courses/:courseId/learners/:enrollmentId', element: <LearnerDetailPage /> },
       { path: 'courses/:courseId/versions/:versionId/edit', element: <VersionEditorPage /> },
       // Org Admin：目前組織的成員與角色（SD 的 /app/org/roles 併入此頁）
       { path: 'org/users', element: <OrgMembersPage /> },

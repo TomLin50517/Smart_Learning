@@ -1,9 +1,9 @@
-import type { LearnerOutlineDto, LessonBlock, OutlineActivityDto, ProgressDto } from '@iac/contracts';
+import type { LearnerOutlineDto, LearningTimeDto, LessonBlock, OutlineActivityDto, ProgressDto } from '@iac/contracts';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { can } from '../auth/permissions';
 import { useMe } from '../auth/session';
 import { ErrorAlert, Forbidden, Notice, PageHeader, Spinner } from '../components/ui';
-import { ACTIVITY_STATE_ICONS, ENROLLMENT_STATUS_LABELS } from '../format';
+import { ACTIVITY_STATE_ICONS, ENROLLMENT_STATUS_LABELS, formatDateTime, formatMinutes } from '../format';
 import { useApi, useTitle } from '../hooks';
 import { blockingReasonText, parseMarkdownLite } from '../learn-lib';
 import { ActivityPanel } from './activity-panel';
@@ -38,9 +38,14 @@ export function LearnPage() {
       <PageHeader
         title={o.enrollment.courseTitle}
         subtitle={`v${o.enrollment.versionNo}・${ENROLLMENT_STATUS_LABELS[o.enrollment.status]}`}
-        actions={<Link to="/app/learn">← 我的課程</Link>}
+        actions={
+          <>
+            {can(me, 'learning.timeline.read_self') && <Link to={`/app/learn/${enrollmentId}/timeline`}>學習歷程</Link>}
+            <Link to="/app/learn">← 我的課程</Link>
+          </>
+        }
       />
-      <ProgressCard progress={o.progress} titleOf={titleOf} />
+      <ProgressCard progress={o.progress} time={o.time} titleOf={titleOf} />
       {!o.enrollment.canLearn && o.enrollment.status !== 'completed' && (
         <Notice kind="warn">目前的選課狀態（{ENROLLMENT_STATUS_LABELS[o.enrollment.status]}）無法作答，只能瀏覽內容。</Notice>
       )}
@@ -90,7 +95,8 @@ export function LearnPage() {
   );
 }
 
-function ProgressCard({ progress: p, titleOf }: { progress: ProgressDto; titleOf(id: string): string | undefined }) {
+/** 進度卡（學員的學習頁與課程人員的學員詳情頁共用）；time 有給才顯示學習時間 */
+export function ProgressCard({ progress: p, time, titleOf }: { progress: ProgressDto; time?: LearningTimeDto; titleOf(id: string): string | undefined }) {
   const pct = p.requiredTotal ? Math.round((p.requiredCompleted / p.requiredTotal) * 100) : 0;
   return (
     <section className="card">
@@ -104,6 +110,12 @@ function ProgressCard({ progress: p, titleOf }: { progress: ProgressDto; titleOf
       <div className="progress-bar" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
         <span style={{ width: `${pct}%` }} />
       </div>
+      {time && (
+        <p className="muted small">
+          學習時間 {formatMinutes(time.minutes)}
+          {time.lastActivityAt && `・最後學習 ${formatDateTime(time.lastActivityAt)}`}
+        </p>
+      )}
       {!p.completed && p.blockingReasons.length > 0 && (
         <details>
           <summary className="small">還差什麼？</summary>

@@ -1,10 +1,11 @@
 import { ENROLLMENT_STATUSES, type CourseDetailDto, type CourseLearnerDto, type EnrollmentStatus } from '@iac/contracts';
 import { useState, type FormEvent } from 'react';
+import { Link } from 'react-router';
 import { api } from '../api/client';
 import { can } from '../auth/permissions';
 import { useMe } from '../auth/session';
 import { ErrorAlert, Field, Notice } from '../components/ui';
-import { ENROLLMENT_STATUS_BADGE, ENROLLMENT_STATUS_LABELS, formatDate } from '../format';
+import { ENROLLMENT_STATUS_BADGE, ENROLLMENT_STATUS_LABELS, formatDate, formatDateTime } from '../format';
 import { useApi } from '../hooks';
 import { BulkImportCard } from './bulk-import';
 
@@ -112,6 +113,8 @@ export function LearnersPanel({ course }: { course: CourseDetailDto }) {
             <tr>
               <th>學員</th>
               <th>狀態</th>
+              <th>進度</th>
+              <th>最後學習</th>
               <th>版本</th>
               <th>加入</th>
               <th>期限</th>
@@ -123,7 +126,7 @@ export function LearnersPanel({ course }: { course: CourseDetailDto }) {
               <tr key={l.id}>
                 <td>
                   <div>
-                    {l.displayName}
+                    <Link to={`/app/courses/${course.id}/learners/${l.id}`}>{l.displayName}</Link>
                     {l.memberDisabled && <span className="badge badge-blocked"> 成員已停用</span>}
                   </div>
                   <div className="muted small">{l.email}</div>
@@ -131,6 +134,17 @@ export function LearnersPanel({ course }: { course: CourseDetailDto }) {
                 <td>
                   <span className={`badge ${ENROLLMENT_STATUS_BADGE[l.status]}`}>{ENROLLMENT_STATUS_LABELS[l.status]}</span>
                 </td>
+                <td>
+                  {l.progress ? (
+                    <>
+                      {l.progress.requiredCompleted}／{l.progress.requiredTotal}
+                      {l.progress.weightedScore !== null && <div className="muted small">{l.progress.weightedScore} 分</div>}
+                    </>
+                  ) : (
+                    <span className="muted">—</span>
+                  )}
+                </td>
+                <td className="small">{formatDateTime(l.lastActivityAt)}</td>
                 <td>v{l.versionNo}</td>
                 <td>{formatDate(l.enrolledAt)}</td>
                 <td>{formatDate(l.dueDate)}</td>

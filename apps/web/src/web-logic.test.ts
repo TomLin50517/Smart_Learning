@@ -9,8 +9,79 @@ import { ApiError, describeError, ERROR_MESSAGES, humanizeRulePath, humanizeStru
 import { can, navItems } from './auth/permissions';
 import { safeNext } from './auth/redirect';
 import { passwordProblem } from './auth/password';
-import { blockingReasonText, issueText, parseMarkdownLite, seededShuffle } from './learn-lib';
+import { blockingReasonText, issueText, parseMarkdownLite, seededShuffle, timelineText } from './learn-lib';
 import { csvTemplate, parseCsv, toLearnerRows, toMemberRows } from './csv';
+import { formatMinutes } from './format';
+import { EventQueue, mergeRanges, WatchTracker } from './learn-events';
+
+describe('learning events (learner side)', () => {
+  it('counts only continuous playback; skipping ahead and re-watching add nothing', () => {
+    const t = new WatchTracker();
+    for (let s = 0; s <= 30; s += 0.25) t.tick(s);
+    t.tick(80); // 拖曳到 80 秒
+    for (let s = 80; s <= 90; s += 0.5) t.tick(s);
+    expect(t.watched(100)).toEqual([
+      [0, 30],
+      [80, 90],
+    ]);
+    expect(t.ratio(100)).toBe(0.4);
+    t.break(); // 暫停後從 10 秒重看
+    t.tick(10);
+    t.tick(11);
+    expect(t.ratio(100)).toBe(0.4);
+    expect(t.ratio(0)).toBe(0);
+  });
+
+  it('merges ranges the same way as the server', () => {
+    expect(
+      mergeRanges([
+        [10, 20],
+        [0, 5],
+        [4, 8],
+        [-1, 3],
+      ]),
+    ).toEqual([
+      [0, 8],
+      [10, 20],
+    ]);
+  });
+
+  it('batches events; keeps them on a network error, drops them on 429 so learning never blocks', async () => {
+    const sent: number[] = [];
+    let fail: ApiError | null = new ApiError(0, 'NETWORK_ERROR', 'x', null);
+    const q = new EventQueue('attempt-1', async (_id, events) => {
+      if (fail) throw fail;
+      sent.push(events.length);
+    });
+    for (let i = 0; i < 60; i++) q.push('activity.heartbeat');
+    await q.flush();
+    expect(q.size).toBe(60);
+    fail = null;
+    await q.flush();
+    expect(sent).toEqual([50, 10]);
+    fail = new ApiError(429, 'RATE_LIMITED', 'x', null);
+    q.push('activity.heartbeat');
+    await q.flush();
+    expect(q.size).toBe(0);
+  });
+
+  it('describes timeline items and learning time in plain Chinese', () => {
+    const item = (eventType: string, details: Record<string, string | number | null> = {}, activityTitle: string | null = '小考') => ({
+      id: 'x',
+      eventType,
+      occurredAt: '2026-09-13T00:00:00Z',
+      activityId: null,
+      activityTitle,
+      attemptId: null,
+      details,
+    });
+    expect(timelineText(item('activity.result_ready', { status: 'passed', score: 8, maxScore: 10 }))).toBe('「小考」評分：通過（8／10 分）');
+    expect(timelineText(item('activity.retry_started', { attemptNo: 2 }))).toBe('重新作答「小考」（第 2 次）');
+    expect(timelineText(item('course.enrolled', { method: 'bulk_import' }, null))).toBe('加入課程（批次匯入）');
+    expect(timelineText(item('something.new'))).toBe('something.new');
+    expect([0, 0.4, 59.9, 120, 125].map(formatMinutes)).toEqual(['0 分鐘', '不到 1 分鐘', '59 分鐘', '2 小時', '2 小時 5 分鐘']);
+  });
+});
 
 describe('bulk import CSV', () => {
   it('parses Excel CSV (BOM, CRLF, quotes, embedded commas) and pasted tab-separated text', () => {

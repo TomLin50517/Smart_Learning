@@ -281,6 +281,21 @@ export const CHOICE_QUIZ_CONFIG_SCHEMA = {
   },
 } as const;
 
+/**
+ * 影片（無互動元件）的 config schema（發布前 C5；SD §6.13）。
+ * json-schema-lite 不支援 pattern——網址必須是 http(s) 由發布檢查另行確認。
+ */
+export const VIDEO_CONFIG_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    instructions: { type: 'string' },
+    video_url: { type: 'string', minLength: 8, maxLength: 2000 },
+    duration_sec: { type: 'number', minimum: 1, maximum: 86400 },
+    completion_ratio: { type: 'number', minimum: 0.1, maximum: 1 },
+  },
+} as const;
+
 export const CHOICE_QUIZ_ANSWER_KEY_SCHEMA = {
   type: 'object',
   additionalProperties: false,
