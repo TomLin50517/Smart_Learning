@@ -11,7 +11,8 @@ interface SessionValue {
   /** 上一次 session 如何結束：主動登出不帶 ?next=，逾時則提示並帶回原頁 */
   endedBy: 'logout' | 'expired' | null;
   reload(): Promise<void>;
-  login(email: string, password: string): Promise<void>;
+  /** organizationId：從組織登入網址登入時，登入後切換到該組織（不是成員就維持原本的組織） */
+  login(email: string, password: string, organizationId?: string): Promise<void>;
   logout(): Promise<void>;
 }
 
@@ -48,8 +49,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = useCallback(
-    async (email: string, password: string) => {
+    async (email: string, password: string, organizationId?: string) => {
       await api('POST', '/api/auth/login', { email, password }, { quiet401: true });
+      if (organizationId) {
+        try {
+          await api('PUT', '/api/me/active-organization', { organizationId }, { quiet401: true });
+        } catch {
+          // 不是該組織的成員：維持伺服器選定的組織
+        }
+      }
       setEndedBy(null);
       await reload();
     },

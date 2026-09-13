@@ -2344,6 +2344,21 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 老師看到什麼 | 課程學員名單多「班級」欄（選課時的快照）與學號（在 email 旁）；可依班級篩選（`cohort`，選項來自 `meta.cohorts`）、依姓名／email／學號搜尋（`q`）。學員詳情頁標題顯示學號與班級 |
 | 前端 | 側欄「班級管理」（`/app/org/cohorts`：新增、修改、封存／恢復，人數連到成員管理的篩選）；成員管理多「學號／班級」欄、依班級篩選、「學號／班級」編輯；批次匯入範本多兩欄；課程學員卡的「整班加入」 |
 
+## 6.16 組織品牌（Phase 2-6，v1.26）
+
+實作：`packages/contracts/src/branding.ts`（預設配色、對比度、解析，API 與前端共用）、`organization/application/branding.service.ts`、`organization/api/branding.controller.ts`、`common/image-sniff.ts`、`apps/web/src/{branding.ts,pages/BrandingPage.tsx}`、`migrations/0020_branding.sql`。使用者需求：每個組織都要有自己的平台外觀（登入畫面 Logo、平台名稱、配色）。
+
+| 項目 | 實作 |
+|---|---|
+| 組織登入網址 | `/o/{組織代碼}`：以 `GET /api/branding/{code}`（不需登入、只限啟用中的組織）取得組織名稱、平台名稱、配色、Logo，顯示組織的登入畫面；登入後切換到該組織（不是成員就維持原組織）。瀏覽器記住最後使用的組織代碼，登出與逾時後回到該組織的登入畫面。之後可再接各組織的自訂網域 |
+| 平台名稱 | 平台預設「互動學習平台」；組織可覆寫（60 字內），顯示在登入畫面、頂端列、瀏覽器分頁標題 |
+| 配色 | 八組預設（學院藍、深海藍、青綠、森林綠、酒紅、紫羅蘭、暖橘、石墨灰）：淺色主色與白字對比度皆 ≥ 4.5，另有深色模式版本；**儲存配色名稱**，之後微調色號所有組織自動套用。進階「自訂主色」：與白字對比度須 ≥ 4.5（`color_contrast_too_low`），深色版本自動推算（與白色混合 45%）。組織只能選配色／Logo／名稱，不能改版面風格 |
+| Logo 與小圖示 | Logo（橫式；頂端列最高 32px、登入畫面最高 64px，寬度自動）與小圖示（方形，瀏覽器分頁）。以檔頭判斷格式、只收 PNG／JPEG／WebP、512 KB 以內——**不收 SVG**（可夾帶程式碼）。存於 `organization_assets`（小檔案不需素材系統）；公開端點 `GET /api/branding/{code}/{kind}` 以儲存時判斷的型別回傳，nosniff、`CSP: default-src 'none'`、快取一天、網址帶內容雜湊（換圖後快取自然失效）。深色模式下 Logo 放在白色底上 |
+| 權限 | 設定：org.settings.write＋configurationWriteAllowed（組織管理員設定自己的組織；migration 0020 讓平台管理員也能設定任何組織）；讀取：org.read。稽核 org.branding.updated。`PATCH /organizations/{id}` 只改名稱，不再接受 branding；舊的 primaryColor 由 migration 轉為自訂主色 |
+| 限流 | 公開品牌端點放在 `/api/branding` 而非 `/public/`：nginx 的 `/public/` 限流（每 IP 30 次／分）對共用對外 IP 的學校太緊；改由 API 每 IP 每分鐘 300（品牌）／600（圖檔）次，圖檔另由瀏覽器快取 |
+| 設計變數 | styles.css 集中定義圓角（xs／sm／預設／md／lg／pill）與字體（sans／mono），全檔改用變數——之後的視覺設計只需調整變數值。主色以 `[data-brand]` 元素上的 `--org-brand`／`--org-brand-dark` 覆寫 |
+| 前端 | 側欄「品牌設定」（組織管理員）與組織管理的「品牌」連結（平台管理員）：登入網址（複製）、平台名稱、配色色票與自訂主色（即時顯示對比度）、預覽（頂端列、按鈕、徽章、連結）、Logo／小圖示上傳（淺色與深色背景預覽） |
+
 ---
 
 # 7. Frontend 設計
@@ -4337,3 +4352,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.23 | 2026-09-13 | Phase 2-3b 學習畫面：新增 §6.13（HTML5 影片播放器與連續播放判定、heartbeat 與事件佇列的失敗處理、學員學習歷程頁、教師學員詳情頁、學員名單新欄位、編輯器影片欄位、影片 config 的 C5 檢查與網址限制） | Software Designer |
 | v1.24 | 2026-09-13 | Phase 2-4 人工核可與證書：新增 §6.14（核可人須擔任條件指定角色、完成後同交易排入發證、worker 發證與冪等、網頁版證書（伺服器端 PDF 延後）、查詢與撤銷、公開驗證、新版本提示） | Software Designer |
 | v1.25 | 2026-09-14 | Phase 2-5 班級與學號：新增 §6.15（member_profiles／cohorts／cohort_members、每年更新流程、批次匯入更新既有成員、整班加入、選課時的班級快照、老師的篩選與搜尋）；migration 0019 | Software Designer |
+| v1.26 | 2026-09-14 | Phase 2-6 組織品牌：新增 §6.16（組織登入網址 /o/{code}、平台名稱、八組預設配色與自訂主色的對比度檢查、Logo／小圖示的格式與安全、公開端點與限流、設計變數）；migration 0020 | Software Designer |

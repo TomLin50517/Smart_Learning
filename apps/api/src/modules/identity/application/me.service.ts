@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import type { MeResponse, ScopeType } from '@iac/contracts';
+import { resolveBranding, type MeResponse, type ScopeType } from '@iac/contracts';
 import pg from 'pg';
 import type { AuthUser } from '../../../common/context.js';
 import { DB_API } from '../../../common/database.module.js';
@@ -17,8 +17,10 @@ export class MeService {
   async build(user: AuthUser): Promise<MeResponse> {
     const [grants, orgs, evaluation] = await Promise.all([
       this.grants.load(user.id),
-      this.db.query<{ id: string; name: string; branding: Record<string, unknown> }>(
-        `SELECT DISTINCT o.id, o.name, o.branding
+      this.db.query<{ id: string; code: string; name: string; branding: Record<string, unknown>; logo_sha: string | null; icon_sha: string | null }>(
+        `SELECT DISTINCT o.id, o.code, o.name, o.branding,
+                (SELECT a.sha256 FROM organization_assets a WHERE a.organization_id = o.id AND a.kind = 'logo') AS logo_sha,
+                (SELECT a.sha256 FROM organization_assets a WHERE a.organization_id = o.id AND a.kind = 'icon') AS icon_sha
            FROM user_org_roles uor
            JOIN organizations o ON o.id = uor.organization_id
           WHERE uor.user_id = $1 AND o.status = 'active'
@@ -37,7 +39,9 @@ export class MeService {
 
     return {
       user: { id: user.id, email: user.email, displayName: user.displayName, locale: user.locale },
-      activeOrganization: active ? { id: active.id, name: active.name, branding: active.branding } : null,
+      activeOrganization: active
+        ? { id: active.id, code: active.code, name: active.name, branding: resolveBranding({ code: active.code, branding: active.branding, logoSha: active.logo_sha, iconSha: active.icon_sha }) }
+        : null,
       organizations: orgs.rows.map((o) => ({ id: o.id, name: o.name })),
       permissions: [...new Set(grants.map((g) => g.permission))].sort(),
       scopes: [...scopeKeys.values()],

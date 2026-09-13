@@ -1,3 +1,4 @@
+import type { ResolvedBrandingDto } from './branding.js';
 import type { LicenseCapabilities } from './license.js';
 
 /** SA §6.1：platform ⊃ organization ⊃ course；self 為非傳遞例外（ADR-016） */
@@ -13,7 +14,8 @@ export interface ScopeGrant {
 /** GET /api/me（openapi.yaml#/components/schemas/MeResponse） */
 export interface MeResponse {
   user: { id: string; email: string; displayName: string; locale: string };
-  activeOrganization: { id: string; name: string; branding: Record<string, unknown> } | null;
+  /** branding：已解析的品牌（平台名稱、配色、Logo 網址；SD §6.16） */
+  activeOrganization: { id: string; code: string; name: string; branding: ResolvedBrandingDto } | null;
   organizations: { id: string; name: string }[];
   permissions: string[];
   scopes: { type: ScopeType; id: string | null }[];

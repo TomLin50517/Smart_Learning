@@ -250,6 +250,7 @@ const ACTION_LABELS: Record<string, string> = {
   'org.cohort.updated': '修改班級',
   'org.cohort.archived': '封存班級',
   'org.cohort.restored': '恢復班級',
+  'org.branding.updated': '更新品牌設定',
   'coach.transcript.read': '檢視 Coach 對話',
   'coach.transcript_policy.updated': '變更對話可見性政策',
   'license.activated': '啟用授權',
@@ -281,8 +282,3 @@ export function formatMinutes(min: number): string {
   return m < 60 ? `${m} 分鐘` : `${Math.floor(m / 60)} 小時${m % 60 ? ` ${m % 60} 分鐘` : ''}`;
 }
 
-/** 組織品牌色只接受 #rrggbb（伺服器端亦同） */
-export function brandColor(branding: Record<string, unknown> | undefined): string | null {
-  const c = branding?.['primaryColor'];
-  return typeof c === 'string' && /^#[0-9a-fA-F]{6}$/.test(c) ? c : null;
-}
