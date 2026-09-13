@@ -10,6 +10,7 @@ import { HomePage } from './pages/HomePage';
 import { JobsPage } from './pages/JobsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { LicensePage } from './pages/LicensePage';
+import { MyCoursesPage } from './pages/MyCoursesPage';
 import { OrganizationsPage } from './pages/OrganizationsPage';
 import { OrgMembersPage } from './pages/OrgMembersPage';
 import { ProfilePage } from './pages/ProfilePage';
@@ -32,6 +33,8 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <HomePage /> },
       { path: 'profile', element: <ProfilePage /> },
+      // 學員（SD §6.8）
+      { path: 'learn', element: <MyCoursesPage /> },
       // 課程（SD §7.1）
       { path: 'courses', element: <CoursesPage /> },
       { path: 'courses/:courseId', element: <CoursePage /> },

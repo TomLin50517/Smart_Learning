@@ -6,6 +6,8 @@ import type {
   CoachLanguage,
   CoachResponseMode,
   CoachToneProfile,
+  EnrollmentStatus,
+  EnrollMethod,
   RuleConditionType,
   RuleOperator,
   CourseStatus,
@@ -52,6 +54,33 @@ export const NAVIGATION_MODE_LABELS: Record<NavigationMode, string> = {
   prerequisite: '依先修條件：只套用各活動設定的先修條件',
   free: '自由：不限順序',
   mixed: '單元依序、單元內自由（預設）',
+};
+
+export const ENROLLMENT_STATUS_LABELS: Record<EnrollmentStatus, string> = {
+  pending: '待審核',
+  active: '學習中',
+  suspended: '已暫停',
+  completed: '已完成',
+  reopened: '重新開啟',
+  withdrawn: '已退課',
+  rejected: '未通過審核',
+};
+
+export const ENROLLMENT_STATUS_BADGE: Record<EnrollmentStatus, string> = {
+  pending: 'badge-grace',
+  active: 'badge-active',
+  suspended: 'badge-grace',
+  completed: 'badge-active',
+  reopened: 'badge-active',
+  withdrawn: '',
+  rejected: 'badge-blocked',
+};
+
+export const ENROLL_METHOD_LABELS: Record<EnrollMethod, string> = {
+  assign: '指派',
+  self: '自行加入',
+  code: '選課碼',
+  approval: '審核通過',
 };
 
 export const RULE_OPERATOR_LABELS: Record<RuleOperator, string> = {
@@ -155,6 +184,10 @@ const ACTION_LABELS: Record<string, string> = {
   'course.version.updated': '編輯課程版本',
   'course.version.cloned': '複製課程版本',
   'course.version.published': '發布課程版本',
+  'enrollment.assigned': '指派學員入課',
+  'enrollment.withdrawn': '退課',
+  'enrollment.suspended': '暫停選課',
+  'enrollment.resumed': '恢復選課',
   'course.completion_rule.updated': '更新完成條件',
   'course.coach_policy.updated': '更新 AI 教練設定',
   'org.role.assigned': '指派角色',

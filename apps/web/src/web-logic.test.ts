@@ -117,6 +117,10 @@ describe('navigation by permission (display only — the server enforces access)
     expect(labels(['coach.interact_self'])).toEqual(['首頁']);
   });
 
+  it('learners with learning.result.read_self see "我的課程"', () => {
+    expect(labels(['learning.result.read_self'])).toEqual(['首頁', '我的課程']);
+  });
+
   it('an org admin sees the members of their active organization', () => {
     const items = navItems({ ...base, permissions: ['org.read', 'org.user.read', 'org.user.write'] });
     expect(items.map((n) => [n.label, n.to])).toEqual([

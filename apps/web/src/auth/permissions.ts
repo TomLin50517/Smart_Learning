@@ -20,6 +20,7 @@ export interface NavItem {
 /** 側邊導航（SD §7.1 路由表） */
 export function navItems(me: MeResponse): NavItem[] {
   const items: NavItem[] = [{ to: HOME, label: '首頁', end: true }];
+  if (can(me, 'learning.result.read_self')) items.push({ to: '/app/learn', label: '我的課程' });
   if (me.activeOrganization && can(me, 'org.user.read')) {
     items.push({ to: '/app/org/users', label: '成員管理' });
   }
