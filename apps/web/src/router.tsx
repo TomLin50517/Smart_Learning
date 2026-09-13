@@ -10,7 +10,9 @@ import { HomePage } from './pages/HomePage';
 import { JobsPage } from './pages/JobsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { LicensePage } from './pages/LicensePage';
+import { MyCertificatePage, MyCertificatesPage } from './pages/CertificatesPage';
 import { LearnerDetailPage } from './pages/LearnerDetailPage';
+import { VerifyPage } from './pages/VerifyPage';
 import { LearnPage } from './pages/LearnPage';
 import { MyCoursesPage } from './pages/MyCoursesPage';
 import { MyTimelinePage } from './pages/MyTimelinePage';
@@ -29,6 +31,8 @@ export const router = createBrowserRouter([
   { path: '/forgot-password', element: <ForgotPasswordPage />, errorElement: <RouteError /> },
   { path: '/password-reset', element: <SetPasswordPage mode="reset" />, errorElement: <RouteError /> },
   { path: '/set-password', element: <SetPasswordPage mode="invite" />, errorElement: <RouteError /> },
+  // 公開證書查驗（不需登入；UC-CRT-005）
+  { path: '/verify/:code', element: <VerifyPage />, errorElement: <RouteError /> },
   {
     path: '/app',
     element: <RequireAuth />,
@@ -40,6 +44,8 @@ export const router = createBrowserRouter([
       { path: 'learn', element: <MyCoursesPage /> },
       { path: 'learn/:enrollmentId', element: <LearnPage /> },
       { path: 'learn/:enrollmentId/timeline', element: <MyTimelinePage /> },
+      { path: 'certificates', element: <MyCertificatesPage /> },
+      { path: 'certificates/:certificateId', element: <MyCertificatePage /> },
       // 課程（SD §7.1）
       { path: 'courses', element: <CoursesPage /> },
       { path: 'courses/:courseId', element: <CoursePage /> },

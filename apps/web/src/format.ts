@@ -2,6 +2,7 @@ import type {
   ActivityType,
   AttemptStatusTarget,
   CapabilityName,
+  CertificateStatus,
   CoachKnowledgeScope,
   CoachLanguage,
   CoachResponseMode,
@@ -197,6 +198,22 @@ export const ROLE_LABELS: Record<OrgRole, string> = {
   auditor: '稽核人員',
 };
 
+export const CERTIFICATE_STATUS_LABELS: Record<CertificateStatus, string> = {
+  pending: '產生中',
+  valid: '有效',
+  revoked: '已撤銷',
+  expired: '已過期',
+  failed: '產生失敗',
+};
+
+export const CERTIFICATE_STATUS_BADGE: Record<CertificateStatus, string> = {
+  pending: 'badge-grace',
+  valid: 'badge-active',
+  revoked: 'badge-blocked',
+  expired: '',
+  failed: 'badge-blocked',
+};
+
 /** 常見稽核動作的中文名稱（SD §12.2）；未列出者顯示原始代碼 */
 const ACTION_LABELS: Record<string, string> = {
   'auth.login.succeeded': '登入成功',
@@ -221,6 +238,9 @@ const ACTION_LABELS: Record<string, string> = {
   'enrollment.withdrawn': '退課',
   'enrollment.suspended': '暫停選課',
   'enrollment.resumed': '恢復選課',
+  'completion.approved': '核可課程完成',
+  'certificate.issued': '發出證書',
+  'certificate.revoked': '撤銷證書',
   'course.completion_rule.updated': '更新完成條件',
   'course.coach_policy.updated': '更新 AI 教練設定',
   'org.role.assigned': '指派角色',

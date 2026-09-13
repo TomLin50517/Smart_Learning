@@ -1,5 +1,5 @@
 import type { BlockingReason, ResultIssue, ResultStatus, TimelineItemDto } from '@iac/contracts';
-import { RESULT_STATUS_LABELS } from './format';
+import { RESULT_STATUS_LABELS, ROLE_LABELS } from './format';
 
 /**
  * 學習畫面的純邏輯（不需 DOM，可單元測試）：簡易 Markdown、作答順序打亂、完成原因與問題的中文說明。
@@ -154,8 +154,19 @@ export function timelineText(x: TimelineItemDto): string {
       return `完成${act}`;
     case 'video.started':
       return `開始觀看${act}`;
+    case 'completion.approved': {
+      const roles = String(d['approverRoles'] ?? '')
+        .split(',')
+        .filter(Boolean)
+        .map((r) => (ROLE_LABELS as Record<string, string>)[r] ?? r);
+      return `完成條件已由${roles.length ? roles.join('、') : '老師'}核可`;
+    }
     case 'course.completed':
       return '🎉 完成課程';
+    case 'certificate.issued':
+      return '📜 取得結業證書';
+    case 'certificate.revoked':
+      return '證書已被撤銷';
     default:
       return x.eventType;
   }

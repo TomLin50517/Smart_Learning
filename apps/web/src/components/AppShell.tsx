@@ -5,6 +5,7 @@ import { api } from '../api/client';
 import { can, HOME, navItems } from '../auth/permissions';
 import { useSession } from '../auth/session';
 import { brandColor } from '../format';
+import { useNewVersionAvailable } from '../version-check';
 import { Spinner } from './ui';
 
 /** 需登入的版面：未登入導向登入頁（帶 ?next= 以便登入後回到原頁） */
@@ -44,6 +45,7 @@ function AppShell() {
   const { me, logout } = useSession();
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
+  const updateAvailable = useNewVersionAvailable();
   if (!me) return null;
 
   const color = brandColor(me.activeOrganization?.branding);
@@ -83,6 +85,14 @@ function AppShell() {
         ))}
       </nav>
       <main className="content">
+        {updateAvailable && (
+          <div className="alert alert-info banner" role="status">
+            系統已更新到新版本，請重新整理頁面（尚未儲存的內容請先儲存）。{' '}
+            <button type="button" className="btn btn-small" onClick={() => window.location.reload()}>
+              重新整理
+            </button>
+          </div>
+        )}
         <LicenseBanner />
         <Outlet />
       </main>

@@ -101,6 +101,8 @@ const FIELD_LABELS: Record<string, string> = {
   organizationId: '組織',
   coachPolicy: 'AI 教練設定',
   knowledgeBindings: '教材綁定',
+  reason: '原因',
+  note: '備註',
 };
 
 /** 伺服器 details.issue → 文案。未列出的沿用原文（多為 zod 的驗證訊息） */
@@ -145,6 +147,10 @@ const ISSUE_MESSAGES: Record<string, string> = {
   already_enrolled: '已在這門課程中',
   course_not_published: '課程尚未發布，發布後才能加入學員',
   invalid_transition: '目前的選課狀態無法進行此操作',
+  approver_role_required: '只有完成條件指定的核可者可以核可',
+  already_approved: '你已經核可過了',
+  approval_not_required: '這門課的完成條件不需要人工核可',
+  not_revocable: '只有有效的證書可以撤銷',
   // 完成條件驗證（SD §3.6）：伺服器於 params.message 附上具體說明
   RULE_SCHEMA_INVALID: '{message}',
   RULE_DEPTH_EXCEEDED: '{message}',

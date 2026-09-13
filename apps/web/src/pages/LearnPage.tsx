@@ -49,7 +49,11 @@ export function LearnPage() {
       {!o.enrollment.canLearn && o.enrollment.status !== 'completed' && (
         <Notice kind="warn">目前的選課狀態（{ENROLLMENT_STATUS_LABELS[o.enrollment.status]}）無法作答，只能瀏覽內容。</Notice>
       )}
-      {o.enrollment.status === 'completed' && <Notice kind="ok">你已完成這門課程，現在是回顧模式。</Notice>}
+      {o.enrollment.status === 'completed' && (
+        <Notice kind="ok">
+          你已完成這門課程，現在是回顧模式。{can(me, 'certificate.read_self') && <Link to="/app/certificates">查看我的證書</Link>}
+        </Notice>
+      )}
 
       <div className="player">
         <nav className="card outline" aria-label="課程大綱">

@@ -17,6 +17,7 @@ import { useMe } from '../auth/session';
 import { ErrorAlert, Field, Forbidden, Notice, PageHeader, Spinner } from '../components/ui';
 import { COURSE_STATUS_LABELS, formatDateTime, NAVIGATION_MODE_LABELS, ROLE_LABELS, VERSION_STATUS_BADGE, VERSION_STATUS_LABELS } from '../format';
 import { useApi, useTitle } from '../hooks';
+import { CertificatesPanel } from './certificates-panel';
 import { LearnersPanel } from './learners-panel';
 
 /** /app/courses/:courseId：課程總覽、版本清單、課程人員 */
@@ -166,6 +167,7 @@ export function CoursePage() {
 
       {can(me, 'course.staff.assign') && <StaffPanel courseId={c.id} />}
       {can(me, 'learning.result.read_all') && <LearnersPanel course={c} />}
+      {can(me, 'certificate.read_all') && <CertificatesPanel course={c} />}
     </>
   );
 }
