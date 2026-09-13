@@ -1,13 +1,36 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { COURSE_ROLES, type OrgMemberDto, type OrgRole, type OrganizationDto, type RoleSpec } from '@iac/contracts';
+import { COURSE_ROLES, type MemberRoleDto, type OrgMemberDto, type OrgRole, type OrganizationDto, type RoleSpec } from '@iac/contracts';
 import pg from 'pg';
 import { DB_API } from '../../../common/database.module.js';
 import { DomainError } from '../../../common/domain-error.js';
 import { USER_INVITATIONS, type UserInvitations } from '../../identity/identity.contracts.js';
 
 type Tx = pg.PoolClient;
+type Q = pg.Pool | pg.PoolClient;
 
 const invalid = (field: string, issue: string) => new DomainError('VALIDATION_FAILED', `${field}: ${issue}`, [{ field, issue }]);
+
+export interface MemberQuery {
+  cursor?: string | undefined;
+  limit: number;
+  /** 只列出持有此角色的成員（課程角色不分課程） */
+  role?: OrgRole | undefined;
+  /** 姓名或 email 的部分字串，不分大小寫 */
+  q?: string | undefined;
+}
+
+interface RoleRow {
+  role: OrgRole;
+  scope_type: string;
+  scope_id: string | null;
+  course_code: string | null;
+  course_title: string | null;
+}
+
+/** 成員的所有角色；課程角色附課程代碼與名稱（呼叫端須 JOIN roles ro、LEFT JOIN courses c） */
+const ROLE_AGG = `json_agg(json_build_object('role', ro.code, 'scope_type', uor.scope_type, 'scope_id', uor.scope_id,
+                                             'course_code', c.code, 'course_title', c.title)
+                           ORDER BY ro.code, c.code) AS roles`;
 
 /**
  * 組織、成員與角色（SA UC-ORG-001~004）。
@@ -15,7 +38,9 @@ const invalid = (field: string, issue: string) => new DomainError('VALIDATION_FA
  * 角色指派的護欄：
  *  - platform_admin 不可經由組織端點授予（輸入驗證層即排除）
  *  - course_admin / instructor 必須指定「屬於本組織」的課程
- *  - 任何會讓組織失去最後一位 org_admin 的變更都會被拒絕
+ *  - 不能移除自己的 org_admin 角色（須由其他管理員處理，避免誤操作把自己鎖在門外）
+ *  - 任何會讓組織失去最後一位「啟用中」org_admin 的變更都會被拒絕；同一組織的角色變更
+ *    先鎖定組織列排隊進行——兩位管理員同時互相移除時，後到的一方會被擋下
  *  - 新成員一律以邀請信自行設定密碼，管理員永不經手他人密碼
  */
 @Injectable()
@@ -63,7 +88,7 @@ export class OrganizationService {
       org = toOrg(r.rows[0]);
       // 新組織的第一位管理員只能在建立時指定——否則沒有人有權限新增成員（SA 缺口，v1.6）
       if (input.initialAdmin) {
-        admin = await this.addMemberTx(client, org.id, input.initialAdmin.email, input.initialAdmin.displayName, 'org_admin', actorId);
+        admin = await this.addMemberTx(client, org.id, input.initialAdmin.email, input.initialAdmin.displayName, { role: 'org_admin' }, actorId);
       }
       await client.query('COMMIT');
     } catch (e) {
@@ -105,8 +130,11 @@ export class OrganizationService {
     return { organization: toOrg(r.rows[0]), before: { status: before.rows[0].status }, after: { status } };
   }
 
-  async listMembers(orgId: string, cursor: string | undefined, limit: number): Promise<{ data: OrgMemberDto[]; nextCursor: string | null }> {
-    const after = cursor ? Buffer.from(cursor, 'base64url').toString('utf8') : null;
+  /** 依 email 排序的 keyset 分頁；搜尋與角色篩選不影響游標語意 */
+  async listMembers(orgId: string, q: MemberQuery): Promise<{ data: OrgMemberDto[]; nextCursor: string | null }> {
+    const after = q.cursor ? Buffer.from(q.cursor, 'base64url').toString('utf8') : null;
+    // LIKE 萬用字元一律跳脫：搜尋「50%」就是找含「50%」的字串
+    const pattern = q.q ? `%${q.q.replace(/[\\%_]/g, '\\$&')}%` : null;
     const r = await this.db.query<{
       id: string;
       email: string;
@@ -114,21 +142,24 @@ export class OrganizationService {
       status: 'active' | 'disabled';
       last_login_at: Date | null;
       pending: boolean;
-      roles: { role: OrgRole; scope_type: string; scope_id: string | null }[];
+      roles: RoleRow[];
     }>(
-      `SELECT u.id, u.email, u.display_name, u.status, u.last_login_at, u.password_hash IS NULL AS pending,
-              json_agg(json_build_object('role', ro.code, 'scope_type', uor.scope_type, 'scope_id', uor.scope_id)
-                       ORDER BY ro.code) AS roles
+      `SELECT u.id, u.email, u.display_name, u.status, u.last_login_at, u.password_hash IS NULL AS pending, ${ROLE_AGG}
          FROM user_org_roles uor
          JOIN users u  ON u.id = uor.user_id
          JOIN roles ro ON ro.id = uor.role_id
+         LEFT JOIN courses c ON uor.scope_type = 'course' AND c.id = uor.scope_id
         WHERE uor.organization_id = $1 AND ($2::citext IS NULL OR u.email > $2::citext)
+          AND ($4::text IS NULL OR u.email::text ILIKE $4 OR u.display_name ILIKE $4)
+          AND ($5::text IS NULL OR EXISTS (
+                SELECT 1 FROM user_org_roles f JOIN roles fr ON fr.id = f.role_id
+                 WHERE f.user_id = u.id AND f.organization_id = $1 AND fr.code = $5))
         GROUP BY u.id
         ORDER BY u.email
         LIMIT $3`,
-      [orgId, after, limit + 1],
+      [orgId, after, q.limit + 1, pattern, q.role ?? null],
     );
-    const page = r.rows.slice(0, limit);
+    const page = r.rows.slice(0, q.limit);
     return {
       data: page.map((m) => ({
         id: m.id,
@@ -137,13 +168,15 @@ export class OrganizationService {
         status: m.status,
         lastLoginAt: m.last_login_at?.toISOString() ?? null,
         pendingInvitation: m.pending,
-        roles: m.roles.map((x) => toSpec(x.role, x.scope_type, x.scope_id)),
+        roles: m.roles.map(toMemberRole),
       })),
-      nextCursor: r.rows.length > limit ? Buffer.from(page[page.length - 1]!.email).toString('base64url') : null,
+      nextCursor: r.rows.length > q.limit ? Buffer.from(page[page.length - 1]!.email).toString('base64url') : null,
     };
   }
 
-  async addMember(orgId: string, input: { email: string; displayName: string; role: OrgRole }, actorId: string) {
+  /** 新增成員；課程角色（講師／課程管理員）可直接指定課程，不必先掛成學員 */
+  async addMember(orgId: string, input: { email: string; displayName: string; role: OrgRole; courseId?: string | undefined }, actorId: string) {
+    const spec: RoleSpec = input.courseId ? { role: input.role, courseId: input.courseId } : { role: input.role };
     const client = await this.db.connect();
     let m: { userId: string; created: boolean };
     let orgName: string;
@@ -151,7 +184,9 @@ export class OrganizationService {
       await client.query('BEGIN');
       const o = await client.query<{ name: string }>(`SELECT name FROM organizations WHERE id = $1`, [orgId]);
       orgName = o.rows[0]!.name;
-      m = await this.addMemberTx(client, orgId, input.email, input.displayName, input.role, actorId);
+      if (spec.courseId) await assertCoursesInOrg(client, orgId, [spec.courseId], 'courseId');
+      m = await this.addMemberTx(client, orgId, input.email, input.displayName, spec, actorId);
+      if (spec.courseId) await syncCourseStaff(client, orgId, m.userId, [spec], actorId);
       await client.query('COMMIT');
     } catch (e) {
       await client.query('ROLLBACK');
@@ -164,40 +199,48 @@ export class OrganizationService {
     return { userId: m.userId, invited: m.created, emailSent };
   }
 
-  /** 以「整組取代」設定使用者在本組織的角色；回傳變更前後供稽核 */
-  async setRoles(orgId: string, userId: string, roles: RoleSpec[], actorId: string): Promise<{ before: RoleSpec[]; after: RoleSpec[] }> {
+  /**
+   * 以「整組取代」設定使用者在本組織的角色。
+   * 回傳 before／after（RoleSpec，供稽核）與 roles（附課程資訊，供畫面更新）。
+   */
+  async setRoles(
+    orgId: string,
+    userId: string,
+    roles: RoleSpec[],
+    actorId: string,
+  ): Promise<{ before: RoleSpec[]; after: RoleSpec[]; roles: MemberRoleDto[] }> {
     const wanted = dedupe(roles);
     const client = await this.db.connect();
     try {
       await client.query('BEGIN');
+      // 同一組織的角色變更排隊進行（與 recoverAdmin 相同的鎖）：兩位管理員同時互相移除時，
+      // 後到的請求會在前者提交後才檢查，看得到「只剩自己」而被 last_org_admin 擋下。
+      // NO KEY UPDATE 不阻擋其他交易插入參照此組織的資料（FK 檢查只需 KEY SHARE）
+      await client.query(`SELECT 1 FROM organizations WHERE id = $1 FOR NO KEY UPDATE`, [orgId]);
       const cur = await client.query<{ role: OrgRole; scope_type: string; scope_id: string | null }>(
         `SELECT ro.code AS role, uor.scope_type, uor.scope_id
            FROM user_org_roles uor JOIN roles ro ON ro.id = uor.role_id
-          WHERE uor.user_id = $1 AND uor.organization_id = $2
-          FOR UPDATE OF uor`,
+          WHERE uor.user_id = $1 AND uor.organization_id = $2`,
         [userId, orgId],
       );
       // 不是本組織成員 → 404（不透露此使用者是否存在於其他組織）
       if (!cur.rowCount) throw new DomainError('NOT_FOUND');
 
-      const courseIds = [...new Set(wanted.filter((r) => r.courseId).map((r) => r.courseId!))];
-      if (courseIds.length) {
-        const ok = await client.query<{ id: string }>(`SELECT id FROM courses WHERE id = ANY($1::uuid[]) AND organization_id = $2`, [
-          courseIds,
-          orgId,
-        ]);
-        if (ok.rowCount !== courseIds.length) throw invalid('roles', 'course_not_in_organization');
-      }
-
       const losingAdmin = cur.rows.some((r) => r.role === 'org_admin') && !wanted.some((r) => r.role === 'org_admin');
       if (losingAdmin) {
+        if (userId === actorId) throw invalid('roles', 'cannot_remove_own_admin');
+        // 只計「啟用中」的其他管理員——停用帳號不能管理組織，不算數（與 ADR-033 的定義一致）
         const others = await client.query<{ n: number }>(
-          `SELECT count(*)::int AS n FROM user_org_roles uor JOIN roles ro ON ro.id = uor.role_id
-            WHERE uor.organization_id = $1 AND ro.code = 'org_admin' AND uor.user_id <> $2`,
+          `SELECT count(*)::int AS n FROM user_org_roles uor
+             JOIN roles ro ON ro.id = uor.role_id JOIN users u ON u.id = uor.user_id
+            WHERE uor.organization_id = $1 AND ro.code = 'org_admin' AND uor.user_id <> $2 AND u.status = 'active'`,
           [orgId, userId],
         );
         if (!others.rows[0]!.n) throw invalid('roles', 'last_org_admin');
       }
+
+      const courseIds = [...new Set(wanted.filter((r) => r.courseId).map((r) => r.courseId!))];
+      await assertCoursesInOrg(client, orgId, courseIds, 'roles');
 
       await client.query(`DELETE FROM user_org_roles WHERE user_id = $1 AND organization_id = $2`, [userId, orgId]);
       for (const spec of wanted) await this.insertGrant(client, orgId, userId, spec, actorId);
@@ -207,15 +250,11 @@ export class OrganizationService {
           WHERE cs.course_id = c.id AND c.organization_id = $2 AND cs.user_id = $1 AND cs.staff_role IN ('instructor', 'course_admin')`,
         [userId, orgId],
       );
-      for (const spec of wanted.filter((r) => r.courseId)) {
-        await client.query(
-          `INSERT INTO course_staff (course_id, user_id, staff_role, assigned_by) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
-          [spec.courseId, userId, spec.role, actorId],
-        );
-      }
+      await syncCourseStaff(client, orgId, userId, wanted, actorId);
+      const after = await memberRoles(client, orgId, userId);
       await client.query('COMMIT');
 
-      return { before: cur.rows.map((r) => toSpec(r.role, r.scope_type, r.scope_id)), after: wanted };
+      return { before: cur.rows.map((r) => toSpec(r.role, r.scope_type, r.scope_id)), after: wanted, roles: after };
     } catch (e) {
       await client.query('ROLLBACK');
       throw e;
@@ -281,7 +320,7 @@ export class OrganizationService {
     return { userId, invited: created, emailSent };
   }
 
-  private async addMemberTx(tx: Tx, orgId: string, email: string, displayName: string, role: OrgRole, actorId: string) {
+  private async addMemberTx(tx: Tx, orgId: string, email: string, displayName: string, spec: RoleSpec, actorId: string) {
     const existing = await tx.query<{ id: string }>(`SELECT id FROM users WHERE email = $1`, [email]);
     let userId = existing.rows[0]?.id;
     let created = false;
@@ -294,7 +333,7 @@ export class OrganizationService {
       userId = u.rows[0]!.id;
       created = true;
     }
-    await this.insertGrant(tx, orgId, userId, { role }, actorId);
+    await this.insertGrant(tx, orgId, userId, spec, actorId);
     return { userId, created };
   }
 
@@ -312,12 +351,48 @@ export class OrganizationService {
   }
 }
 
+async function assertCoursesInOrg(tx: Tx, orgId: string, courseIds: string[], field: 'roles' | 'courseId'): Promise<void> {
+  if (!courseIds.length) return;
+  const ok = await tx.query(`SELECT id FROM courses WHERE id = ANY($1::uuid[]) AND organization_id = $2`, [courseIds, orgId]);
+  if (ok.rowCount !== courseIds.length) throw invalid(field, 'course_not_in_organization');
+}
+
+/** 課程範圍角色寫入 course_staff 名冊（已存在則略過） */
+async function syncCourseStaff(tx: Tx, orgId: string, userId: string, specs: RoleSpec[], actorId: string): Promise<void> {
+  for (const spec of specs.filter((r) => r.courseId)) {
+    await tx.query(
+      `INSERT INTO course_staff (course_id, user_id, staff_role, assigned_by)
+       SELECT $1, $2, $3, $4 WHERE EXISTS (SELECT 1 FROM courses WHERE id = $1 AND organization_id = $5)
+       ON CONFLICT DO NOTHING`,
+      [spec.courseId, userId, spec.role, actorId, orgId],
+    );
+  }
+}
+
+async function memberRoles(q: Q, orgId: string, userId: string): Promise<MemberRoleDto[]> {
+  const r = await q.query<{ roles: RoleRow[] }>(
+    `SELECT ${ROLE_AGG}
+       FROM user_org_roles uor
+       JOIN roles ro ON ro.id = uor.role_id
+       LEFT JOIN courses c ON uor.scope_type = 'course' AND c.id = uor.scope_id
+      WHERE uor.organization_id = $1 AND uor.user_id = $2`,
+    [orgId, userId],
+  );
+  return (r.rows[0]?.roles ?? []).map(toMemberRole);
+}
+
 function toOrg(r: { id: string; code: string; name: string; status: 'active' | 'disabled'; branding: Record<string, unknown>; created_at: Date }): OrganizationDto {
   return { id: r.id, code: r.code, name: r.name, status: r.status, branding: r.branding, createdAt: r.created_at.toISOString() };
 }
 
 function toSpec(role: OrgRole, scopeType: string, scopeId: string | null): RoleSpec {
   return scopeType === 'course' && scopeId ? { role, courseId: scopeId } : { role };
+}
+
+function toMemberRole(x: RoleRow): MemberRoleDto {
+  const spec: MemberRoleDto = toSpec(x.role, x.scope_type, x.scope_id);
+  if (spec.courseId && x.course_code !== null) spec.course = { code: x.course_code, title: x.course_title ?? '' };
+  return spec;
 }
 
 function dedupe(roles: RoleSpec[]): RoleSpec[] {

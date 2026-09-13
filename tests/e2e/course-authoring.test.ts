@@ -168,7 +168,8 @@ describe('courses (UC-CRS-001)', () => {
 
   it('duplicate codes are rejected within an organization; learners cannot create', async () => {
     const dup = await call('POST', '/api/courses', 'adminA', { code: 'CA-101', title: 'x' });
-    expect(dup.json().error.details).toEqual([{ field: 'code', issue: 'already_exists' }]);
+    // 帶出使用中的課程名稱，管理員不必自己查
+    expect(dup.json().error.details).toEqual([{ field: 'code', issue: 'code_in_use', params: { title: '課程 A' } }]);
     expect((await call('POST', '/api/courses', 'learner', { code: 'L-1', title: 'x' })).statusCode).toBe(403);
   });
 
@@ -362,5 +363,34 @@ describe('staff removal, catalog and archive', () => {
 
     await call('POST', `/api/courses/${courseId}/staff`, 'adminA', { email: EMAIL.instr, role: 'course_admin' });
     expect((await call('POST', `/api/courses/${courseId}/versions`, 'instr', { title: 'v3' })).json().error.details).toEqual([{ issue: 'course_archived' }]);
+  });
+});
+
+describe('automatic course codes (SD §6.5)', () => {
+  const create = (who: keyof typeof U, body: object) => call('POST', '/api/courses', who, body);
+
+  it('numbers courses per organization when the code is left blank', async () => {
+    const first = await create('adminA', { title: '自動一' });
+    expect(first.statusCode).toBe(201);
+    expect(first.json().code).toBe('C-0001');
+    expect((await create('adminA', { title: '自動二' })).json().code).toBe('C-0002');
+    // 手動代碼若使用同一格式，下一個自動編號接在最大值之後
+    expect((await create('adminA', { code: 'C-0010', title: '手動' })).json().code).toBe('C-0010');
+    expect((await create('adminA', { title: '自動三' })).json().code).toBe('C-0011');
+    // 每個組織各自編號
+    expect((await create('adminB', { title: 'B 的第一門' })).json().code).toBe('C-0001');
+  });
+
+  it('concurrent creations never receive the same number', async () => {
+    const res = await Promise.all(Array.from({ length: 5 }, (_, i) => create('adminA', { title: `並行 ${i}` })));
+    expect(res.map((r) => r.statusCode)).toEqual([201, 201, 201, 201, 201]);
+    expect(new Set(res.map((r) => r.json().code)).size).toBe(5);
+  });
+
+  it("the list can be narrowed to one organization, still within the caller's scope", async () => {
+    const mine = (await call('GET', `/api/courses?organizationId=${ORG_A}&limit=100`, 'adminA')).json().data as { organizationId: string }[];
+    expect(mine.length).toBeGreaterThan(5);
+    expect(mine.every((c) => c.organizationId === ORG_A)).toBe(true);
+    expect((await call('GET', `/api/courses?organizationId=${ORG_B}`, 'adminA')).json().data).toEqual([]);
   });
 });

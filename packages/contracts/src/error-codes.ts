@@ -64,6 +64,16 @@ export interface ErrorEnvelope {
     code: ErrorCode;
     message: string;
     correlation_id: string;
-    details?: { field?: string; issue: string }[];
+    details?: ErrorDetail[];
   };
+}
+
+/**
+ * 錯誤細節。issue 為穩定代碼；params 為前端組文案用的少量資料（例如衝突對象的名稱），
+ * 只放呼叫者本來就有權檢視的內容，永不回顯使用者輸入的原值。
+ */
+export interface ErrorDetail {
+  field?: string;
+  issue: string;
+  params?: Record<string, string>;
 }

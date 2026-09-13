@@ -27,6 +27,9 @@ const PADMIN = 'dddddddd-0000-0000-0000-000000000001';
 const ADMIN_A = 'dddddddd-0000-0000-0000-00000000000a';
 const LEARNER_A = 'dddddddd-0000-0000-0000-0000000000a1';
 const MEMBER_C = 'dddddddd-0000-0000-0000-00000000000c';
+const RACE_1 = 'dddddddd-0000-0000-0000-0000000000c1';
+const RACE_2 = 'dddddddd-0000-0000-0000-0000000000c2';
+const GONE_C = 'dddddddd-0000-0000-0000-0000000000c3'; // 已停用的 org_admin
 
 class CaptureMailer implements AccountMailer {
   readonly sent: { to: string; link: string; kind: string }[] = [];
@@ -54,7 +57,7 @@ let container: StartedPostgreSqlContainer;
 let admin: pg.Client;
 let app: NestFastifyApplication;
 const mailer = new CaptureMailer();
-const s = {} as Record<'padmin' | 'adminA' | 'learnerA', S>;
+const s = {} as Record<'padmin' | 'adminA' | 'learnerA' | 'race1' | 'race2', S>;
 let orgB = '';
 
 async function session(userId: string): Promise<S> {
@@ -113,9 +116,22 @@ beforeAll(async () => {
      UNION ALL SELECT $4::uuid, id, 'self'::scope_type, $4::uuid, $6::uuid FROM roles WHERE code = 'learner'`,
     [PADMIN, ADMIN_A, LEARNER_A, MEMBER_C, ORG_A, ORG_C],
   );
+  // 組織 C：兩位啟用中的管理員與一位已停用的管理員（管理員保護測試用）
+  await admin.query(
+    `INSERT INTO users (id, email, display_name, status) VALUES
+       ($1, 'race1@c.test', 'Race 1', 'active'), ($2, 'race2@c.test', 'Race 2', 'active'), ($3, 'gone@c.test', 'Gone', 'disabled')`,
+    [RACE_1, RACE_2, GONE_C],
+  );
+  await admin.query(
+    `INSERT INTO user_org_roles (user_id, role_id, scope_type, scope_id, organization_id)
+     SELECT u, r.id, 'organization'::scope_type, $4::uuid, $4::uuid FROM roles r, unnest(ARRAY[$1, $2, $3]::uuid[]) AS u WHERE r.code = 'org_admin'`,
+    [RACE_1, RACE_2, GONE_C, ORG_C],
+  );
   s.padmin = await session(PADMIN);
   s.adminA = await session(ADMIN_A);
   s.learnerA = await session(LEARNER_A);
+  s.race1 = await session(RACE_1);
+  s.race2 = await session(RACE_2);
 
   const h = container.getHost();
   const p = container.getPort();
@@ -261,6 +277,45 @@ describe('members', () => {
     const emails = [...page1.data, ...page2.data].map((m: { email: string }) => m.email);
     expect(new Set(emails).size).toBe(emails.length);
   });
+
+  it('adds a teacher directly as instructor of a course — no learner role needed', async () => {
+    const res = await call('POST', `/api/organizations/${ORG_A}/users`, s.adminA, {
+      email: 'teacher@a.test',
+      displayName: '王老師',
+      role: 'instructor',
+      courseId: COURSE_A,
+    });
+    expect(res.statusCode).toBe(201);
+    expect((await lastAudit('org.user.created')).after_state).toMatchObject({ role: 'instructor', courseId: COURSE_A });
+
+    const list = (await call('GET', `/api/organizations/${ORG_A}/users?role=instructor`, s.adminA)).json().data;
+    expect(list).toEqual([
+      expect.objectContaining({ email: 'teacher@a.test', roles: [{ role: 'instructor', courseId: COURSE_A, course: { code: 'CA', title: 'Course A' } }] }),
+    ]);
+    const roster = await admin.query(`SELECT staff_role FROM course_staff WHERE course_id = $1 AND user_id = $2`, [COURSE_A, res.json().userId]);
+    expect(roster.rows).toEqual([{ staff_role: 'instructor' }]);
+  });
+
+  it.each<[object, string, string]>([
+    [{ role: 'instructor' }, 'courseId', 'course_id_mismatch'],
+    [{ role: 'learner', courseId: COURSE_A }, 'courseId', 'course_id_mismatch'],
+    [{ role: 'course_admin', courseId: COURSE_C }, 'courseId', 'course_not_in_organization'],
+  ])('adding a member with %j → 400', async (extra, field, issue) => {
+    const res = await call('POST', `/api/organizations/${ORG_A}/users`, s.adminA, { email: 'nobody@a.test', displayName: 'N', ...extra });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.details).toEqual([{ field, issue }]);
+  });
+
+  it('searches name or email (case-insensitive; LIKE wildcards are literal) and filters by role', async () => {
+    const emails = async (qs: string) =>
+      ((await call('GET', `/api/organizations/${ORG_A}/users?${qs}`, s.adminA)).json().data as { email: string }[]).map((m) => m.email);
+    expect(await emails('q=TEACHER')).toEqual(['teacher@a.test']);
+    expect(await emails(`q=${encodeURIComponent('王老')}`)).toEqual(['teacher@a.test']);
+    expect(await emails(`q=${encodeURIComponent('%')}`)).toEqual([]);
+    expect(await emails('role=org_admin')).toEqual(['admin@a.test']);
+    expect(await emails('role=learner&q=learner')).toEqual(['learner@a.test']);
+    expect((await call('GET', `/api/organizations/${ORG_A}/users?role=platform_admin`, s.adminA)).statusCode).toBe(400);
+  });
 });
 
 describe('role assignment', () => {
@@ -269,6 +324,8 @@ describe('role assignment', () => {
   it('grants instructor on a course of this org; audit records before and after', async () => {
     const res = await setRoles(LEARNER_A, [{ role: 'learner' }, { role: 'instructor', courseId: COURSE_A }]);
     expect(res.statusCode).toBe(200);
+    // 回應的課程角色附課程代碼與名稱，畫面不必另查
+    expect(res.json().roles).toContainEqual({ role: 'instructor', courseId: COURSE_A, course: { code: 'CA', title: 'Course A' } });
     const audit = await lastAudit('org.role.assigned');
     expect(audit.before_state).toEqual({ roles: [{ role: 'learner' }] });
     expect(audit.after_state.roles).toEqual(expect.arrayContaining([{ role: 'instructor', courseId: COURSE_A }]));
@@ -291,9 +348,9 @@ describe('role assignment', () => {
     expect((await setRoles(MEMBER_C, [{ role: 'learner' }])).statusCode).toBe(404);
   });
 
-  it('removing the last org admin → 400 last_org_admin', async () => {
+  it('an admin cannot remove their own org_admin role → 400 cannot_remove_own_admin', async () => {
     const res = await setRoles(ADMIN_A, [{ role: 'learner' }]);
-    expect(res.json().error.details).toEqual([{ field: 'roles', issue: 'last_org_admin' }]);
+    expect(res.json().error.details).toEqual([{ field: 'roles', issue: 'cannot_remove_own_admin' }]);
   });
 
   it('a learner cannot assign roles', async () => {
@@ -313,5 +370,52 @@ describe('disabling an organization', () => {
 
   it('an org admin cannot disable their own organization', async () => {
     expect((await call('POST', `/api/organizations/${ORG_A}/disable`, s.adminA)).statusCode).toBe(403);
+  });
+});
+
+describe('org admin safeguards (organization C: two active admins + one disabled)', () => {
+  const setRolesC = (userId: string, roles: unknown, t: S) => call('PATCH', `/api/organizations/${ORG_C}/users/${userId}/roles`, t, { roles });
+  const activeAdmins = async () =>
+    (
+      await admin.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM user_org_roles uor JOIN roles ro ON ro.id = uor.role_id JOIN users u ON u.id = uor.user_id
+          WHERE uor.organization_id = $1 AND ro.code = 'org_admin' AND u.status = 'active'`,
+        [ORG_C],
+      )
+    ).rows[0]!.n;
+
+  it('removing your own org_admin role is refused even while another admin exists', async () => {
+    const res = await setRolesC(RACE_1, [{ role: 'learner' }], s.race1);
+    expect(res.json().error.details).toEqual([{ field: 'roles', issue: 'cannot_remove_own_admin' }]);
+  });
+
+  /** 等到有 n 個連線卡在「鎖定組織列」這一步（最多約 3 秒；沒有這把鎖時不會有人等待） */
+  async function waitForOrgLockWaiters(n: number): Promise<void> {
+    for (let i = 0; i < 60; i++) {
+      const r = await admin.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%FROM organizations WHERE id = $1 FOR NO KEY UPDATE%'`,
+      );
+      if (r.rows[0]!.n >= n) return;
+      await new Promise((ok) => setTimeout(ok, 50));
+    }
+  }
+
+  it('two admins removing each other at the same moment: exactly one succeeds, and the disabled admin does not count', async () => {
+    // 測試端先鎖住組織列：兩個請求都通過權限檢查、停在同一把鎖前，再一起放行——
+    // 確保兩者真的同時進入角色變更，而不是剛好一前一後（那樣後者只會在權限檢查被擋下）
+    const blocker = new pg.Client({ connectionString: container.getConnectionUri() });
+    await blocker.connect();
+    await blocker.query('BEGIN');
+    await blocker.query('SELECT 1 FROM organizations WHERE id = $1 FOR UPDATE', [ORG_C]);
+    const pending = Promise.all([setRolesC(RACE_2, [{ role: 'learner' }], s.race1), setRolesC(RACE_1, [{ role: 'learner' }], s.race2)]);
+    await waitForOrgLockWaiters(2);
+    await blocker.query('ROLLBACK');
+    await blocker.end();
+
+    const [a, b] = await pending;
+    expect([a.statusCode, b.statusCode].sort()).toEqual([200, 400]);
+    const loser = a.statusCode === 400 ? a : b;
+    expect(loser.json().error.details).toEqual([{ field: 'roles', issue: 'last_org_admin' }]);
+    expect(await activeAdmins()).toBe(1);
   });
 });
