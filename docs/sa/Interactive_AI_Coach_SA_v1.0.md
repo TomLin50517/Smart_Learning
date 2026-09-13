@@ -502,7 +502,7 @@ flowchart LR
 | UC-CRS-007 | 執行發布前 Validator | R | R | P | P | — | R | ARCH §6.3 五項檢查 |
 | UC-CRS-008 | 發布課程版本 | R | S⚙ | P | S⚙ | — | R | 產生 immutable snapshot |
 | UC-CRS-009 | Clone 已發布版本為新 Draft | R | R | P | P | — | R | 顯示影響學員數 |
-| UC-CRS-010 | 封存課程/版本 | R | P | P | — | — | R | 阻擋新 enrollment |
+| UC-CRS-010 | 封存課程/版本（課程可恢復，v1.13） | R | P | P | — | — | R | 阻擋新 enrollment |
 | UC-CRS-011 | Hotfix metadata（typo） | R | R | P | P | — | R | 需 revision history |
 | UC-CRS-012 | 指派教師/課程人員 | R | P | P | — | — | R | `course_staff` |
 | UC-CRS-013 | 強制遷移學員至新版本 | R | S⚙ | P | — | — | R | 需 preview + Audit |
@@ -2862,3 +2862,4 @@ Browser (X-Request-Id) → Nginx → API (correlation_id)
 | v1.10 | 2026-09-12 | 規格缺口補齊：UC-ORG-005 個人資料與變更密碼實作為本人端點（不以 `self.profile.*` 把關，SD §8.12）；新增切換組織；ADR-030 的復原缺口由 SD ADR-033 補上；§11.3.1 `user_org_roles` 唯一約束納入 organization_id（修正多組織學員） | System Analyst |
 | v1.11 | 2026-09-13 | Phase 1-1 課程與版本編輯實作：UC-CRS-012 以 email 指派且對象須為組織成員；同一課程同時至多一個編輯中版本；`PATCH /courses/{id}` 僅封存（SD §6.5）。§6.3 角色表為節錄，instructor 實際另有 course.read／course.version.read／publish 等（以 migration 0012 為準） | System Analyst |
 | v1.12 | 2026-09-13 | 成員管理與管理員保護：UC-ORG-003 新增成員時可直接指定講師／課程管理員與課程（不必先為學員）；成員清單可依角色篩選、依姓名／email 搜尋，課程角色顯示課程代碼與名稱；UC-ORG-004 不能移除自己的組織管理員角色、組織不得失去最後一位啟用中的管理員（含並行情境）；UC-CRS-001 課程代碼改為選填並依組織自動編號（SD §6.5、§8.9） | System Analyst |
+| v1.13 | 2026-09-13 | UC-ORG-003 的「停用」定義為停用**在本組織的成員資格**（角色保留、可恢復，帳號與其他組織不受影響）；停用整個帳號屬平台管理（後續）。UC-CRS-010 封存可恢復，恢復後依是否有已發布版本回到開放中／尚未發布（SD §6.5、§8.9） | System Analyst |

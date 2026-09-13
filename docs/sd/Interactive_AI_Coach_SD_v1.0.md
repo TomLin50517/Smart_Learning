@@ -1156,6 +1156,7 @@ UPDATE job_queue
 | 0015 | `0015_auth.sql` | `user_sessions.last_seen_at`；`password_reset_tokens`；`rate_limit_counters`（UNLOGGED）；收回 coach／worker／readonly 對 session 與重設 token 的讀取權 | 0002, 0011 |
 | 0016 | `0016_org_membership.sql` | `password_reset_tokens.purpose`（reset / invite）；platform_admin 補 `org.user.read` | 0012, 0015 |
 | 0017 | `0017_multi_org_roles.sql` | `uq_uor_unique` 納入 `organization_id`（`NULLS NOT DISTINCT`）：同一人可在多個組織擔任 learner 等 self／course 範圍角色（原索引使已在他組織當學員的帳號無法加入第二個組織） | 0002 |
+| 0018 | `0018_member_disable.sql` | `disabled_memberships (organization_id, user_id)`：有列＝在該組織的成員資格已停用，角色保留。不放在 `user_org_roles`——角色指派為整組取代會洗掉狀態，且成員資格是「人 × 組織」一筆（§8.9） | 0002, 0011 |
 
 **規則**：
 
@@ -2167,7 +2168,8 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 課程列表 | `grantScopes(grants, 'course.read')`：platform → 全部；組織範圍 → 該組織；課程範圍 → 被指派的課程。self 授權不擴大列表（學員的課程目錄另有端點）。依 code 排序、keyset 分頁；OpenAPI 的 `sort` 參數目前不支援 |
 | 建立課程 | 建於 session 的 active organization（organization scope 未指定參數時取 active org）。代碼選填（v1.14）：省略時依組織自動編號 `C-0001` 起（取現有 `C-####` 最大值 + 1，手動用了同格式也會接續）；手動代碼重複回 `code_in_use`，`params.title` 帶出使用中的課程名稱。兩條路徑都先鎖定組織列（`FOR NO KEY UPDATE`），並行建立不會撞號 |
 | 課程列表篩選（v1.14） | `organizationId` 參數只列該組織的課程，仍受 course.read 範圍限制；供成員頁指定講師時的課程選單 |
-| 課程列表的講師（v1.14） | `CourseDto.staff`：以 LATERAL 子查詢從 `course_staff` 帶出**啟用中**的講師／課程管理員（講師在前；停用帳號不列，免得看起來已有講師）。列表的「講師」欄直接顯示，未指派時標示「未指派」 |
+| 課程列表的講師（v1.14） | `CourseDto.staff`：以 LATERAL 子查詢從 `course_staff` 帶出**啟用中**的講師／課程管理員（講師在前；停用帳號不列，免得看起來已有講師）。列表的「講師」欄直接顯示，未指派時標示「未指派」。成員資格已停用者同樣不列（v1.15） |
+| 恢復封存（v1.15） | `POST /courses/{id}/restore`（權限與封存相同 course.archive、稽核 `course.restored`）。恢復後的狀態依實際內容決定：有已發布版本為 active，否則為 draft——不必記住封存前的狀態。封存沒有改動版本、內容與人員，恢復只解除新選課／新版本的阻擋。未封存時 400 `not_archived`。列表支援 `status` 篩選。另開端點而非放寬 PATCH：目標狀態由伺服器決定，且每個路由對應固定的稽核動作 |
 | `PATCH /courses/{id}` | 只做封存（權限 course.archive、稽核 course.archived）。課程名稱／說明編輯需另立權限碼，屬後續項目；版本名稱於版本內維護 |
 | 一次一個編輯中版本 | create 與 clone 前檢查同課程是否已有 draft／review，有則 400 `draft_exists`——避免兩份草稿各自發布而互相覆蓋。課程列以 `FOR UPDATE` 鎖定，並行建立也只有一個成功 |
 | 草稿編輯 | 應用層以 `FOR UPDATE` 鎖定版本並確認 `status = 'draft'`，否則 409 `COURSE_VERSION_IMMUTABLE`（DB 觸發器為第二層）。`modules` 整組取代：刪除本版全部 module（lesson／activity／先修條件 CASCADE）後依輸入重建，以 `jsonb_to_recordset` 每表一次寫入。草稿沒有選課或作答，重建不影響學習資料 |
@@ -3005,6 +3007,7 @@ IP 判定依 `TRUST_PROXY`：預設不信任 `X-Forwarded-For`；只有確定位
 | 成員清單（v1.14） | `role` 篩選（EXISTS 子查詢，成員的其他角色仍完整回傳）與 `q` 搜尋（姓名或 email、ILIKE，`%`／`_`／`\` 先跳脫）；仍依 email keyset 分頁。課程角色附 `course: { code, title }`（LEFT JOIN courses），畫面顯示為「講師 · C-0001 課程名」 |
 | 角色指派 | `PATCH …/users/{userId}/roles` 整組取代：course_admin／instructor 必須指定屬於本組織的課程；`platform_admin` 無法經由組織端點授予（輸入驗證排除）；非本組織成員回 404；變更前後寫入 `org.role.assigned` 稽核；回應附課程資訊 |
 | 管理員保護（v1.14） | ① 不能移除自己的 org_admin（400 `cannot_remove_own_admin`），須由其他管理員處理——避免誤操作把自己鎖在門外。② 會讓組織失去最後一位**啟用中** org_admin 的變更回 400 `last_org_admin`；停用帳號不計（與 ADR-033 的「啟用中」定義一致）。③ 交易開頭 `SELECT … FROM organizations FOR NO KEY UPDATE`：同一組織的角色變更排隊進行。否則兩位管理員同時互相移除時，兩邊都只鎖住對方的列、都看到「還有另一位」，結果兩個都成功而組織變成零位管理員。NO KEY UPDATE 不阻擋其他交易插入參照此組織的資料。因 org.role.assign 只授予 org_admin，有了 ① 之後 ② 實際上只會在並行時觸發；三者合起來才保證不變條件。系統層級的最高權限（platform_admin）不經任何 API 授予或移除，組織萬一失去管理員仍可由 ADR-033 復原 |
+| 停用成員資格（v1.15） | `POST …/users/{userId}/disable`／`enable`（org.user.write，稽核 `org.user.disabled`／`.enabled`）。只停用**本組織**的成員資格：`disabled_memberships` 加一列，角色原樣保留，恢復即刪除。帳號本身與其他組織不受影響——同一帳號可屬多個組織，組織管理員停用整個帳號等於越權；停用帳號屬平台管理，另立端點（後續）。`GrantLoader` 排除停用中的成員資格，因每個請求重新載入授權，下一個請求即失效，不必撤銷 session；`/me` 的組織清單與切換組織、預設組織一併排除。護欄同角色指派：不能停用自己（`cannot_disable_self`）、不能停用最後一位啟用中的 org_admin（`last_org_admin`）、先鎖定組織列。「啟用中的管理員」＝帳號啟用且成員資格未停用，`last_org_admin` 與 ADR-033 的復原條件共用此定義；復原的對象若是停用中的本組織成員，一併恢復。已停用者不列入課程的講師欄，也不能被指派為課程人員（`member_disabled`）。移除全部角色（離開組織）時一併清除停用紀錄 |
 | 停用組織 | 狀態改為 disabled 後，`GrantLoader` 立即忽略該組織的所有授權，成員對該組織的請求改回 404 |
 | 品牌設定 | 只接受品牌 token（`primaryColor`、`logoAssetId`），拒絕其他鍵值——不允許注入 CSS／HTML |
 | ID 驗證 | 路由與 body 的 ID 以 `z.guid()` 驗證（任何 8-4-4-4-12 十六進位），對齊 PostgreSQL `uuid` 型別。不用 zod 4 的 `z.uuid()`：它檢查 RFC 版本位元，會拒絕資料庫中合法但非 v4 的 ID |
@@ -3729,11 +3732,11 @@ export interface AuditEvent {
 | `auth.password.changed` | user | 否（`metadata.revoked_sessions`） | UC-ORG-005 |
 | `user.profile.updated` | user | 是（只含變更欄位） | UC-ORG-005 |
 | `org.created` / `.updated` / `.disabled` | organization | 是 | UC-PLT-007, UC-ORG-002 |
-| `org.user.created` / `.disabled` | user | 是 | UC-ORG-003 |
+| `org.user.created` / `.disabled` / `.enabled` | user | 是（停用／恢復記 `membershipStatus`） | UC-ORG-003 |
 | `org.role.assigned` / `.revoked` | user_org_role | 是 | UC-ORG-004 |
 | `cms.updated` | cms_page | 是（draft blocks 差異） | UC-CMS-001 |
 | `cms.published` / `.rolled_back` | cms_page | 是（revision_no） | UC-CMS-003/004 |
-| `course.created` / `.archived` | course | 是 | UC-CRS-001/010 |
+| `course.created` / `.archived` / `.restored` | course | 是 | UC-CRS-001/010 |
 | `course.version.created` / `.cloned` | course_version | 是 | UC-CRS-002/009 |
 | `course.version.updated` | course_version | 是 | UC-CRS-003 |
 | `course.version.published` | course_version | 是（含 snapshot hash） | UC-CRS-008 |
@@ -4163,3 +4166,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.12 | 2026-09-12 | 規格缺口補齊：新增 §8.12（切換組織、個人資料、變更密碼、管理員復原；本人端點為 AuthOnly 的理由）；新增 ADR-033；§12.2 新增 `auth.password.changed`、`user.profile.updated`；ADR-030 後果更新；§2.9 新增 0017（修正同一人無法在多個組織擔任 learner） | Software Designer |
 | v1.13 | 2026-09-13 | Phase 1-1 課程與版本編輯：新增 §6.5（角色權限、列表範圍、PATCH 課程僅封存、一次一個編輯中版本、草稿整組取代與 id 規則、內容區塊子集、複製時 JSON 引用改寫、課程人員雙表同步、互動元件目錄端點）；§7.1.3 補路由 | Software Designer |
 | v1.14 | 2026-09-13 | 成員管理與管理員保護：§8.9 新增可直接邀請講師＋課程、成員清單的角色篩選／搜尋與課程資訊、管理員保護（不能移除自己、只計啟用中管理員、鎖定組織列防並行互相移除）；§6.5 課程代碼選填並自動編號、代碼衝突帶出課程名稱、課程列表 `organizationId` 篩選；錯誤細節新增選填 `params` | Software Designer |
+| v1.15 | 2026-09-13 | 停用成員與恢復課程：§2.9 新增 0018（`disabled_memberships`）；§8.9 新增停用／恢復成員資格（只影響本組織、角色保留、GrantLoader 排除、啟用中管理員的共同定義）；§6.5 新增恢復封存與列表 `status` 篩選；§12.2 新增 `org.user.enabled`、`course.restored` | Software Designer |
