@@ -21,12 +21,14 @@ export class ProfileService {
 
   /**
    * 切換目前 session 的 active organization。
-   * 只能切到自己有角色、且為啟用狀態的組織；其他情況一律 404（ADR-019，不透露組織是否存在）。
+   * 只能切到自己有角色、組織啟用、且成員資格未停用的組織；其他情況一律 404（ADR-019，不透露組織是否存在）。
    */
   async switchOrganization(userId: string, sessionId: string, organizationId: string): Promise<void> {
     const ok = await this.db.query(
       `SELECT 1 FROM user_org_roles uor JOIN organizations o ON o.id = uor.organization_id
-        WHERE uor.user_id = $1 AND o.id = $2 AND o.status = 'active' LIMIT 1`,
+        WHERE uor.user_id = $1 AND o.id = $2 AND o.status = 'active'
+          AND NOT EXISTS (SELECT 1 FROM disabled_memberships dm WHERE dm.organization_id = o.id AND dm.user_id = uor.user_id)
+        LIMIT 1`,
       [userId, organizationId],
     );
     if (!ok.rowCount) throw new DomainError('NOT_FOUND');

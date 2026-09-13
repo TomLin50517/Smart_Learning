@@ -66,6 +66,7 @@ const COURSE_SELECT = `
                                ORDER BY (cs.staff_role = 'instructor') DESC, u.display_name), '[]'::json) AS staff
         FROM course_staff cs JOIN users u ON u.id = cs.user_id
        WHERE cs.course_id = c.id AND cs.staff_role IN ('instructor', 'course_admin') AND u.status = 'active'
+         AND NOT EXISTS (SELECT 1 FROM disabled_memberships dm WHERE dm.organization_id = c.organization_id AND dm.user_id = u.id)
     ) st ON true`;
 
 function toCourse(r: CourseRow): CourseDto {
@@ -130,7 +131,7 @@ export class CourseService {
 
   async list(
     s: GrantScopes,
-    q: { organizationId?: string | undefined; cursor?: string | undefined; limit: number },
+    q: { organizationId?: string | undefined; status?: CourseStatus | undefined; cursor?: string | undefined; limit: number },
   ): Promise<{ data: CourseDto[]; nextCursor: string | null }> {
     if (!s.all && !s.organizations.length && !s.courses.length) return { data: [], nextCursor: null };
     let code: string | null = null;
@@ -147,9 +148,10 @@ export class CourseService {
         WHERE ($1::bool OR c.organization_id = ANY($2::uuid[]) OR c.id = ANY($3::uuid[]))
           AND ($4::text IS NULL OR (c.code, c.id) > ($4::text, $5::uuid))
           AND ($7::uuid IS NULL OR c.organization_id = $7::uuid)
+          AND ($8::course_status IS NULL OR c.status = $8::course_status)
         ORDER BY c.code, c.id
         LIMIT $6`,
-      [s.all, s.organizations, s.courses, code, id, q.limit + 1, q.organizationId ?? null],
+      [s.all, s.organizations, s.courses, code, id, q.limit + 1, q.organizationId ?? null, q.status ?? null],
     );
     const page = r.rows.slice(0, q.limit);
     const last = page[page.length - 1];
@@ -207,6 +209,22 @@ export class CourseService {
     if (!cur.rows[0]) throw new DomainError('NOT_FOUND');
     await this.db.query(`UPDATE courses SET status = 'archived' WHERE id = $1`, [courseId]);
     return { course: await this.get(courseId), before: { status: cur.rows[0].status }, after: { status: 'archived' } };
+  }
+
+  /**
+   * 恢復封存（SD §6.5）：狀態依實際內容決定——有已發布版本為 active，否則為 draft。
+   * 封存本來就沒有改動版本、內容與人員，恢復只解除「新選課／新版本」的阻擋。
+   */
+  async restore(courseId: string): Promise<{ course: CourseDetailDto; before: { status: string }; after: { status: CourseStatus } }> {
+    const after = await this.tx(async (c) => {
+      const course = await this.lockCourse(c, courseId, { allowArchived: true });
+      if (course.status !== 'archived') throw rejected('not_archived');
+      const pub = await c.query(`SELECT 1 FROM course_versions WHERE course_id = $1 AND status = 'published'`, [courseId]);
+      const next: CourseStatus = pub.rowCount ? 'active' : 'draft';
+      await c.query(`UPDATE courses SET status = $2 WHERE id = $1`, [courseId, next]);
+      return next;
+    });
+    return { course: await this.get(courseId), before: { status: 'archived' }, after: { status: after } };
   }
 
   // ------------------------------------------------------------------ versions
@@ -447,28 +465,39 @@ export class CourseService {
    * course_staff 是同步維護的名冊（組織角色編輯同樣會同步，見 OrganizationService.setRoles）。
    */
   async staff(courseId: string): Promise<CourseStaffDto[]> {
-    const r = await this.db.query<{ user_id: string; display_name: string; email: string; role: CourseStaffRole; created_at: Date }>(
-      `SELECT u.id AS user_id, u.display_name, u.email, r.code AS role, uor.created_at
+    const r = await this.db.query<{ user_id: string; display_name: string; email: string; role: CourseStaffRole; created_at: Date; member_disabled: boolean }>(
+      `SELECT u.id AS user_id, u.display_name, u.email, r.code AS role, uor.created_at,
+              EXISTS (SELECT 1 FROM disabled_memberships dm WHERE dm.organization_id = uor.organization_id AND dm.user_id = u.id) AS member_disabled
          FROM user_org_roles uor JOIN roles r ON r.id = uor.role_id JOIN users u ON u.id = uor.user_id
         WHERE uor.scope_type = 'course' AND uor.scope_id = $1 AND r.code IN ('instructor', 'course_admin')
         ORDER BY r.code, u.display_name`,
       [courseId],
     );
-    return r.rows.map((s) => ({ userId: s.user_id, displayName: s.display_name, email: s.email, role: s.role, assignedAt: s.created_at.toISOString() }));
+    return r.rows.map((s) => ({
+      userId: s.user_id,
+      displayName: s.display_name,
+      email: s.email,
+      role: s.role,
+      assignedAt: s.created_at.toISOString(),
+      memberDisabled: s.member_disabled,
+    }));
   }
 
   /** 指派對象必須已是課程所屬組織的成員（不透過此端點建立帳號或跨組織授權） */
   async assignStaff(courseId: string, input: { email: string; role: CourseStaffRole }, actorId: string): Promise<{ userId: string; created: boolean }> {
     return this.tx(async (c) => {
       const course = await this.lockCourse(c, courseId, { allowArchived: true });
-      const u = await c.query<{ id: string }>(
-        `SELECT u.id FROM users u
+      const u = await c.query<{ id: string; disabled: boolean }>(
+        `SELECT u.id, EXISTS (SELECT 1 FROM disabled_memberships dm WHERE dm.organization_id = $2 AND dm.user_id = u.id) AS disabled
+           FROM users u
           WHERE u.email = $1 AND u.status = 'active'
             AND EXISTS (SELECT 1 FROM user_org_roles uor WHERE uor.user_id = u.id AND uor.organization_id = $2)`,
         [input.email, course.organization_id],
       );
       const userId = u.rows[0]?.id;
       if (!userId) throw invalid('email', 'not_in_organization');
+      // 成員資格已停用者須先恢復，否則指派了也沒有權限
+      if (u.rows[0]!.disabled) throw invalid('email', 'member_disabled');
       const g = await c.query(
         `INSERT INTO user_org_roles (user_id, role_id, scope_type, scope_id, organization_id, granted_by)
          SELECT $1, id, 'course', $2, $3, $4 FROM roles WHERE code = $5

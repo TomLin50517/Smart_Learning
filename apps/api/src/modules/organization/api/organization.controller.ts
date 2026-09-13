@@ -1,5 +1,5 @@
 import { Body, Controller, Get, HttpCode, Param, Patch, Post, Query, Req } from '@nestjs/common';
-import { COURSE_ROLES, MEMBER_SEARCH_MAX, type OrgMemberDto, type OrgRole, type OrganizationDto } from '@iac/contracts';
+import { COURSE_ROLES, MEMBER_SEARCH_MAX, type MembershipStatus, type OrgMemberDto, type OrgRole, type OrganizationDto } from '@iac/contracts';
 import type { FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { organizationsGranted } from '../../../common/authz.js';
@@ -48,6 +48,7 @@ const SetRoles = z.strictObject({ roles: z.array(RoleSpecSchema).max(50) });
 const Paging = z.object({ cursor: z.string().max(400).optional(), limit: z.coerce.number().int().min(1).max(100).default(20) });
 const MemberQuery = Paging.extend({
   role: Role.optional(),
+  status: z.enum(['active', 'disabled']).optional(),
   q: z
     .string()
     .trim()
@@ -147,6 +148,33 @@ export class OrganizationController {
       after: { email: input.email, role: input.role, ...(input.courseId && { courseId: input.courseId }), invited: r.invited, emailSent: r.emailSent },
     };
     return r;
+  }
+
+  /** openapi: disableOrganizationUser——停用在本組織的成員資格（角色保留、可恢復；帳號與其他組織不受影響） */
+  @Post(':id/users/:userId/disable')
+  @RequirePermission('org.user.write', { scope: 'organization', param: 'id' })
+  @RequireCapability({ capability: 'configurationWriteAllowed' })
+  @Audit({ action: 'org.user.disabled', resourceType: 'user' })
+  @HttpCode(200)
+  disableMember(@Param('id') id: string, @Param('userId') userId: string, @CurrentUser() actor: AuthUser, @Req() req: FastifyRequest) {
+    return this.changeMembership(id, userId, 'disabled', actor, req);
+  }
+
+  /** openapi: enableOrganizationUser——恢復成員資格，原有角色立即生效 */
+  @Post(':id/users/:userId/enable')
+  @RequirePermission('org.user.write', { scope: 'organization', param: 'id' })
+  @RequireCapability({ capability: 'configurationWriteAllowed' })
+  @Audit({ action: 'org.user.enabled', resourceType: 'user' })
+  @HttpCode(200)
+  enableMember(@Param('id') id: string, @Param('userId') userId: string, @CurrentUser() actor: AuthUser, @Req() req: FastifyRequest) {
+    return this.changeMembership(id, userId, 'active', actor, req);
+  }
+
+  private async changeMembership(orgId: string, userId: string, status: MembershipStatus, actor: AuthUser, req: FastifyRequest) {
+    const uid = parseInput(z.guid(), userId);
+    const r = await this.orgs.setMembershipStatus(orgId, uid, status, actor.id);
+    req.ctx.audit = { resourceId: uid, before: { membershipStatus: r.before }, after: { membershipStatus: r.after } };
+    return { userId: uid, membershipStatus: r.after };
   }
 
   /**

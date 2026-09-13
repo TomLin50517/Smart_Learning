@@ -30,11 +30,17 @@ export interface OrganizationDto {
   createdAt: string;
 }
 
+/** 在某組織的成員資格狀態（與帳號狀態分開：帳號停用影響所有組織，屬平台管理） */
+export type MembershipStatus = 'active' | 'disabled';
+
 export interface OrgMemberDto {
   id: string;
   email: string;
   displayName: string;
+  /** 帳號狀態 */
   status: 'active' | 'disabled';
+  /** 在本組織的成員資格；disabled 時本組織的所有權限失效，角色保留 */
+  membershipStatus: MembershipStatus;
   lastLoginAt: string | null;
   /** 尚未設定密碼（邀請中） */
   pendingInvitation: boolean;

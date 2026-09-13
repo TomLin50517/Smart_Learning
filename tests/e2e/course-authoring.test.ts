@@ -367,6 +367,27 @@ describe('staff removal, catalog and archive', () => {
     await call('POST', `/api/courses/${courseId}/staff`, 'adminA', { email: EMAIL.instr, role: 'course_admin' });
     expect((await call('POST', `/api/courses/${courseId}/versions`, 'instr', { title: 'v3' })).json().error.details).toEqual([{ issue: 'course_archived' }]);
   });
+
+  it('restoring reopens an archived course; its status follows whether a version is published', async () => {
+    const pub = await admin.query(`SELECT 1 FROM course_versions WHERE course_id = $1 AND status = 'published'`, [courseId]);
+    const expected = pub.rowCount ? 'active' : 'draft';
+    expect([403, 404]).toContain((await call('POST', `/api/courses/${courseId}/restore`, 'learner')).statusCode);
+
+    const res = await call('POST', `/api/courses/${courseId}/restore`, 'adminA');
+    expect(res.statusCode).toBe(200);
+    expect(res.json().status).toBe(expected);
+    expect(await lastAudit('course.restored')).toMatchObject({ before_state: { status: 'archived' }, after_state: { status: expected } });
+    expect((await call('POST', `/api/courses/${courseId}/restore`, 'adminA')).json().error.details).toEqual([{ issue: 'not_archived' }]);
+  });
+
+  it('the list can be filtered by status', async () => {
+    await call('PATCH', `/api/courses/${courseId}`, 'adminA', { status: 'archived' });
+    const ids = async (status: string) => ((await call('GET', `/api/courses?status=${status}`, 'adminA')).json().data as { id: string }[]).map((c) => c.id);
+    expect(await ids('archived')).toEqual([courseId]);
+    expect(await ids('draft')).not.toContain(courseId);
+    expect((await call('GET', '/api/courses?status=deleted', 'adminA')).statusCode).toBe(400);
+    await call('POST', `/api/courses/${courseId}/restore`, 'adminA');
+  });
 });
 
 describe('automatic course codes (SD §6.5)', () => {

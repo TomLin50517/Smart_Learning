@@ -1,5 +1,13 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { COURSE_ROLES, type MemberRoleDto, type OrgMemberDto, type OrgRole, type OrganizationDto, type RoleSpec } from '@iac/contracts';
+import {
+  COURSE_ROLES,
+  type MemberRoleDto,
+  type MembershipStatus,
+  type OrgMemberDto,
+  type OrgRole,
+  type OrganizationDto,
+  type RoleSpec,
+} from '@iac/contracts';
 import pg from 'pg';
 import { DB_API } from '../../../common/database.module.js';
 import { DomainError } from '../../../common/domain-error.js';
@@ -9,8 +17,11 @@ type Tx = pg.PoolClient;
 type Q = pg.Pool | pg.PoolClient;
 
 const invalid = (field: string, issue: string) => new DomainError('VALIDATION_FAILED', `${field}: ${issue}`, [{ field, issue }]);
+const rejected = (issue: string) => new DomainError('VALIDATION_FAILED', issue, [{ issue }]);
 
 export interface MemberQuery {
+  /** 成員資格狀態篩選 */
+  status?: MembershipStatus | undefined;
   cursor?: string | undefined;
   limit: number;
   /** 只列出持有此角色的成員（課程角色不分課程） */
@@ -142,9 +153,12 @@ export class OrganizationService {
       status: 'active' | 'disabled';
       last_login_at: Date | null;
       pending: boolean;
+      member_disabled: boolean;
       roles: RoleRow[];
     }>(
-      `SELECT u.id, u.email, u.display_name, u.status, u.last_login_at, u.password_hash IS NULL AS pending, ${ROLE_AGG}
+      `SELECT u.id, u.email, u.display_name, u.status, u.last_login_at, u.password_hash IS NULL AS pending,
+              EXISTS (SELECT 1 FROM disabled_memberships dm WHERE dm.organization_id = $1 AND dm.user_id = u.id) AS member_disabled,
+              ${ROLE_AGG}
          FROM user_org_roles uor
          JOIN users u  ON u.id = uor.user_id
          JOIN roles ro ON ro.id = uor.role_id
@@ -154,10 +168,12 @@ export class OrganizationService {
           AND ($5::text IS NULL OR EXISTS (
                 SELECT 1 FROM user_org_roles f JOIN roles fr ON fr.id = f.role_id
                  WHERE f.user_id = u.id AND f.organization_id = $1 AND fr.code = $5))
+          AND ($6::text IS NULL OR ($6::text = 'disabled') = EXISTS (
+                SELECT 1 FROM disabled_memberships dm WHERE dm.organization_id = $1 AND dm.user_id = u.id))
         GROUP BY u.id
         ORDER BY u.email
         LIMIT $3`,
-      [orgId, after, q.limit + 1, pattern, q.role ?? null],
+      [orgId, after, q.limit + 1, pattern, q.role ?? null, q.status ?? null],
     );
     const page = r.rows.slice(0, q.limit);
     return {
@@ -168,6 +184,7 @@ export class OrganizationService {
         status: m.status,
         lastLoginAt: m.last_login_at?.toISOString() ?? null,
         pendingInvitation: m.pending,
+        membershipStatus: m.member_disabled ? 'disabled' : 'active',
         roles: m.roles.map(toMemberRole),
       })),
       nextCursor: r.rows.length > q.limit ? Buffer.from(page[page.length - 1]!.email).toString('base64url') : null,
@@ -229,14 +246,8 @@ export class OrganizationService {
       const losingAdmin = cur.rows.some((r) => r.role === 'org_admin') && !wanted.some((r) => r.role === 'org_admin');
       if (losingAdmin) {
         if (userId === actorId) throw invalid('roles', 'cannot_remove_own_admin');
-        // 只計「啟用中」的其他管理員——停用帳號不能管理組織，不算數（與 ADR-033 的定義一致）
-        const others = await client.query<{ n: number }>(
-          `SELECT count(*)::int AS n FROM user_org_roles uor
-             JOIN roles ro ON ro.id = uor.role_id JOIN users u ON u.id = uor.user_id
-            WHERE uor.organization_id = $1 AND ro.code = 'org_admin' AND uor.user_id <> $2 AND u.status = 'active'`,
-          [orgId, userId],
-        );
-        if (!others.rows[0]!.n) throw invalid('roles', 'last_org_admin');
+        // 只計「啟用中」的其他管理員——停用帳號或停用成員資格者不能管理組織，不算數
+        if (!(await countActiveAdmins(client, orgId, userId))) throw invalid('roles', 'last_org_admin');
       }
 
       const courseIds = [...new Set(wanted.filter((r) => r.courseId).map((r) => r.courseId!))];
@@ -251,10 +262,56 @@ export class OrganizationService {
         [userId, orgId],
       );
       await syncCourseStaff(client, orgId, userId, wanted, actorId);
+      // 移除全部角色＝離開組織；停用紀錄一併清掉，日後重新加入時是全新的成員資格
+      if (!wanted.length) await client.query(`DELETE FROM disabled_memberships WHERE organization_id = $1 AND user_id = $2`, [orgId, userId]);
       const after = await memberRoles(client, orgId, userId);
       await client.query('COMMIT');
 
       return { before: cur.rows.map((r) => toSpec(r.role, r.scope_type, r.scope_id)), after: wanted, roles: after };
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * 停用／恢復在本組織的成員資格（SD §8.9）。角色原樣保留；權限從下一個請求起失效／恢復
+   * （GrantLoader 每個請求重新載入）。帳號本身與其他組織不受影響。重複呼叫不變更（冪等）。
+   * 護欄與角色指派相同：不能停用自己、不能讓組織失去最後一位啟用中的 org_admin、先鎖定組織列排隊進行。
+   */
+  async setMembershipStatus(
+    orgId: string,
+    userId: string,
+    status: MembershipStatus,
+    actorId: string,
+  ): Promise<{ before: MembershipStatus; after: MembershipStatus }> {
+    const client = await this.db.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`SELECT 1 FROM organizations WHERE id = $1 FOR NO KEY UPDATE`, [orgId]);
+      const m = await client.query<{ n: number; is_admin: boolean | null; disabled: boolean }>(
+        `SELECT count(*)::int AS n, bool_or(ro.code = 'org_admin') AS is_admin,
+                EXISTS (SELECT 1 FROM disabled_memberships dm WHERE dm.organization_id = $2 AND dm.user_id = $1) AS disabled
+           FROM user_org_roles uor JOIN roles ro ON ro.id = uor.role_id
+          WHERE uor.user_id = $1 AND uor.organization_id = $2`,
+        [userId, orgId],
+      );
+      const row = m.rows[0]!;
+      // 不是本組織成員 → 404（不透露此使用者是否存在於其他組織）
+      if (!row.n) throw new DomainError('NOT_FOUND');
+      const before: MembershipStatus = row.disabled ? 'disabled' : 'active';
+
+      if (status === 'disabled' && before === 'active') {
+        if (userId === actorId) throw rejected('cannot_disable_self');
+        if (row.is_admin && !(await countActiveAdmins(client, orgId, userId))) throw rejected('last_org_admin');
+        await client.query(`INSERT INTO disabled_memberships (organization_id, user_id, disabled_by) VALUES ($1, $2, $3)`, [orgId, userId, actorId]);
+      } else if (status === 'active' && before === 'disabled') {
+        await client.query(`DELETE FROM disabled_memberships WHERE organization_id = $1 AND user_id = $2`, [orgId, userId]);
+      }
+      await client.query('COMMIT');
+      return { before, after: status };
     } catch (e) {
       await client.query('ROLLBACK');
       throw e;
@@ -280,13 +337,8 @@ export class OrganizationService {
       if (!o.rows[0]) throw new DomainError('NOT_FOUND');
       orgName = o.rows[0].name;
 
-      const admins = await client.query<{ n: number }>(
-        `SELECT count(*)::int AS n FROM user_org_roles uor
-           JOIN roles ro ON ro.id = uor.role_id JOIN users u ON u.id = uor.user_id
-          WHERE uor.organization_id = $1 AND ro.code = 'org_admin' AND u.status = 'active'`,
-        [orgId],
-      );
-      if (admins.rows[0]!.n > 0) {
+      // 「啟用中」＝帳號啟用且成員資格未停用；只剩停用中的管理員時可復原
+      if ((await countActiveAdmins(client, orgId, null)) > 0) {
         throw new DomainError('VALIDATION_FAILED', 'Organization still has an active admin', [{ issue: 'org_has_active_admin' }]);
       }
 
@@ -300,6 +352,8 @@ export class OrganizationService {
           [userId, orgId],
         );
         if (!has.rowCount) await this.insertGrant(client, orgId, userId, { role: 'org_admin' }, actorId);
+        // 對象若是成員資格已停用的本組織成員，復原即一併恢復——否則加上 org_admin 也無法管理
+        await client.query(`DELETE FROM disabled_memberships WHERE organization_id = $1 AND user_id = $2`, [orgId, userId]);
       } else {
         const u = await client.query<{ id: string }>(`INSERT INTO users (email, display_name) VALUES ($1, $2) RETURNING id`, [
           input.email,
@@ -349,6 +403,19 @@ export class OrganizationService {
       [userId, spec.role, scopeType, scopeId, orgId, actorId],
     );
   }
+}
+
+/** 本組織「啟用中」的 org_admin 人數（可排除某人）：帳號啟用，且在本組織的成員資格未停用 */
+async function countActiveAdmins(tx: Q, orgId: string, excludeUserId: string | null): Promise<number> {
+  const r = await tx.query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM user_org_roles uor
+       JOIN roles ro ON ro.id = uor.role_id JOIN users u ON u.id = uor.user_id
+      WHERE uor.organization_id = $1 AND ro.code = 'org_admin' AND u.status = 'active'
+        AND ($2::uuid IS NULL OR uor.user_id <> $2::uuid)
+        AND NOT EXISTS (SELECT 1 FROM disabled_memberships dm WHERE dm.organization_id = $1 AND dm.user_id = uor.user_id)`,
+    [orgId, excludeUserId],
+  );
+  return r.rows[0]!.n;
 }
 
 async function assertCoursesInOrg(tx: Tx, orgId: string, courseIds: string[], field: 'roles' | 'courseId'): Promise<void> {

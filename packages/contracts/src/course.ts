@@ -122,6 +122,8 @@ export interface CourseStaffDto {
   email: string;
   role: CourseStaffRole;
   assignedAt: string;
+  /** 在課程所屬組織的成員資格已停用（角色保留但沒有權限；名冊照列並標示，課程列表的講師欄不列） */
+  memberDisabled: boolean;
 }
 
 export interface VersionImpactDto {

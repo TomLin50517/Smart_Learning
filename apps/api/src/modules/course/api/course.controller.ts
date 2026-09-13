@@ -55,6 +55,18 @@ export class CourseController {
     return r.course;
   }
 
+  /** openapi: restoreCourse——恢復封存；權限與封存相同（course.archive），狀態依是否有已發布版本決定 */
+  @Post(':id/restore')
+  @RequirePermission('course.archive', { scope: 'course', resource: 'course' })
+  @RequireCapability({ capability: 'authoringAllowed' })
+  @Audit({ action: 'course.restored', resourceType: 'course' })
+  @HttpCode(200)
+  async restore(@Param('id') id: string, @Req() req: FastifyRequest): Promise<CourseDetailDto> {
+    const r = await this.courses.restore(id);
+    req.ctx.audit = { before: r.before, after: r.after };
+    return r.course;
+  }
+
   /** openapi: createCourseVersion——建立第一個（或下一個）草稿；已有編輯中版本時拒絕 */
   @Post(':id/versions')
   @RequirePermission('course.version.create', { scope: 'course', resource: 'course' })
