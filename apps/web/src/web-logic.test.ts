@@ -10,6 +10,35 @@ import { can, navItems } from './auth/permissions';
 import { safeNext } from './auth/redirect';
 import { passwordProblem } from './auth/password';
 import { blockingReasonText, issueText, parseMarkdownLite, seededShuffle } from './learn-lib';
+import { csvTemplate, parseCsv, toLearnerRows, toMemberRows } from './csv';
+
+describe('bulk import CSV', () => {
+  it('parses Excel CSV (BOM, CRLF, quotes, embedded commas) and pasted tab-separated text', () => {
+    expect(parseCsv('﻿Email,姓名\r\n"a@x.test","王, 小明"\r\n\r\nb@x.test,"說""嗨"""\r\n')).toEqual([
+      ['Email', '姓名'],
+      ['a@x.test', '王, 小明'],
+      ['b@x.test', '說"嗨"'],
+    ]);
+    expect(parseCsv('a@x.test\t王小明\tlearner\nb@x.test\t李小華\t')).toEqual([
+      ['a@x.test', '王小明', 'learner'],
+      ['b@x.test', '李小華', ''],
+    ]);
+  });
+
+  it('maps headers in any order and Chinese role names; positional without a header', () => {
+    expect(toMemberRows(parseCsv('課程代碼,角色,姓名,電子郵件\nC-0001,講師,陳老師,t@x.test\n,學生,王小明,s@x.test'))).toEqual([
+      { email: 't@x.test', displayName: '陳老師', role: 'instructor', courseCode: 'C-0001' },
+      { email: 's@x.test', displayName: '王小明', role: 'learner' },
+    ]);
+    expect(toMemberRows(parseCsv('s@x.test,王小明,組長,C-9'))).toEqual([{ email: 's@x.test', displayName: '王小明', role: '組長', courseCode: 'C-9' }]);
+    expect(toLearnerRows(parseCsv('Email,Name\na@x.test,\nb@x.test,李小華'))).toEqual([{ email: 'a@x.test' }, { email: 'b@x.test', displayName: '李小華' }]);
+  });
+
+  it('the templates round-trip through the parser', () => {
+    expect(toMemberRows(parseCsv(csvTemplate('members')))[2]).toEqual({ email: 'teacher01@example.com', displayName: '陳老師', role: 'instructor', courseCode: 'C-0001' });
+    expect(toLearnerRows(parseCsv(csvTemplate('learners')))).toHaveLength(2);
+  });
+});
 
 describe('learning screen helpers', () => {
   it('parses a tiny Markdown subset into plain-text blocks (no HTML ever produced)', () => {
