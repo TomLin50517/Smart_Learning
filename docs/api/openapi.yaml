@@ -220,6 +220,10 @@ components:
                 properties:
                   field: { type: string }
                   issue: { type: string }
+                  params:
+                    type: object
+                    additionalProperties: { type: string }
+                    description: 前端組文案用的少量資料（例如 `code_in_use` 的 `title`）；只含呼叫者本來就能檢視的內容
 
     PageMeta:
       type: object
@@ -840,11 +844,23 @@ paths:
       operationId: listOrganizationUsers
       tags: [Organization]
       x-required-permission: org.user.read
+      description: |
+        依 email 排序、keyset 分頁，回 `{ data: OrgMemberDto[], meta: { next_cursor } }`。
+        課程角色附 `course: { code, title }`，讓管理員看出是哪門課（SD §8.9）。
       parameters:
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
+        - name: role
+          in: query
+          description: 只列出持有此角色的成員（課程角色不分課程）；成員的其他角色仍完整回傳
+          schema: { type: string, enum: [org_admin, course_admin, instructor, learner, auditor] }
+        - name: q
+          in: query
+          description: 姓名或 email 的部分字串，不分大小寫；`%`、`_` 視為一般字元
+          schema: { type: string, maxLength: 100 }
       responses:
         '200': { description: OK }
+        '400': { description: '`role` 不在列舉中' }
     post:
       operationId: createOrganizationUser
       tags: [Organization]
@@ -865,12 +881,15 @@ paths:
                 displayName: { type: string, maxLength: 200 }
                 role:
                   type: string
-                  enum: [learner, org_admin, auditor]
+                  enum: [learner, instructor, course_admin, org_admin, auditor]
                   default: learner
-                  description: 課程角色（course_admin／instructor）請經由角色指派端點設定
+                courseId:
+                  type: string
+                  format: uuid
+                  description: course_admin／instructor 必填（課程須屬於本組織），其他角色不可指定。講師可直接加入，不必先掛成學員
       responses:
         '201': { description: '回傳 `{ userId, invited, emailSent }`。新帳號 `invited: true` 並寄出設定密碼邀請，`emailSent` 表示信件是否已交給郵件伺服器（失敗時對方可改用「忘記密碼」）；既有帳號 `invited: false`、`emailSent: false`（直接加入）' }
-        '400': { description: '已是成員時 details 為 `email: already_member`' }
+        '400': { description: '`email: already_member`；`courseId: course_id_mismatch`／`course_not_in_organization`' }
 
   /organizations/{id}/admin-recovery:
     parameters: [{ $ref: '#/components/parameters/ResourceId' }]
@@ -913,7 +932,10 @@ paths:
       description: |
         高風險操作，before/after 完整寫入 Audit。整組取代使用者在本組織的角色。
         course_admin／instructor 必須指定屬於本組織的課程；platform_admin 無法由此授予；
-        非本組織成員回 404；會移除最後一位 org_admin 時回 400 `last_org_admin`。
+        非本組織成員回 404；不能移除自己的 org_admin（400 `cannot_remove_own_admin`）；
+        會讓組織失去最後一位啟用中 org_admin 時回 400 `last_org_admin`。同一組織的角色變更
+        鎖定組織列排隊進行，兩位管理員同時互相移除時只有一方成功（SD §8.9）。
+        回應 `{ roles }`，課程角色附 `course: { code, title }`。
       requestBody:
         required: true
         content:
@@ -1053,6 +1075,10 @@ paths:
         學員的課程目錄另有端點）。依 code 排序、keyset 分頁，回 `{ data: CourseDto[], meta: { next_cursor } }`。
         `sort` 參數目前不支援（SD §6.5）。
       parameters:
+        - name: organizationId
+          in: query
+          description: 只列此組織的課程（仍受 course.read 範圍限制；供成員頁的課程選單使用）
+          schema: { type: string, format: uuid }
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Sort'
@@ -1072,14 +1098,17 @@ paths:
             schema:
               type: object
               additionalProperties: false
-              required: [code, title]
+              required: [title]
               properties:
-                code: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$', description: 組織內唯一 }
+                code:
+                  type: string
+                  pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$'
+                  description: 選填、組織內唯一。省略時依組織自動編號（`C-0001` 起，取現有 `C-####` 最大值 + 1）
                 title: { type: string, maxLength: 200 }
                 description: { type: string, maxLength: 5000 }
       responses:
         '201': { description: '`CourseDto`' }
-        '400': { description: '`code: already_exists`／`invalid_code`' }
+        '400': { description: '`code: code_in_use`（`params.title` 為使用中的課程名稱）／`invalid_code`' }
 
   /courses/{id}:
     parameters: [{ $ref: '#/components/parameters/CourseId' }]
