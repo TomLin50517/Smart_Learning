@@ -61,6 +61,25 @@ export function organizationsGranted(grants: readonly PermissionGrant[], permiss
 }
 
 /**
+ * 列表端點用：持有某權限的範圍。platform → all；organization／course 分別列出 id。
+ * self 授權不算（self 權限不應擴大管理類列表的可見範圍）。
+ */
+export interface GrantScopes {
+  all: boolean;
+  organizations: string[];
+  courses: string[];
+}
+
+export function grantScopes(grants: readonly PermissionGrant[], permission: string): GrantScopes {
+  const g = grants.filter((x) => x.permission === permission);
+  return {
+    all: g.some((x) => x.type === 'platform'),
+    organizations: [...new Set(g.filter((x) => x.type === 'organization' && x.organizationId).map((x) => x.organizationId as string))],
+    courses: [...new Set(g.filter((x) => x.type === 'course' && x.id).map((x) => x.id as string))],
+  };
+}
+
+/**
  * 稽核紀錄的可見範圍（SA UC-AUD-001、§6.2 audit.read_*）：
  * - all：platform 範圍持有任一 audit.read_platform／_org／_course
  * - organizations：組織範圍的 audit.read_org（或組織範圍的 audit.read_course）

@@ -201,6 +201,18 @@ export class OrganizationService {
 
       await client.query(`DELETE FROM user_org_roles WHERE user_id = $1 AND organization_id = $2`, [userId, orgId]);
       for (const spec of wanted) await this.insertGrant(client, orgId, userId, spec, actorId);
+      // course_staff 是課程範圍角色的名冊，須與 user_org_roles 同步（課程端的指派見 CourseService.assignStaff）
+      await client.query(
+        `DELETE FROM course_staff cs USING courses c
+          WHERE cs.course_id = c.id AND c.organization_id = $2 AND cs.user_id = $1 AND cs.staff_role IN ('instructor', 'course_admin')`,
+        [userId, orgId],
+      );
+      for (const spec of wanted.filter((r) => r.courseId)) {
+        await client.query(
+          `INSERT INTO course_staff (course_id, user_id, staff_role, assigned_by) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
+          [spec.courseId, userId, spec.role, actorId],
+        );
+      }
       await client.query('COMMIT');
 
       return { before: cur.rows.map((r) => toSpec(r.role, r.scope_type, r.scope_id)), after: wanted };

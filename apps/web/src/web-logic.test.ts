@@ -5,7 +5,7 @@
 import { ERROR_CODES, type MeResponse } from '@iac/contracts';
 import { describe, expect, it } from 'vitest';
 import { readCookie } from './api/client';
-import { ApiError, describeError, ERROR_MESSAGES } from './api/errors';
+import { ApiError, describeError, ERROR_MESSAGES, humanizeStructurePath } from './api/errors';
 import { can, navItems } from './auth/permissions';
 import { safeNext } from './auth/redirect';
 import { passwordProblem } from './auth/password';
@@ -30,6 +30,14 @@ describe('error messages', () => {
 
   it('never surfaces raw exception text for unknown errors', () => {
     expect(describeError(new Error('SELECT * FROM users failed')).message).toBe(ERROR_MESSAGES.INTERNAL_ERROR);
+  });
+});
+
+describe('humanizeStructurePath', () => {
+  it('turns course-structure paths into readable locations', () => {
+    expect(humanizeStructurePath('modules.0.lessons.1.activities.2.interactiveDefinitionId')).toBe('第 1 單元 › 第 2 課節 › 第 3 活動 › 互動元件');
+    expect(humanizeStructurePath('modules.3.id')).toBe('第 4 單元 › id');
+    expect(humanizeStructurePath('email')).toBeNull();
   });
 });
 
@@ -105,6 +113,11 @@ describe('navigation by permission (display only — the server enforces access)
     expect(labels(['audit.read_org'])).toContain('稽核紀錄');
     expect(labels(['audit.read_self'])).toContain('帳號活動');
     expect(labels(['audit.read_self', 'audit.read_course'])).not.toContain('帳號活動');
+  });
+
+  it('course staff and org admins see course management', () => {
+    expect(labels(['course.read'])).toContain('課程管理');
+    expect(labels(['coach.interact_self'])).not.toContain('課程管理');
   });
 
   it('can() is false without a session', () => {

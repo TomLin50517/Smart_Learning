@@ -78,6 +78,18 @@ const FIELD_LABELS: Record<string, string> = {
   licenseFile: '授權檔',
   activationCode: '啟用碼',
   currentPassword: '目前的密碼',
+  summary: '簡介',
+  navigationMode: '學習順序',
+  modules: '課程結構',
+  interactiveDefinitionId: '互動元件',
+  activityId: '活動',
+  isRequired: '必修',
+  maxAttempts: '作答次數上限',
+  weight: '權重',
+  maxScore: '滿分',
+  config: '設定',
+  answerKey: '答案',
+  prerequisite: '先修條件',
   locale: '語言',
   from: '開始時間',
   to: '結束時間',
@@ -97,6 +109,17 @@ const ISSUE_MESSAGES: Record<string, string> = {
   too_many_rows: '符合條件的紀錄超過 50,000 筆，請縮小日期區間或加上動作篩選',
   invalid: '格式不正確',
   unrecognized_key: '不支援此欄位',
+  draft_exists: '這門課已有編輯中的版本，請先完成或發布它',
+  course_archived: '課程已封存',
+  source_not_published: '只能複製已發布或已被取代的版本',
+  duplicate_id: '項目識別碼重複',
+  activity_not_in_lesson: '引用的活動不在這個課節中',
+  id_conflict: '識別碼已被其他版本使用',
+  unknown_interactive_definition: '互動元件不存在或已停用',
+  interactive_requires_definition: '互動活動必須選擇互動元件',
+  too_many_activities: '活動總數超過上限',
+  json_too_large: '內容過大',
+  invalid_code: '只能使用英數字、連字號與底線，且須以英數字開頭',
   incorrect: '目前的密碼不正確',
   same_as_current: '新密碼不可與目前的密碼相同',
   org_has_active_admin: '此組織仍有啟用中的管理員，不需要復原；請聯絡該管理員新增成員',
@@ -111,8 +134,29 @@ const ISSUE_MESSAGES: Record<string, string> = {
   course_not_in_organization: '課程不屬於此組織',
 };
 
+const STRUCTURE_SEGMENTS: Record<string, string> = { modules: '單元', lessons: '課節', activities: '活動', contentBlocks: '內容區塊' };
+
+/** 課程結構的欄位路徑 → 中文位置：modules.0.lessons.1.activities.2.title → 第 1 單元 › 第 2 課節 › 第 3 活動 › 名稱 */
+export function humanizeStructurePath(field: string): string | null {
+  if (!/^modules\.\d+/.test(field)) return null;
+  const parts = field.split('.');
+  const out: string[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    const seg = STRUCTURE_SEGMENTS[parts[i]!];
+    const idx = parts[i + 1];
+    if (seg && idx !== undefined && /^\d+$/.test(idx)) {
+      out.push(`第 ${Number(idx) + 1} ${seg}`);
+      i++;
+    } else {
+      out.push(FIELD_LABELS[parts[i]!] ?? parts[i]!);
+    }
+  }
+  return out.join(' › ');
+}
+
 export function describeDetail(d: ErrorDetail): string {
-  const label = d.field ? (FIELD_LABELS[d.field.split('.')[0] ?? ''] ?? d.field) : '';
+  const structural = d.field ? humanizeStructurePath(d.field) : null;
+  const label = d.field ? (structural ?? FIELD_LABELS[d.field.split('.')[0] ?? ''] ?? d.field) : '';
   const issue = ISSUE_MESSAGES[d.issue] ?? d.issue;
   return label ? `${label}：${issue}` : issue;
 }
