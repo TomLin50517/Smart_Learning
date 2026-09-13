@@ -673,9 +673,10 @@ components:
       description: |
         公開端點的回應刻意精簡：不含分數、email、enrollmentId 或任何
         學習紀錄（ARCH §17.3、THR-I-005）。
-      required: [status, organizationName, courseTitle, learnerDisplayName, issuedAt]
+      required: [status, publicId, organizationName, courseTitle, learnerDisplayName, issuedAt]
       properties:
         status:             { type: string, enum: [valid, revoked, expired] }
+        publicId:           { type: string, description: 證書編號（ULID，印在證書上） }
         organizationName:   { type: string }
         courseTitle:        { type: string }
         learnerDisplayName: { type: string }
@@ -1824,6 +1825,32 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/CompletionEvaluation' }
 
+  /enrollments/{id}/completion-approvals:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    post:
+      operationId: approveCompletion
+      tags: [Enrollment]
+      x-required-permission: learning.result.read_all
+      x-audit: completion.approved
+      description: |
+        人工核可（SD §6.14）：完成條件含 `manual_approval` 時使用。路由的權限只確認是課程人員；
+        核可人須在此課程（或其組織）實際擔任條件指定的角色，否則 403 `approver_role_required`。
+        一次核可涵蓋其擔任且尚未核可的所有角色；同一交易重算完成判定——因此完成時寫入 course.completed 並排入發證。
+        選課須為 active／reopened（否則 409 `ENROLLMENT_NOT_ACTIVE`）。
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                note: { type: string, maxLength: 500, description: 記錄於稽核 }
+      responses:
+        '200': { description: '`CompletionApprovalDto`（approvedRoles、completionChanged）' }
+        '400': { description: '`approval_not_required`／`already_approved`' }
+        '403': { description: '`approver_role_required` 或無權限' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
   /enrollments/{id}/outline:
     parameters: [{ $ref: '#/components/parameters/ResourceId' }]
     get:
@@ -2322,8 +2349,20 @@ paths:
       operationId: listMyCertificates
       tags: [Certificate]
       x-required-permission: certificate.read_self
+      description: 自己的證書（有效、已撤銷、已過期），含驗證碼（SD §6.14）
       responses:
-        '200': { description: OK }
+        '200': { description: '`MyCertificateDto[]`' }
+
+  /me/certificates/{id}:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      operationId: getMyCertificate
+      tags: [Certificate]
+      x-required-permission: certificate.read_self
+      description: 網頁版證書（瀏覽器列印／另存 PDF）。self 範圍：不是本人的一律 404
+      responses:
+        '200': { description: '`MyCertificateDto`' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   /courses/{id}/certificates:
     parameters: [{ $ref: '#/components/parameters/CourseId' }]
@@ -2331,8 +2370,9 @@ paths:
       operationId: listCourseCertificates
       tags: [Certificate]
       x-required-permission: certificate.read_all
+      description: 課程已發出的證書（含學員 email、撤銷原因；不含驗證碼）
       responses:
-        '200': { description: OK }
+        '200': { description: '`CourseCertificateDto[]`' }
 
   /certificates/{id}/download:
     parameters: [{ $ref: '#/components/parameters/ResourceId' }]
@@ -2340,7 +2380,9 @@ paths:
       operationId: downloadCertificate
       tags: [Certificate]
       x-required-permission: certificate.read_self
-      description: proxy streaming；每次存取重新驗證 self/course scope
+      description: |
+        proxy streaming；每次存取重新驗證 self/course scope。
+        **尚未實作**：目前證書為網頁版（GET /me/certificates/{id}，瀏覽器列印／另存 PDF），伺服器端 PDF 於後續批次（SD §6.14）。
       responses:
         '200':
           description: PDF
@@ -2365,10 +2407,12 @@ paths:
             schema:
               type: object
               required: [reason]
+              additionalProperties: false
               properties:
-                reason: { type: string }
+                reason: { type: string, minLength: 1, maxLength: 500 }
       responses:
-        '200': { description: 已撤銷 }
+        '200': { description: '已撤銷；回傳 `CourseCertificateDto`。同交易寫入 certificate.revoked 學習事件' }
+        '400': { description: '`not_revocable`（只有有效的證書可以撤銷）或缺少原因' }
 
   # ---------------------------------------------------------------- License
   /platform/license:
@@ -2649,6 +2693,8 @@ paths:
       description: |
         QR 驗證端點。per-IP rate limit + 常數時間比對；查無資料回 404 且
         回應時間不因存在與否而顯著差異（THR-D-005、AC-CRT-005）。
+        實作（SD §6.14）：每個 IP 每分鐘 30 次（API）＋ nginx /public/ 限流；驗證碼格式不符直接 404；
+        以唯一索引查詢。前端查驗頁為 `/verify/{verificationCode}`（不需登入）。
       responses:
         '200':
           description: OK

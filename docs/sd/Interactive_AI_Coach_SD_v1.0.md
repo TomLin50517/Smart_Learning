@@ -2313,6 +2313,22 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 發布檢查 C5 | 影片 config 以內建 schema 檢查（欄位白名單、長度 1～86400 秒、完成比例 0.1～1）；`video_url` 必須以 http:// 或 https:// 開頭（json-schema-lite 不支援 pattern，另以固定規則檢查）——網址會直接放進學員的播放器 |
 | 路由說明 | SD §7.1 規劃的 `/app/my/timeline/:enrollmentId` 依現行學員路由（`/app/learn/...`）改為 `/app/learn/:enrollmentId/timeline` |
 
+## 6.14 人工核可與證書（Phase 2-4，v1.24）
+
+實作：`learning-record/application/learning.service.ts`（approve、settle）、`modules/certificate/`、`apps/worker/src/handlers/certificate-generate.ts`、`apps/web/src/pages/{CertificatesPage,VerifyPage,certificates-panel,certificate-view}.tsx`。
+
+| 項目 | 實作 |
+|---|---|
+| 人工核可 | `POST /enrollments/{id}/completion-approvals`（note 選填）。路由權限 learning.result.read_all 只確認是課程人員；核可人須在此課程（instructor／course_admin 的課程角色）或其組織（org_admin）**實際擔任完成條件指定的角色**，否則 403 `approver_role_required`——例如條件指定講師時，課程管理員與組織管理員都不能代為核可。一次核可涵蓋其擔任且尚未核可的所有角色（寫入 `completion_approvals`，完成引擎據此建構 `manualApprovals`）。選課須可學習；鎖定選課列 |
+| 完成後的共同處理 | 送出作答與人工核可共用 `settle()`：重算並寫入進度快照；選課轉為完成時寫 course.completed，並在**同一交易**排入 `certificate.generate`（output 佇列、priority 50、idempotency key `cert:{enrollmentId}`——同一筆選課只排一次）。排入用 `common/job-queue.ts` 的 `enqueueJobTx` |
+| 發證（worker） | 以 app_worker 連線執行：只發給 status＝completed 的選課；已有有效或已撤銷證書即結束（**撤銷後不自動重發**，待重新開啟／重修功能）；部分唯一索引 `uq_cert_enr_valid` 為最後防線（並行重跑只會有一張）。證書編號 ULID、驗證碼 20 bytes base32（32 字元、160 bits）；學員姓名、課程名稱、組織名稱為發證當下快照。證書、certificate.issued 學習事件、certificate.issued 稽核（actor_role system）同一交易 |
+| 證書形式 | **網頁版**：`/app/certificates/:id` 以瀏覽器列印／另存 PDF（列印樣式隱藏導覽列）。伺服器端 PDF（`pdf_object_key`、SEQ-10 的 PdfRenderer／Object Storage）與發證通知延後——不需新增套件 |
+| 查詢 | 學員 `GET /me/certificates`、`/me/certificates/{id}`（含驗證碼；不是本人 404）；課程人員 `GET /courses/{id}/certificates`（certificate.read_all：course_admin、org_admin、auditor；含學員 email，不含驗證碼）。pending／failed 不列出 |
+| 撤銷 | `POST /certificates/{id}/revoke`（certificate.revoke，範圍由證書反查課程——ScopeResolver 新增 certificate 資源）；原因必填；只有有效的證書可撤銷（`not_revocable`）；只改狀態、保留紀錄；同交易寫 certificate.revoked 學習事件；稽核 certificate.revoked（metadata 含原因） |
+| 公開驗證 | API `GET /public/certificates/{code}`（@Public，每 IP 每分鐘 30 次，另有 nginx `/public/` 限流）；驗證碼格式不符直接 404（格式不是祕密）；以唯一索引查詢。只回狀態、證書編號、組織、課程、學員姓名、發證／到期／撤銷日期——不含 email、選課 id、成績。前端 `/verify/:code` 不需登入；查驗以系統紀錄為準（THR-T-006） |
+| 前端 | 側欄「我的證書」；學習頁完成時連到證書；課程頁「證書」卡片（撤銷）；學員詳情頁「人工核可」卡片（核可者、時間、備註；按鈕顯示給課程人員，能否核可由伺服器判斷）；學習歷程顯示核可、發證、撤銷 |
+| 新版本提示 | 部署新版後，已開啟的頁面每 5 分鐘（及切回分頁時）比對 index.html 的主程式檔名，不同時顯示「系統已更新，請重新整理」 |
+
 ---
 
 # 7. Frontend 設計
@@ -4304,3 +4320,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.21 | 2026-09-13 | Phase 2-1b 批次匯入：新增 §6.11（成員與課程學員兩個入口、預覽即實際的 dry-run、逐列結果代碼、既有成員不改角色、建帳號權限、交易內授權上限、鎖序、提交後邀請與批次稽核、ORG_MEMBERSHIP 介面、前端 CSV） | Software Designer |
 | v1.22 | 2026-09-13 | Phase 2-3a 學習事件：新增 §6.12（學員端事件白名單與限流、伺服器端事件與交易、學習時間算法、以事件佐證的影片觀看比例、教師與學員兩條 timeline 路由、教師檢視學員進度、學員名單的進度與最後學習時間） | Software Designer |
 | v1.23 | 2026-09-13 | Phase 2-3b 學習畫面：新增 §6.13（HTML5 影片播放器與連續播放判定、heartbeat 與事件佇列的失敗處理、學員學習歷程頁、教師學員詳情頁、學員名單新欄位、編輯器影片欄位、影片 config 的 C5 檢查與網址限制） | Software Designer |
+| v1.24 | 2026-09-13 | Phase 2-4 人工核可與證書：新增 §6.14（核可人須擔任條件指定角色、完成後同交易排入發證、worker 發證與冪等、網頁版證書（伺服器端 PDF 延後）、查詢與撤銷、公開驗證、新版本提示） | Software Designer |
