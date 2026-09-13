@@ -67,6 +67,20 @@ export function CoursePage() {
     }
   }
 
+  async function restore() {
+    if (!window.confirm(`確定要恢復「${c.title}」？恢復後可以再建立新版本${c.publishedVersion ? '，並重新接受選課' : ''}。`)) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      await api('POST', `/api/courses/${c.id}/restore`);
+      course.reload();
+    } catch (e) {
+      setActionError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <>
       <PageHeader
@@ -78,17 +92,26 @@ export function CoursePage() {
           </>
         }
         actions={
-          can(me, 'course.archive') && c.status !== 'archived' ? (
+          !can(me, 'course.archive') ? undefined : c.status !== 'archived' ? (
             <button className="btn btn-danger" onClick={() => void archive()} disabled={busy || !authoring}>
               封存課程
             </button>
-          ) : undefined
+          ) : (
+            <button className="btn btn-primary" onClick={() => void restore()} disabled={busy || !authoring}>
+              恢復課程
+            </button>
+          )
         }
       />
       <p>
         <Link to="/app/courses">← 課程列表</Link>
       </p>
-      {c.status === 'archived' && <Notice kind="info">此課程已封存：不再接受新的選課，也不能建立新版本。</Notice>}
+      {c.status === 'archived' && (
+        <Notice kind="info">
+          此課程已封存：不再接受新的選課，也不能建立新版本。
+          {can(me, 'course.archive') && '如需重新開放，請按右上角「恢復課程」。'}
+        </Notice>
+      )}
       <ErrorAlert error={actionError} />
 
       <section className="card">
@@ -231,6 +254,14 @@ function StaffPanel({ courseId }: { courseId: string }) {
             {staff.data.map((s) => (
               <li key={`${s.userId}-${s.role}`}>
                 {s.displayName} <span className="muted small">{s.email}</span>・{ROLE_LABELS[s.role]}
+                {s.memberDisabled && (
+                  <>
+                    {' '}
+                    <span className="badge badge-blocked" title="此成員在本組織已停用，目前沒有這門課的權限">
+                      已停用
+                    </span>
+                  </>
+                )}
               </li>
             ))}
           </ul>

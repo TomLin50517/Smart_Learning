@@ -1,4 +1,4 @@
-import type { CourseDto } from '@iac/contracts';
+import type { CourseDto, CourseStatus } from '@iac/contracts';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { api } from '../api/client';
@@ -21,21 +21,25 @@ export function CoursesPage() {
   const [next, setNext] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(null);
+  const [statusFilter, setStatusFilter] = useState<CourseStatus | ''>('');
 
-  const load = useCallback(async (cursor: string | null) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const q = new URLSearchParams({ limit: '50', ...(cursor && { cursor }) });
-      const r = await api<Page>('GET', `/api/courses?${q.toString()}`);
-      setItems((old) => (cursor ? [...old, ...r.data] : r.data));
-      setNext(r.meta.next_cursor);
-    } catch (e) {
-      setError(e);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const load = useCallback(
+    async (cursor: string | null) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const q = new URLSearchParams({ limit: '50', ...(cursor && { cursor }), ...(statusFilter && { status: statusFilter }) });
+        const r = await api<Page>('GET', `/api/courses?${q.toString()}`);
+        setItems((old) => (cursor ? [...old, ...r.data] : r.data));
+        setNext(r.meta.next_cursor);
+      } catch (e) {
+        setError(e);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [statusFilter],
+  );
 
   useEffect(() => {
     if (can(me, 'course.read')) void load(null);
@@ -51,6 +55,16 @@ export function CoursesPage() {
       {can(me, 'course.create') && me.activeOrganization && <CreateCourse onCreated={() => void load(null)} />}
       <section className="card">
         <h2>課程</h2>
+        <div className="toolbar">
+          <select aria-label="依狀態篩選" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as CourseStatus | '')}>
+            <option value="">全部狀態</option>
+            {(Object.keys(COURSE_STATUS_LABELS) as CourseStatus[]).map((s) => (
+              <option key={s} value={s}>
+                {COURSE_STATUS_LABELS[s]}
+              </option>
+            ))}
+          </select>
+        </div>
         <ErrorAlert error={error} />
         <div className="table-wrap">
           <table className="table">
@@ -93,7 +107,7 @@ export function CoursesPage() {
           </table>
         </div>
         {loading && <Spinner />}
-        {!loading && items.length === 0 && !error && <p className="muted">目前沒有可檢視的課程。</p>}
+        {!loading && items.length === 0 && !error && <p className="muted">{statusFilter ? '沒有符合條件的課程。' : '目前沒有可檢視的課程。'}</p>}
         {next && !loading && (
           <button className="btn" onClick={() => void load(next)}>
             載入更多
