@@ -384,6 +384,7 @@ components:
         path:     { type: string }
         message:  { type: string }
         targetId: { type: string, format: uuid }
+        check:    { type: string, enum: [C1, C2, C3, C4, C5], description: 發布前檢查的項目（儲存完成條件時不帶） }
 
     VersionImpact:
       type: object
@@ -414,6 +415,7 @@ components:
         coachPolicy:       { $ref: '#/components/schemas/CoachPolicy' }
         knowledgeBindings: { type: array, items: { type: object } }
         publishedAt:       { type: string, format: date-time }
+        contentSnapshotHash: { type: [string, 'null'], description: '發布時計算（`sha256:…`）；草稿為 null' }
         editable:
           type: boolean
           description: '等同 `status === "draft"`。false 時所有內容寫入回 409。'
@@ -1320,8 +1322,10 @@ paths:
       tags: [Course]
       x-required-permission: course.version.validate
       description: |
-        ARCH §6.3 的五項檢查：無法到達的必修單元、完成條件引用已刪除活動、
-        來源文件是否處理完成、Coach Policy 是否缺失、互動活動 schema 是否合法。
+        ARCH §6.3 的五項檢查（SD §6.7）：C1 無法到達的必修活動（先修條件＋導覽模式的依賴圖）、
+        C2 完成條件必須存在且引用有效（含各活動先修條件）、C3 綁定教材是否處理完成、
+        C4 Coach Policy 存在且值域合法、C5 互動活動的 config／answerKey 符合元件 schema。
+        問題以 `check` 分組；有錯誤時 `valid: false`，仍回 200，讓 UI 先預覽。
       responses:
         '200':
           description: 驗證報告（`valid` 可能為 false）
@@ -1338,11 +1342,18 @@ paths:
       x-required-capability: authoringAllowed
       x-audit: course.version.published
       description: |
-        原子操作：舊 active published → superseded；本版 → published；
-        凍結 knowledge_bindings 的 document_version_id；寫入 content_snapshot_hash。
+        原子操作（SD §6.7）：鎖定課程列 → 本版須為 draft／review → 同一交易內重跑 validate，有錯誤即 422
+        → 舊的 published 轉 superseded → 本版轉 published 並寫入 `content_snapshot_hash`（內容的穩定序列化 sha256）
+        → 課程由 draft 轉 active。knowledge_bindings 已指向特定 document_version_id，隨版本凍結。
       responses:
-        '200': { description: 已發布 }
-        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '200': { description: '發布後的 `CourseVersionDetail`（含 `contentSnapshotHash`）' }
+        '400': { description: '`course_archived`' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422':
+          description: '`COURSE_VALIDATION_FAILED`：`details[]` 為 validate 的錯誤（`field`＝path、`issue`＝code、`params.check`／`params.message`）'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
 
   /course-versions/{id}/clone:
     parameters: [{ $ref: '#/components/parameters/ResourceId' }]
