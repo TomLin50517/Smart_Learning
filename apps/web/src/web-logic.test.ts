@@ -9,6 +9,40 @@ import { ApiError, describeError, ERROR_MESSAGES, humanizeRulePath, humanizeStru
 import { can, navItems } from './auth/permissions';
 import { safeNext } from './auth/redirect';
 import { passwordProblem } from './auth/password';
+import { blockingReasonText, issueText, parseMarkdownLite, seededShuffle } from './learn-lib';
+
+describe('learning screen helpers', () => {
+  it('parses a tiny Markdown subset into plain-text blocks (no HTML ever produced)', () => {
+    expect(parseMarkdownLite('# 標題\n第一行\n第二行\n\n- 甲\n- 乙\n<script>x</script>')).toEqual([
+      { type: 'h', level: 1, text: '標題' },
+      { type: 'p', text: '第一行\n第二行' },
+      { type: 'ul', items: ['甲', '乙'] },
+      { type: 'p', text: '<script>x</script>' },
+    ]);
+  });
+
+  it('shuffles deterministically per attempt, never in the authored order', () => {
+    const items = ['a', 'b', 'c', 'd'];
+    const one = seededShuffle(items, 'attempt-1');
+    expect(seededShuffle(items, 'attempt-1')).toEqual(one);
+    expect([...one].sort()).toEqual(items);
+    for (const seed of ['x', 'y', 'z', 'attempt-2', '']) expect(seededShuffle(items, seed)).not.toEqual(items);
+    expect(seededShuffle(['only'], 'x')).toEqual(['only']);
+  });
+
+  it('explains why the course is not complete yet', () => {
+    const titleOf = (id: string) => ({ A: '小考' })[id];
+    expect(blockingReasonText({ code: 'REQUIRED_ACTIVITIES_INCOMPLETE', activity_id: null, actual: 1, required: 3 }, titleOf)).toBe('必修活動已完成 1／3');
+    expect(blockingReasonText({ code: 'MIN_SCORE_NOT_MET', activity_id: null, actual: 64, required: 70 }, titleOf)).toBe('總分 64，需達 70');
+    expect(blockingReasonText({ code: 'DATA_NOT_AVAILABLE', activity_id: 'A' }, titleOf)).toBe('「小考」尚未有成績');
+    expect(blockingReasonText({ code: 'SOMETHING_NEW', activity_id: null }, titleOf)).toBe('SOMETHING_NEW');
+  });
+
+  it('describes result issues, keeping custom codes as-is', () => {
+    expect(issueText({ code: 'UNANSWERED', category: 'question', severity: 'medium', target: 'q2' }, '第 2 題')).toBe('第 2 題：未作答');
+    expect(issueText({ code: 'TEMP_HIGH', category: 'parameter', severity: 'medium' }, '溫度')).toBe('溫度：TEMP_HIGH');
+  });
+});
 
 describe('error messages', () => {
   it('every server error code has a zh-TW message', () => {

@@ -8,6 +8,8 @@ import type {
   CoachToneProfile,
   EnrollmentStatus,
   EnrollMethod,
+  OutlineActivityState,
+  ResultStatus,
   RuleConditionType,
   RuleOperator,
   CourseStatus,
@@ -74,6 +76,37 @@ export const ENROLLMENT_STATUS_BADGE: Record<EnrollmentStatus, string> = {
   reopened: 'badge-active',
   withdrawn: '',
   rejected: 'badge-blocked',
+};
+
+export const RESULT_STATUS_LABELS: Record<ResultStatus, string> = {
+  passed: '通過',
+  completed: '完成',
+  needs_improvement: '需要再加強',
+  failed: '未通過',
+};
+
+export const RESULT_STATUS_BADGE: Record<ResultStatus, string> = {
+  passed: 'badge-active',
+  completed: 'badge-active',
+  needs_improvement: 'badge-grace',
+  failed: 'badge-blocked',
+};
+
+export const ACTIVITY_STATE_LABELS: Record<OutlineActivityState, string> = {
+  locked: '尚未解鎖',
+  available: '可開始',
+  in_progress: '作答中',
+  attempted: '已作答',
+  completed: '已完成',
+};
+
+/** 大綱上的活動狀態符號（旁邊另有 aria-label 文字） */
+export const ACTIVITY_STATE_ICONS: Record<OutlineActivityState, string> = {
+  locked: '🔒',
+  available: '○',
+  in_progress: '◔',
+  attempted: '◑',
+  completed: '✓',
 };
 
 export const ENROLL_METHOD_LABELS: Record<EnrollMethod, string> = {

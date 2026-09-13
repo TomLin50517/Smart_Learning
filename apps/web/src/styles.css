@@ -199,6 +199,108 @@ fieldset {
 .role-list li + li {
   margin-top: 2px;
 }
+/* ---- 學習畫面 ------------------------------------------------------------ */
+.player {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+@media (max-width: 820px) {
+  .player {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.outline h3 {
+  font-size: 0.95rem;
+  margin: 12px 0 4px;
+}
+.outline h3:first-child {
+  margin-top: 0;
+}
+.outline ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.lesson-link {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.lesson-link:hover,
+.lesson-link[aria-current='true'] {
+  background: var(--surface-2);
+}
+.lesson-link[aria-current='true'] {
+  font-weight: 600;
+}
+.state-icons {
+  font-size: 0.8rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.progress-bar {
+  height: 8px;
+  margin: 8px 0;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.progress-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--brand);
+}
+.activity-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin: 14px 0;
+  background: var(--surface);
+}
+.pre-line {
+  white-space: pre-line;
+}
+.quiz-question {
+  border: 0;
+  padding: 0;
+  margin: 12px 0;
+}
+.quiz-question legend {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.param-row {
+  display: grid;
+  grid-template-columns: minmax(6em, 10em) minmax(0, 1fr) 5em;
+  gap: 10px;
+  align-items: center;
+  margin: 8px 0;
+}
+.seq-list {
+  padding-left: 1.4em;
+}
+.seq-list li {
+  margin: 4px 0;
+}
+.seq-list li > span {
+  display: inline-block;
+  min-width: 60%;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
 .check-group h4 {
   margin: 14px 0 4px;
 }
