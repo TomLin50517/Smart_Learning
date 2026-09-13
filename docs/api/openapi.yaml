@@ -1491,10 +1491,24 @@ paths:
       x-required-limit: maxActiveLearners
       x-audit: enrollment.assigned
       description: |
-        學員自行加入時所需權限為 `enrollment.self_enroll`。
-        綁定當下的 active published version（AC-CRS-003）。
+        管理者指派學員（SD §6.8）；自行加入（`enrollment.self_enroll`）、選課碼、審核於後續批次另立端點。
+        綁定當下的 active published version（AC-CRS-003）；課程列鎖定，與發布排隊。對象須為課程所屬組織的
+        啟用成員；尚無學員角色者自動補上（稽核 `metadata.learner_role_granted`）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email]
+              properties:
+                email:   { type: string, format: email }
+                dueDate: { type: string, format: date-time }
       responses:
-        '201': { description: 已建立 }
+        '201': { description: '`EnrollmentDto`' }
+        '400': { description: '`course_not_published`／`course_archived`；`email: not_in_organization`／`member_disabled`／`already_enrolled`' }
+        '403': { description: '`LICENSE_LIMIT_EXCEEDED`（進行中的學員數達授權上限）或無權限' }
 
   /courses/{id}/learners:
     parameters: [{ $ref: '#/components/parameters/CourseId' }]
@@ -1502,11 +1516,15 @@ paths:
       operationId: listCourseLearners
       tags: [Enrollment]
       x-required-permission: learning.result.read_all
+      description: 課程的選課名單（含已退課），依 email keyset 分頁；`memberDisabled` 表示成員資格已停用
       parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [pending, active, suspended, completed, reopened, withdrawn, rejected] }
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
       responses:
-        '200': { description: OK }
+        '200': { description: '`{ data: CourseLearnerDto[], meta: { next_cursor } }`' }
 
   /me/active-organization:
     put:
@@ -1584,8 +1602,9 @@ paths:
       operationId: listMyEnrollments
       tags: [Enrollment]
       x-required-permission: learning.result.read_self
+      description: 本人的選課（self 範圍）；只含啟用中組織、且本人成員資格未停用者；`canLearn` 為 active／reopened
       responses:
-        '200': { description: OK }
+        '200': { description: '`MyEnrollmentDto[]`' }
 
   /enrollments/{id}/approve:
     parameters: [{ $ref: '#/components/parameters/ResourceId' }]
@@ -1604,8 +1623,10 @@ paths:
       tags: [Enrollment]
       x-required-permission: enrollment.withdraw
       x-audit: enrollment.withdrawn
+      description: pending／active／suspended／reopened → withdrawn；學習紀錄保留，之後可重新指派（新的一筆選課）
       responses:
-        '200': { description: OK }
+        '200': { description: '`EnrollmentDto`' }
+        '400': { description: '`invalid_transition`（`params.from` 為目前狀態）' }
 
   /enrollments/{id}/suspend:
     parameters: [{ $ref: '#/components/parameters/ResourceId' }]
@@ -1614,8 +1635,10 @@ paths:
       tags: [Enrollment]
       x-required-permission: enrollment.suspend
       x-audit: enrollment.suspended
+      description: active／reopened → suspended（暫停期間不能學習，但仍計入授權的學員數）
       responses:
-        '200': { description: OK }
+        '200': { description: '`EnrollmentDto`' }
+        '400': { description: '`invalid_transition`' }
 
   /enrollments/{id}/resume:
     parameters: [{ $ref: '#/components/parameters/ResourceId' }]
@@ -1624,8 +1647,10 @@ paths:
       tags: [Enrollment]
       x-required-permission: enrollment.suspend
       x-audit: enrollment.resumed
+      description: suspended → active
       responses:
-        '200': { description: OK }
+        '200': { description: '`EnrollmentDto`' }
+        '400': { description: '`invalid_transition`' }
 
   /enrollments/{id}/relearning:
     parameters: [{ $ref: '#/components/parameters/ResourceId' }]

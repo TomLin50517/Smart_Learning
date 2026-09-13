@@ -2221,6 +2221,21 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 權限 | 依 migration 0012：講師、課程管理員可檢查與發布；組織管理員不可（僅可唯讀內容） |
 | 前端 | 版本編輯頁新增「發布」卡片：「發布前檢查」預覽報告（依 C1–C5 分組、標示位置），「發布此版本」先檢查、全數通過且確認後才發布；有未儲存的結構變更時停用。已發布版本顯示內容雜湊 |
 
+## 6.8 選課實作（Phase 2-1，v1.18）
+
+實作：`apps/api/src/modules/enrollment/`、`packages/contracts/src/enrollment.ts`。本批只有管理者指派；自行加入、選課碼、審核、重新開啟、重修另批實作（需課程的選課政策設定與學員課程目錄）。
+
+| 項目 | 實作 |
+|---|---|
+| 指派 | `POST /courses/{id}/enrollments`（enrollment.assign：組織管理員、課程管理員；**講師沒有**，依 migration 0012）。課程須有已發布版本（`course_not_published`）且未封存；綁定當下的已發布版本（AC-CRS-003）。先 `FOR UPDATE` 鎖定課程列——與發布同一把鎖，不會綁到正在被取代的版本。對象須為課程所屬組織的啟用成員，成員資格停用者拒絕；同課程已有未退課的選課 → `already_enrolled`（DB 部分唯一索引為第二層）。受 `maxActiveLearners` 限制（計 active／suspended／reopened 的不重複學員，SA §7.2） |
+| 自動補學員角色 | 被指派者若在該組織沒有 learner 角色（例如只有稽核人員或講師身分）即自動補上，否則沒有 `learning.*_self` 權限、無法學習。稽核 `metadata.learner_role_granted` |
+| 狀態轉換 | 純函式 `nextEnrollmentStatus`：withdraw（pending／active／suspended／reopened → withdrawn，記 `withdrawn_at`）、suspend（active／reopened → suspended）、resume（suspended → active）。不合法 → 400 `invalid_transition`，`params.from` 為目前狀態。退課後可重新指派，建立新的一筆選課（歷史保留） |
+| 資源解析 | `/enrollments/{id}/*` 以新資源種類 `enrollment` 經 ScopeResolver 反查所屬課程與組織，沿用課程範圍的授權與 ADR-019 的 404 |
+| 我的課程 | `GET /me/enrollments`（learning.result.read_self，self 範圍）：只回本人的選課，排除停用組織與成員資格已停用者；`canLearn` 為 active／reopened |
+| 學員名單 | `GET /courses/{id}/learners`（learning.result.read_all：組織管理員、課程管理員、講師）：含已退課，依 email keyset 分頁、可依狀態篩選，標示成員資格停用 |
+| 模組邊界 | 選課模組以 SQL 讀課程狀態與已發布版本，不 import 課程模組內部（模組間只能經 `*.contracts.ts`） |
+| 前端 | 「我的課程」頁（`/app/learn`，學習畫面於 2-2 開放）；課程頁「學員」卡片：指派（可設完成期限）、狀態篩選、暫停／恢復／退課 |
+
 ---
 
 # 7. Frontend 設計
@@ -4206,3 +4221,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.15 | 2026-09-13 | 停用成員與恢復課程：§2.9 新增 0018（`disabled_memberships`）；§8.9 新增停用／恢復成員資格（只影響本組織、角色保留、GrantLoader 排除、啟用中管理員的共同定義）；§6.5 新增恢復封存與列表 `status` 篩選；§12.2 新增 `org.user.enabled`、`course.restored` | Software Designer |
 | v1.16 | 2026-09-13 | Phase 1-2a 完成條件與 AI 教練設定：新增 §6.6（語法型別位置、儲存時驗證與 422 明細格式、驗證器補充規則、必修活動定義、評估器補充語意、先修條件子集、Coach Policy 值域白名單、僅草稿可寫、前端卡片） | Software Designer |
 | v1.17 | 2026-09-13 | Phase 1-2b 發布前檢查與發布：新增 §6.7（C1–C5 的具體定義與代碼、validate 回報格式、publish 交易步驟、內容快照雜湊、知識綁定凍結、權限、前端發布卡片） | Software Designer |
+| v1.18 | 2026-09-13 | Phase 2-1 選課：新增 §6.8（管理者指派與鎖序、自動補學員角色、狀態轉換、enrollment 資源解析、我的課程、學員名單、模組邊界、前端） | Software Designer |
