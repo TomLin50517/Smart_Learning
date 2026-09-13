@@ -1,4 +1,5 @@
-import type { BlockingReason, ResultIssue } from '@iac/contracts';
+import type { BlockingReason, ResultIssue, ResultStatus, TimelineItemDto } from '@iac/contracts';
+import { RESULT_STATUS_LABELS } from './format';
 
 /**
  * 學習畫面的純邏輯（不需 DOM，可單元測試）：簡易 Markdown、作答順序打亂、完成原因與問題的中文說明。
@@ -127,5 +128,35 @@ export function blockingReasonText(r: BlockingReason, titleOf: (activityId: stri
       return '課程尚未設定完成條件';
     default:
       return r.code;
+  }
+}
+
+/** 學習歷程的一筆紀錄（SD §6.12 timeline）；未知的事件類型顯示原始代碼 */
+export function timelineText(x: TimelineItemDto): string {
+  const d = x.details;
+  const act = x.activityTitle ? `「${x.activityTitle}」` : '活動';
+  switch (x.eventType) {
+    case 'course.enrolled':
+      return `加入課程${d['method'] === 'bulk_import' ? '（批次匯入）' : d['method'] === 'assign' ? '（指派）' : ''}`;
+    case 'activity.started':
+      return `開始${act}（第 ${String(d['attemptNo'] ?? 1)} 次作答）`;
+    case 'activity.retry_started':
+      return `重新作答${act}（第 ${String(d['attemptNo'] ?? '?')} 次）`;
+    case 'activity.submitted':
+      return `送出${act}`;
+    case 'activity.result_ready': {
+      const s = d['status'];
+      const label = typeof s === 'string' && s in RESULT_STATUS_LABELS ? RESULT_STATUS_LABELS[s as ResultStatus] : String(s ?? '');
+      const score = typeof d['score'] === 'number' ? `（${String(d['score'])}／${String(d['maxScore'])} 分）` : '';
+      return `${act}評分：${label}${score}`;
+    }
+    case 'activity.completed':
+      return `完成${act}`;
+    case 'video.started':
+      return `開始觀看${act}`;
+    case 'course.completed':
+      return '🎉 完成課程';
+    default:
+      return x.eventType;
   }
 }

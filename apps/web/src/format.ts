@@ -249,6 +249,13 @@ export function formatDate(iso: string | null | undefined): string {
   return iso ? dateOnly.format(new Date(iso)) : '—';
 }
 
+/** 學習時間（分鐘）：未滿 1 小時顯示分鐘，否則「X 小時 Y 分鐘」 */
+export function formatMinutes(min: number): string {
+  if (min > 0 && min < 1) return '不到 1 分鐘';
+  const m = Math.floor(min);
+  return m < 60 ? `${m} 分鐘` : `${Math.floor(m / 60)} 小時${m % 60 ? ` ${m % 60} 分鐘` : ''}`;
+}
+
 /** 組織品牌色只接受 #rrggbb（伺服器端亦同） */
 export function brandColor(branding: Record<string, unknown> | undefined): string | null {
   const c = branding?.['primaryColor'];

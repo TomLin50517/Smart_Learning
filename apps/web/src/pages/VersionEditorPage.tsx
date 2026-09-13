@@ -444,6 +444,42 @@ function BlockEditor({ block: b, activities, onChange }: { block: LessonBlock; a
   }
 }
 
+/** 影片活動的設定欄位（SD §6.13）：直接改寫 config JSON 文字，與進階區的 JSON 同步 */
+function VideoConfigFields({ text, onChange }: { text: string; onChange(text: string): void }) {
+  let cfg: Record<string, unknown> | null = {};
+  if (text.trim()) {
+    try {
+      const v: unknown = JSON.parse(text);
+      cfg = v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+    } catch {
+      cfg = null;
+    }
+  }
+  if (!cfg) return <p className="field-error">進階區的「設定 config」不是有效的 JSON，修正後才能使用影片欄位。</p>;
+  const current = cfg;
+  const set = (key: string, value: string | number | null) => {
+    const next = { ...current };
+    if (value === null || value === '') delete next[key];
+    else next[key] = value;
+    onChange(Object.keys(next).length ? JSON.stringify(next, null, 2) : '');
+  };
+  const numText = (v: unknown) => (typeof v === 'number' ? String(v) : '');
+  const toNum = (s: string) => (s.trim() === '' ? null : Number(s));
+  return (
+    <div className="form-grid">
+      <Field label="影片網址" hint="瀏覽器可直接播放的 http(s) 網址（MP4、WebM）。留空：學員依老師指示在別處觀看，看完自行確認">
+        <input type="url" maxLength={2000} placeholder="https://" value={typeof current['video_url'] === 'string' ? current['video_url'] : ''} onChange={(e) => set('video_url', e.target.value.trim())} />
+      </Field>
+      <Field label="影片長度（秒）" hint="選填；未填時以播放器讀到的長度為準">
+        <input type="number" min={1} max={86400} value={numText(current['duration_sec'])} onChange={(e) => set('duration_sec', toNum(e.target.value))} />
+      </Field>
+      <Field label="完成比例" hint="觀看比例達此值才算完成（0.1～1），預設 0.9">
+        <input type="number" min={0.1} max={1} step={0.05} value={numText(current['completion_ratio'])} onChange={(e) => set('completion_ratio', toNum(e.target.value))} />
+      </Field>
+    </div>
+  );
+}
+
 function ActivityEditor(props: {
   activity: ActivityDto;
   index: number;
@@ -498,6 +534,7 @@ function ActivityEditor(props: {
           <input type="number" min={1} step="1" value={a.maxScore} onChange={(e) => update((x) => void (x.maxScore = Number(e.target.value)))} />
         </Field>
       </div>
+      {a.activityType === 'video' && !a.interactiveDefinitionId && <VideoConfigFields text={props.json.config} onChange={(t) => props.onJson('config', t)} />}
       <details>
         <summary className="small">進階：設定、答案與先修條件（JSON）</summary>
         <div className="form-grid">
