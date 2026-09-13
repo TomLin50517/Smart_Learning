@@ -264,6 +264,37 @@ describe('timeline and staff views', () => {
   });
 });
 
+describe('video settings are checked before publishing (C5)', () => {
+  it('only http(s) video URLs and known fields are accepted', async () => {
+    const c = (await call('POST', '/api/courses', 'admin', { title: '影片設定檢查' })).json().id;
+    await call('POST', `/api/courses/${c}/staff`, 'admin', { email: 'instr@ev.test', role: 'instructor' });
+    const v = (await call('POST', `/api/courses/${c}/versions`, 'instr', { title: 'v1' })).json().id;
+    const [bad, extra] = [randomUUID(), randomUUID()];
+    await call('PATCH', `/api/course-versions/${v}`, 'instr', {
+      modules: [
+        {
+          id: randomUUID(),
+          title: '單元',
+          lessons: [
+            {
+              id: randomUUID(),
+              title: '課節',
+              activities: [
+                { id: bad, title: '壞網址', activityType: 'video', config: { video_url: 'javascript:alert(1)' } },
+                { id: extra, title: '多欄位', activityType: 'video', config: { video_url: 'https://media.example.test/a.mp4', autoplay: true, completion_ratio: 2 } },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    const r = (await call('POST', `/api/course-versions/${v}/validate`, 'instr')).json();
+    const c5 = r.errors.filter((e: { check: string }) => e.check === 'C5');
+    expect(c5.map((e: { targetId: string }) => e.targetId)).toEqual([bad, extra, extra]);
+    expect(c5[0].message).toContain('http:// 或 https://');
+  });
+});
+
 describe('rate limit', () => {
   it('over 120 events per minute per enrollment gets 429 (learning is not blocked)', async () => {
     const a = await start(ID.READ, 'other');

@@ -11,6 +11,7 @@ import {
 import {
   CHOICE_QUIZ_ANSWER_KEY_SCHEMA,
   CHOICE_QUIZ_CONFIG_SCHEMA,
+  VIDEO_CONFIG_SCHEMA,
   canonicalJson,
   checkReachability,
   validateJsonSchema,
@@ -152,9 +153,17 @@ export class CoursePublishService {
           errors.push({ check: 'C5', code: 'C5_DEFINITION_REQUIRED', path: `${base}.interactiveDefinitionId`, message: `互動活動「${a.title}」沒有選擇互動元件`, targetId: a.id });
           return;
         }
-        // 原生選擇題（無互動元件）以內建 schema 檢查（SD §6.9）
-        if (a.activityType !== 'quiz') return;
-        schemas = { name: '選擇題', defId: null, config: CHOICE_QUIZ_CONFIG_SCHEMA, answerKey: CHOICE_QUIZ_ANSWER_KEY_SCHEMA };
+        // 原生選擇題、影片（無互動元件）以內建 schema 檢查（SD §6.9、§6.13）
+        if (a.activityType === 'quiz') {
+          schemas = { name: '選擇題', defId: null, config: CHOICE_QUIZ_CONFIG_SCHEMA, answerKey: CHOICE_QUIZ_ANSWER_KEY_SCHEMA };
+        } else if (a.activityType === 'video') {
+          // 網址會直接放進學員的播放器：只接受 http(s)。json-schema-lite 不支援 pattern，在此以固定規則檢查
+          const url = (a.config as Record<string, unknown> | null)?.['video_url'];
+          if (typeof url === 'string' && !/^https?:\/\/\S+$/i.test(url)) {
+            errors.push({ check: 'C5', code: 'C5_CONFIG_INVALID', path: `${base}.config`, message: `影片「${a.title}」的影片網址必須以 http:// 或 https:// 開頭`, targetId: a.id });
+          }
+          schemas = { name: '影片', defId: null, config: VIDEO_CONFIG_SCHEMA, answerKey: null };
+        } else return;
       } else {
         const def = defById.get(a.interactiveDefinitionId);
         if (!def || !def.is_enabled) {
@@ -163,7 +172,7 @@ export class CoursePublishService {
         }
         schemas = { name: def.display_name, defId: def.id, config: def.config_schema, answerKey: def.answer_key_schema };
       }
-      const def = { id: schemas.defId ?? 'builtin.quiz', display_name: schemas.name };
+      const def = { id: schemas.defId ?? `builtin.${a.activityType}`, display_name: schemas.name };
       const targets: [string, 'C5_CONFIG_INVALID' | 'C5_ANSWER_KEY_INVALID', unknown, unknown, string][] = [
         ['config', 'C5_CONFIG_INVALID', schemas.config, a.config, '設定'],
         ['answerKey', 'C5_ANSWER_KEY_INVALID', schemas.answerKey, a.answerKey, '答案'],
