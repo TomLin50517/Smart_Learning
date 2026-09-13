@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { CompletionEvaluationDto, EnrollmentStatus, LessonBlock, NavigationMode, ResultStatus, RuleNode } from '@iac/contracts';
-import { evaluateRule, type CompletionContext } from '@iac/domain';
+import { evaluateRule, learningSeconds, videoWatchRatio, type CompletionContext, type Range, type VideoEvidence } from '@iac/domain';
 import pg from 'pg';
 import { DB_API } from '../../../common/database.module.js';
 import { DomainError } from '../../../common/domain-error.js';
@@ -12,10 +12,13 @@ type Q = pg.Pool | pg.PoolClient;
 const RANK: Record<ResultStatus, number> = { passed: 3, completed: 2, needs_improvement: 1, failed: 0 };
 const DONE = new Set(['passed', 'completed']);
 const round2 = (n: number) => Math.round(n * 100) / 100;
+/** 秒 → 分鐘（無條件捨去到 0.1 分），與畫面顯示一致 */
+export const toMinutes = (sec: number) => Math.floor(sec / 6) / 10;
+const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
 
 /**
- * 完成判定引擎（UC-ENR-008、SA SEQ-03、SD §3、§6.9）。deterministic、零 LLM（INV-4）：
- * 讀課程結構與作答結果建構 CompletionContext（唯一碰 DB 的步驟），評估交給 @iac/domain 的純函式。
+ * 完成判定引擎（UC-ENR-008、SA SEQ-03、SD §3、§6.9、§6.12）。deterministic、零 LLM（INV-4）：
+ * 讀課程結構、作答結果與學習事件建構 CompletionContext（唯一碰 DB 的步驟），評估交給 @iac/domain 的純函式。
  */
 @Injectable()
 export class CompletionEngineService implements CompletionEngine {
@@ -59,9 +62,13 @@ export class CompletionEngineService implements CompletionEngine {
       weight: string;
       max_score: string;
       prerequisite_expression: RuleNode | null;
+      video_url: string | null;
+      video_duration_sec: number | null;
     }>(
       `SELECT a.id, a.lesson_id, a.title, a.activity_type, a.is_required, a.interactive_definition_id, d.server_evaluator,
-              a.max_attempts, a.weight, a.max_score, p.prerequisite_expression
+              a.max_attempts, a.weight, a.max_score, p.prerequisite_expression,
+              NULLIF(a.config->>'video_url', '') AS video_url,
+              CASE WHEN jsonb_typeof(a.config->'duration_sec') = 'number' THEN (a.config->>'duration_sec')::float8 END AS video_duration_sec
          FROM activities a
          LEFT JOIN interactive_definitions d ON d.id = a.interactive_definition_id
          LEFT JOIN activity_prerequisites p ON p.activity_id = a.id
@@ -80,6 +87,12 @@ export class CompletionEngineService implements CompletionEngine {
          FROM learning_attempts WHERE enrollment_id = $1 GROUP BY activity_id`,
       [enrollmentId],
     );
+    // 學習事件：時間點算學習時間；影片事件的 payload 算觀看比例（SD §6.12）
+    const events = await q.query<{ event_type: string; activity_id: string | null; at: Date; payload: Record<string, unknown> | null }>(
+      `SELECT event_type, activity_id, occurred_at AS at, CASE WHEN event_type IN ('video.started', 'video.progressed') THEN payload END AS payload
+         FROM learning_events WHERE enrollment_id = $1 ORDER BY occurred_at`,
+      [enrollmentId],
+    );
 
     const modIndex = new Map(mods.rows.map((m) => [m.id, m]));
     const lessonMod = new Map(lessons.rows.map((l) => [l.id, l.module_id]));
@@ -91,8 +104,8 @@ export class CompletionEngineService implements CompletionEngine {
       bestResults: {},
       attemptCounts: {},
       videoWatchRatios: {},
-      // 學習時間與人工核可於後續批次（學習事件、核可）接上
       timeSpentMinutes: { course: 0, byModule: {} },
+      // 人工核可於後續批次接上
       manualApprovals: [],
     };
     const requiredIds: string[] = [];
@@ -111,6 +124,7 @@ export class CompletionEngineService implements CompletionEngine {
         weight: Number(a.weight),
         maxScore: Number(a.max_score),
         prerequisite: a.prerequisite_expression,
+        videoUrl: a.activity_type === 'video' ? a.video_url : null,
       };
       if (!actsByLesson.has(a.lesson_id)) actsByLesson.set(a.lesson_id, []);
       actsByLesson.get(a.lesson_id)!.push(pa);
@@ -134,6 +148,34 @@ export class CompletionEngineService implements CompletionEngine {
       attemptInfo[a.activity_id] = { used: a.used, inProgressId: a.in_progress };
     }
 
+    // 學習時間：相鄰事件的間隔（離開超過 5 分鐘不計），歸到活動所屬單元
+    const time = learningSeconds(events.rows.map((x) => ({ at: x.at.getTime(), activityId: x.activity_id })));
+    const byModuleSec: Record<string, number> = {};
+    for (const [aid, sec] of Object.entries(time.byActivity)) {
+      const m = ctx.activities[aid]?.moduleId;
+      if (m) byModuleSec[m] = (byModuleSec[m] ?? 0) + sec;
+    }
+    ctx.timeSpentMinutes = { course: toMinutes(time.total), byModule: Object.fromEntries(Object.entries(byModuleSec).map(([m, s]) => [m, toMinutes(s)])) };
+
+    // 設有影片網址的影片活動：觀看比例以事件佐證（不採信學員端回報）
+    const videoEvidence = new Map<string, VideoEvidence[]>();
+    for (const x of events.rows) {
+      if (!x.activity_id || !x.payload) continue;
+      const list = videoEvidence.get(x.activity_id) ?? [];
+      list.push({
+        at: x.at.getTime(),
+        durationSec: num(x.payload['duration_sec']),
+        ranges: x.event_type === 'video.progressed' && Array.isArray(x.payload['watched_ranges']) ? (x.payload['watched_ranges'] as Range[]) : undefined,
+      });
+      videoEvidence.set(x.activity_id, list);
+    }
+    for (const a of acts.rows) {
+      if (a.activity_type !== 'video' || !a.video_url) continue;
+      const fromEvents = videoWatchRatio(videoEvidence.get(a.id) ?? [], a.video_duration_sec);
+      ctx.videoWatchRatios[a.id] = Math.max(ctx.videoWatchRatios[a.id] ?? 0, fromEvents);
+    }
+    const last = events.rows[events.rows.length - 1];
+
     return {
       enrollment: { id: enr.id, userId: enr.user_id, organizationId: enr.organization_id, courseId: enr.course_id, courseVersionId: v, status: enr.status },
       navigationMode: enr.navigation_mode,
@@ -149,6 +191,7 @@ export class CompletionEngineService implements CompletionEngine {
       rule: rule.rows[0] ? { grammarVersion: rule.rows[0].grammar_version, rule: rule.rows[0].rule_json } : null,
       ctx,
       attempts: attemptInfo,
+      time: { totalSec: time.total, byModuleSec, lastActivityAt: last ? last.at.toISOString() : null },
     };
   }
 

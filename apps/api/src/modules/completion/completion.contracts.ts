@@ -17,6 +17,8 @@ export interface ProgressActivity {
   weight: number;
   maxScore: number;
   prerequisite: RuleNode | null;
+  /** 影片活動的 config.video_url；設定時觀看比例以學習事件佐證 */
+  videoUrl: string | null;
 }
 
 /** 某筆選課的學習進度：課程結構（依排序）、完成條件與評估上下文 */
@@ -34,6 +36,8 @@ export interface EnrollmentProgress {
   ctx: CompletionContext;
   /** 每個活動已送出的作答數與進行中的作答 */
   attempts: Record<string, { used: number; inProgressId: string | null }>;
+  /** 有效學習時間（秒；SD §6.12）與最後一筆學習事件的時間 */
+  time: { totalSec: number; byModuleSec: Record<string, number>; lastActivityAt: string | null };
 }
 
 export interface CompletionEngine {

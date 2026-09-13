@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import {
   BUILTIN_COMPONENTS,
@@ -6,28 +7,33 @@ import {
   type ActivityRuntimeDto,
   type EnrollmentStatus,
   type LearnerOutlineDto,
+  type LearnerProgressDto,
   type OutlineActivityState,
   type ResultIssue,
   type ResultStatus,
 } from '@iac/contracts';
-import { activityAvailability, resolveEvaluator } from '@iac/domain';
+import { activityAvailability, canonicalJson, resolveEvaluator } from '@iac/domain';
 import pg from 'pg';
 import { DB_API } from '../../../common/database.module.js';
 import { DomainError } from '../../../common/domain-error.js';
 import { COMPLETION_ENGINE, type CompletionEngine, type EnrollmentProgress } from '../../completion/completion.contracts.js';
+import type { ServerEvent } from '../learning-record.contracts.js';
+import { LearningEventService } from './learning-events.service.js';
+import { toLearningTime } from './learning-time.js';
 
 const rejected = (issue: string) => new DomainError('VALIDATION_FAILED', issue, [{ issue }]);
 const DONE = new Set(['passed', 'completed']);
 
 /**
- * 學員的學習 Runtime（UC-LRN-001/002/004/006/007/008、SA SEQ-03、SD §6.9）。
- * 所有端點都是 self 範圍：授權只確認「是學員」，選課歸屬在此逐一驗證——不是本人的一律 404（AC-LRN-007）。
+ * 學員的學習 Runtime（UC-LRN-001/002/004/006/007/008、SA SEQ-03、SD §6.9、§6.12）。
+ * 學員端點都是 self 範圍：授權只確認「是學員」，選課歸屬在此逐一驗證——不是本人的一律 404（AC-LRN-007）。
  */
 @Injectable()
 export class LearningService {
   constructor(
     @Inject(DB_API) private readonly db: pg.Pool,
     @Inject(COMPLETION_ENGINE) private readonly engine: CompletionEngine,
+    private readonly events: LearningEventService,
   ) {}
 
   private async tx<T>(fn: (c: pg.PoolClient) => Promise<T>): Promise<T> {
@@ -77,7 +83,7 @@ export class LearningService {
     return { enrollmentId: enr.id, progress: p, activity };
   }
 
-  /** 學員的課程大綱：結構、各活動狀態、進度（不含活動設定與答案） */
+  /** 學員的課程大綱：結構、各活動狀態、進度與學習時間（不含活動設定與答案） */
   async outline(enrollmentId: string, userId: string): Promise<LearnerOutlineDto> {
     const own = await this.db.query<{ title: string; version_no: number }>(
       `SELECT c.title, cv.version_no FROM enrollments e JOIN courses c ON c.id = e.course_id JOIN course_versions cv ON cv.id = e.course_version_id
@@ -85,7 +91,24 @@ export class LearningService {
       [enrollmentId, userId],
     );
     if (!own.rows[0]) throw new DomainError('NOT_FOUND');
-    const p = await this.engine.progress(enrollmentId);
+    return this.buildOutline(await this.engine.progress(enrollmentId), own.rows[0].title, own.rows[0].version_no);
+  }
+
+  /** 課程人員檢視單一學員（GET /enrollments/{id}/progress）：與學員看到的大綱相同，另附學員資料。授權由路由守門 */
+  async staffProgress(enrollmentId: string): Promise<LearnerProgressDto> {
+    const r = await this.db.query<{ title: string; version_no: number; user_id: string; display_name: string; email: string }>(
+      `SELECT c.title, cv.version_no, u.id AS user_id, u.display_name, u.email::text AS email
+         FROM enrollments e JOIN courses c ON c.id = e.course_id JOIN course_versions cv ON cv.id = e.course_version_id JOIN users u ON u.id = e.user_id
+        WHERE e.id = $1`,
+      [enrollmentId],
+    );
+    const x = r.rows[0];
+    if (!x) throw new DomainError('NOT_FOUND');
+    const outline = this.buildOutline(await this.engine.progress(enrollmentId), x.title, x.version_no);
+    return { ...outline, learner: { id: x.user_id, displayName: x.display_name, email: x.email } };
+  }
+
+  private buildOutline(p: EnrollmentProgress, courseTitle: string, versionNo: number): LearnerOutlineDto {
     const ev = this.engine.evaluate(p);
     const av = this.availability(p);
     const stateOf = (id: string): OutlineActivityState => {
@@ -101,8 +124,8 @@ export class LearningService {
         status: p.enrollment.status,
         canLearn: LEARNABLE_STATUSES.includes(p.enrollment.status),
         courseId: p.enrollment.courseId,
-        courseTitle: own.rows[0].title,
-        versionNo: own.rows[0].version_no,
+        courseTitle,
+        versionNo,
       },
       navigationMode: p.navigationMode,
       modules: p.modules.map((m) => ({
@@ -129,6 +152,7 @@ export class LearningService {
               best: best ? { status: best.status as ResultStatus, score: best.score, maxScore: a.maxScore } : null,
               attempts: p.attempts[a.id]?.used ?? 0,
               maxAttempts: a.maxAttempts,
+              watchedRatio: a.activityType === 'video' ? p.ctx.videoWatchRatios[a.id] ?? 0 : null,
             };
           }),
         })),
@@ -141,6 +165,7 @@ export class LearningService {
         value: ev.value,
         blockingReasons: ev.blockingReasons,
       },
+      time: toLearningTime(p),
     };
   }
 
@@ -179,7 +204,7 @@ export class LearningService {
 
   /**
    * 建立作答（UC-LRN-004/008）：同一活動只能有一個進行中的作答——新建時舊的轉 abandoned（SA §7.3）；
-   * 次數上限以已送出的作答計。鎖定選課列，並行建立會排隊。
+   * 次數上限以已送出的作答計。鎖定選課列，並行建立會排隊。同一交易寫入 activity.started／activity.retry_started。
    */
   async startAttempt(activityId: string, userId: string): Promise<{ attemptId: string; attemptNo: number }> {
     return this.tx(async (c) => {
@@ -200,13 +225,18 @@ export class LearningService {
         [enrollmentId, activityId],
       );
       await c.query(`UPDATE enrollments SET started_at = COALESCE(started_at, now()) WHERE id = $1`, [enrollmentId]);
-      return { attemptId: r.rows[0]!.id, attemptNo: r.rows[0]!.attempt_no };
+      const { id, attempt_no: attemptNo } = r.rows[0]!;
+      await this.events.recordTx(c, enrollmentId, [
+        { eventType: attemptNo === 1 ? 'activity.started' : 'activity.retry_started', activityId, attemptId: id, payload: { attempt_no: attemptNo } },
+      ]);
+      return { attemptId: id, attemptNo };
     });
   }
 
   /**
    * 送出作答（UC-LRN-006、SEQ-03）：伺服器評分（不採信 client 的 score／status，AC-LRN-003）→ 寫入 append-only 的
-   * 結果 → 作答轉 scored → 同一交易重算完成判定並寫入進度快照（ADR-020 同步判定，零 LLM）。
+   * 結果 → 作答轉 scored → 同一交易重算完成判定並寫入進度快照（ADR-020 同步判定，零 LLM）→ 寫入學習事件。
+   * 設有影片網址的影片活動：觀看比例由學習事件計算，忽略學員端送來的 watchedRatio（SD §6.12）。
    */
   async submit(attemptId: string, userId: string, input: unknown): Promise<ActivityResultDto> {
     return this.tx(async (c) => {
@@ -229,7 +259,13 @@ export class LearningService {
       const activity = act.rows[0]!;
       const evaluator = resolveEvaluator(activity.activity_type, activity.server_evaluator);
       if (!evaluator) throw rejected('activity_not_supported');
-      const problems = evaluator.validateInput(input, activity.config);
+
+      let effective = input;
+      if (activity.activity_type === 'video' && typeof activity.config['video_url'] === 'string' && activity.config['video_url']) {
+        const before = await this.engine.progress(a.enrollment_id, c);
+        effective = { watchedRatio: before.ctx.videoWatchRatios[a.activity_id] ?? 0 };
+      }
+      const problems = evaluator.validateInput(effective, activity.config);
       if (problems.length) {
         throw new DomainError(
           'ACTIVITY_INPUT_INVALID',
@@ -238,8 +274,12 @@ export class LearningService {
         );
       }
       const maxScore = Number(activity.max_score);
-      const out = evaluator.evaluate(input, { config: activity.config, answerKey: activity.answer_key, maxScore });
+      const out = evaluator.evaluate(effective, { config: activity.config, answerKey: activity.answer_key, maxScore });
 
+      const wasDone = await c.query(`SELECT 1 FROM learning_results WHERE enrollment_id = $1 AND activity_id = $2 AND status IN ('passed', 'completed') LIMIT 1`, [
+        a.enrollment_id,
+        a.activity_id,
+      ]);
       const lr = await c.query<{ evaluated_at: Date }>(
         `INSERT INTO learning_results (organization_id, attempt_id, enrollment_id, activity_id, status, score, max_score, issues, feedback_data, evaluator)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10) RETURNING evaluated_at`,
@@ -248,7 +288,18 @@ export class LearningService {
       await c.query(`UPDATE learning_attempts SET status = 'scored', submitted_at = now(), scored_at = now(), updated_at = now() WHERE id = $1`, [a.id]);
 
       const p = await this.engine.progress(a.enrollment_id, c);
-      const completionChanged = await this.engine.persist(p, this.engine.evaluate(p), c);
+      const ev = this.engine.evaluate(p);
+      const completionChanged = await this.engine.persist(p, ev, c);
+
+      const ids = { activityId: a.activity_id, attemptId: a.id };
+      const events: ServerEvent[] = [
+        { eventType: 'activity.submitted', ...ids, payload: { input_hash: createHash('sha256').update(canonicalJson(input ?? null)).digest('hex') } },
+        { eventType: 'activity.result_ready', ...ids, payload: { status: out.status, score: out.score, max_score: maxScore } },
+      ];
+      if (DONE.has(out.status) && !wasDone.rowCount) events.push({ eventType: 'activity.completed', ...ids });
+      if (completionChanged) events.push({ eventType: 'course.completed', payload: { grammar_version: ev.grammarVersion } });
+      await this.events.recordTx(c, a.enrollment_id, events);
+
       return {
         attemptId: a.id,
         attemptNo: a.attempt_no,

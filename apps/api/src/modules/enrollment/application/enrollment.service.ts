@@ -11,6 +11,7 @@ import pg from 'pg';
 import { z } from 'zod';
 import { DB_API } from '../../../common/database.module.js';
 import { DomainError } from '../../../common/domain-error.js';
+import { LEARNING_EVENTS, type LearningEventWriter } from '../../learning-record/learning-record.contracts.js';
 import { nextEnrollmentStatus, type EnrollmentAction } from '../domain/transitions.js';
 
 type Q = pg.Pool | pg.PoolClient;
@@ -61,7 +62,10 @@ const Cursor = z.tuple([z.string().max(254), z.guid()]);
  */
 @Injectable()
 export class EnrollmentService {
-  constructor(@Inject(DB_API) private readonly db: pg.Pool) {}
+  constructor(
+    @Inject(DB_API) private readonly db: pg.Pool,
+    @Inject(LEARNING_EVENTS) private readonly events: LearningEventWriter,
+  ) {}
 
   private async tx<T>(fn: (c: pg.PoolClient) => Promise<T>): Promise<T> {
     const c = await this.db.connect();
@@ -124,6 +128,7 @@ export class EnrollmentService {
     userId: string,
     actorId: string,
     dueDate: string | null = null,
+    method: 'assign' | 'bulk_import' = 'assign',
   ): Promise<{ enrollmentId: string; created: boolean; learnerRoleGranted: boolean }> {
     const dup = await c.query<{ id: string }>(`SELECT id FROM enrollments WHERE course_id = $1 AND user_id = $2 AND status NOT IN ('withdrawn', 'rejected')`, [
       course.id,
@@ -141,7 +146,10 @@ export class EnrollmentService {
        VALUES ($1, $2, $3, $4, 'active', 'assign', $5, $6) RETURNING id`,
       [course.organizationId, course.id, course.publishedVersionId, userId, actorId, dueDate],
     );
-    return { enrollmentId: e.rows[0]!.id, created: true, learnerRoleGranted: (grant.rowCount ?? 0) > 0 };
+    const enrollmentId = e.rows[0]!.id;
+    // 學習歷程的起點（SA §10.2）；同一交易——批次匯入的預覽復原時一起復原
+    await this.events.recordTx(c, enrollmentId, [{ eventType: 'course.enrolled', payload: { method, assigned_by: actorId } }]);
+    return { enrollmentId, created: true, learnerRoleGranted: (grant.rowCount ?? 0) > 0 };
   }
 
   /** 課程的學員名單（UC-LRN-011 的名單部分）；依 email keyset 分頁 */
@@ -158,12 +166,25 @@ export class EnrollmentService {
         throw invalid('cursor', 'invalid');
       }
     }
-    const r = await this.db.query<EnrollmentRow & { display_name: string; email: string; member_disabled: boolean }>(
+    const r = await this.db.query<
+      EnrollmentRow & {
+        display_name: string;
+        email: string;
+        member_disabled: boolean;
+        required_total: number | null;
+        required_completed: number | null;
+        weighted_score: string | null;
+        last_activity_at: Date | null;
+      }
+    >(
       `SELECT ${BASE_COLUMNS}, u.display_name, u.email::text AS email,
-              EXISTS (SELECT 1 FROM disabled_memberships dm WHERE dm.organization_id = e.organization_id AND dm.user_id = e.user_id) AS member_disabled
+              EXISTS (SELECT 1 FROM disabled_memberships dm WHERE dm.organization_id = e.organization_id AND dm.user_id = e.user_id) AS member_disabled,
+              ps.required_total, ps.required_completed, ps.weighted_score,
+              (SELECT max(le.occurred_at) FROM learning_events le WHERE le.enrollment_id = e.id) AS last_activity_at
          FROM enrollments e
          JOIN course_versions cv ON cv.id = e.course_version_id
          JOIN users u ON u.id = e.user_id
+         LEFT JOIN progress_snapshots ps ON ps.enrollment_id = e.id
         WHERE e.course_id = $1
           AND ($2::enrollment_status IS NULL OR e.status = $2::enrollment_status)
           AND ($3::text IS NULL OR (u.email::text, e.id) > ($3::text, $4::uuid))
@@ -174,7 +195,17 @@ export class EnrollmentService {
     const page = r.rows.slice(0, q.limit);
     const last = page[page.length - 1];
     return {
-      data: page.map((x) => ({ ...toEnrollment(x), displayName: x.display_name, email: x.email, memberDisabled: x.member_disabled })),
+      data: page.map((x) => ({
+        ...toEnrollment(x),
+        displayName: x.display_name,
+        email: x.email,
+        memberDisabled: x.member_disabled,
+        progress:
+          x.required_total === null
+            ? null
+            : { requiredTotal: x.required_total, requiredCompleted: x.required_completed ?? 0, weightedScore: x.weighted_score === null ? null : Number(x.weighted_score) },
+        lastActivityAt: x.last_activity_at ? x.last_activity_at.toISOString() : null,
+      })),
       nextCursor: r.rows.length > q.limit && last ? Buffer.from(JSON.stringify([last.email, last.id])).toString('base64url') : null,
     };
   }
