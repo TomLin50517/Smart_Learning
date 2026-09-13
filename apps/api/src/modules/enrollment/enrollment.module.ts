@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { LearningRecordModule } from '../learning-record/learning-record.module.js';
 import { OrganizationModule } from '../organization/organization.module.js';
 import { BulkImportController } from './api/bulk-import.controller.js';
 import { EnrollmentController } from './api/enrollment.controller.js';
@@ -14,7 +15,8 @@ import { EnrollmentService } from './application/enrollment.service.js';
  * 自行加入、選課碼、審核、重新開啟、重修於後續批次。
  */
 @Module({
-  imports: [OrganizationModule],
+  // LearningRecordModule：選課時寫入 course.enrolled（LEARNING_EVENTS）
+  imports: [OrganizationModule, LearningRecordModule],
   controllers: [EnrollmentController, BulkImportController],
   providers: [EnrollmentService, BulkImportService],
 })

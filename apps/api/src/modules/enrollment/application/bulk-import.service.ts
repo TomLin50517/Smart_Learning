@@ -164,7 +164,7 @@ export class BulkImportService {
               actions.push('course_role_granted');
             }
             if (course && role === 'learner') {
-              const e = await this.enrollments.enrollInTx(c, { id: course.id, organizationId: orgId, publishedVersionId: course.publishedVersionId! }, m.userId, o.actorId);
+              const e = await this.enrollments.enrollInTx(c, { id: course.id, organizationId: orgId, publishedVersionId: course.publishedVersionId! }, m.userId, o.actorId, null, 'bulk_import');
               if (e.created) {
                 actions.push('enrolled');
                 audits.push(

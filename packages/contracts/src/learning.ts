@@ -28,9 +28,20 @@ export interface ChoiceQuizAnswerKey {
 export interface ChoiceQuizInput {
   answers: Record<string, string[]>;
 }
-/** 影片：觀看比例 0～1；config.completion_ratio（預設 0.9）以上才算完成 */
+/**
+ * 影片：config.video_url 有設定時，伺服器以學習事件（video.progressed 的觀看區間）計算觀看比例，
+ * 忽略學員端送來的 watchedRatio；未設定影片網址（依老師指示在別處觀看）才採用學員的確認（SD §6.12）。
+ * 比例達 config.completion_ratio（預設 0.9）才算完成。
+ */
+export interface VideoConfig {
+  video_url?: string;
+  /** 影片長度（秒）；未設定時以播放器回報的長度為準 */
+  duration_sec?: number;
+  completion_ratio?: number;
+  instructions?: string;
+}
 export interface VideoInput {
-  watchedRatio: number;
+  watchedRatio?: number;
 }
 export interface ParameterControlInput {
   values: Record<string, number>;
@@ -114,6 +125,15 @@ export interface OutlineActivityDto {
   best: { status: ResultStatus; score: number | null; maxScore: number } | null;
   attempts: number;
   maxAttempts: number | null;
+  /** 影片活動的觀看比例（0～1）；非影片為 null */
+  watchedRatio: number | null;
+}
+
+/** 有效學習時間（SD §6.12）：相鄰學習事件的間隔加總，離開超過 5 分鐘的間隔不計 */
+export interface LearningTimeDto {
+  minutes: number;
+  byModule: { moduleId: string; title: string; minutes: number }[];
+  lastActivityAt: string | null;
 }
 
 /** GET /enrollments/{id}/outline：學員的課程大綱（不含活動設定與答案） */
@@ -128,4 +148,56 @@ export interface LearnerOutlineDto {
     lessons: { id: string; title: string; isRequired: boolean; contentBlocks: LessonBlock[]; activities: OutlineActivityDto[] }[];
   }[];
   progress: ProgressDto;
+  time: LearningTimeDto;
+}
+
+/** GET /enrollments/{id}/progress：課程人員檢視單一學員（大綱＋學員資料） */
+export interface LearnerProgressDto extends LearnerOutlineDto {
+  learner: { id: string; displayName: string; email: string };
+}
+
+// ---- 學習事件（SA §10、SD §6.12） ------------------------------------------------------
+
+/** 學員端可送出的事件；其餘事件只由伺服器產生 */
+export const CLIENT_EVENT_TYPES = ['video.started', 'video.progressed', 'activity.input_changed', 'activity.heartbeat'] as const;
+export type ClientEventType = (typeof CLIENT_EVENT_TYPES)[number];
+export const EVENT_BATCH_MAX = 50;
+/** 每筆選課每分鐘最多接收的事件數（超過 429，不阻斷學習） */
+export const EVENTS_PER_MINUTE = 120;
+/** 學習畫面在前景時送 heartbeat 的間隔 */
+export const HEARTBEAT_INTERVAL_SEC = 60;
+/** video.progressed 的取樣間隔 */
+export const VIDEO_SAMPLE_SEC = 15;
+
+export interface LearningEventInput {
+  eventId: string;
+  eventType: string;
+  eventVersion: '1.0';
+  occurredAt: string;
+  activityId?: string;
+  payload: Record<string, unknown>;
+}
+
+export interface LearningEventBatchResponse {
+  accepted: number;
+  duplicated: number;
+  rejected: { eventId: string; reason: string }[];
+}
+
+export interface TimelineItemDto {
+  id: string;
+  eventType: string;
+  occurredAt: string;
+  activityId: string | null;
+  activityTitle: string | null;
+  attemptId: string | null;
+  /** 依事件類型白名單挑出的細節（例：attemptNo、status、score、method） */
+  details: Record<string, string | number | boolean | null>;
+}
+
+/** GET /enrollments/{id}/timeline、GET /me/enrollments/{id}/timeline */
+export interface EnrollmentTimelineDto {
+  data: TimelineItemDto[];
+  meta: { next_cursor: string | null };
+  time: LearningTimeDto;
 }

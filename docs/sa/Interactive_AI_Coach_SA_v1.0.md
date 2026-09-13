@@ -1102,7 +1102,7 @@ sequenceDiagram
     API->>REC: createAttempt()（依 new_attempt_policy 檢查次數）
     REC->>PG: INSERT learning_attempts (status=in_progress)
     API-->>WEB: 201 { attemptId }
-    WEB->>API: POST /api/attempts/{id}/events (activity.started)
+    Note over REC,PG: 同一交易寫入 learning_events (activity.started)
 
     loop 學習互動（debounce / batch）
         LRN->>WEB: 操作（拖拉、輸入、看影片）
@@ -1691,8 +1691,9 @@ ConditionType ::=
 | `lesson.opened` | client | 中 | `{ lesson_id }` | 進度 |
 | `video.started` | client | 中 | `{ activity_id, duration_sec }` | 影片 |
 | `video.progressed` | client | **高（sampling）** | `{ position_sec, watched_ranges[] }` | `video_watch_ratio` |
-| `activity.started` | client | 中 | `{}` | attempt 起點 |
+| `activity.started` | server | 中 | `{ attempt_no }` | attempt 起點（建立作答時於同一交易寫入） |
 | `activity.input_changed` | client | **高（sampling）** | `{ field, summary }` | 學習過程解釋 |
+| `activity.heartbeat` | client | 低（每 60 秒） | `{}` | 學習時間（學習畫面在前景時才送） |
 | `activity.submitted` | server | 中 | `{ input_hash }` | 提交 |
 | `activity.result_ready` | server | 中 | `{ status, score }` | 觸發完成評估 |
 | `activity.completed` | server | 中 | `{}` | 完成 |
@@ -1966,7 +1967,9 @@ erDiagram
 | POST | `/api/enrollments/{id}/suspend` \| `/resume` | `enrollment.suspend` | — | 是 |
 | POST | `/api/enrollments/{id}/relearning` | `enrollment.relearning.assign` | — | 是 |
 | POST | `/api/enrollments/{id}/reopen` | `enrollment.reopen` | — | 是 |
-| GET | `/api/enrollments/{id}/timeline` | `learning.timeline.read_all` / `_self` | — | 否 |
+| GET | `/api/enrollments/{id}/timeline` | `learning.timeline.read_all` | — | 否 |
+| GET | `/api/me/enrollments/{id}/timeline` | `learning.timeline.read_self` | — | 否 |
+| GET | `/api/enrollments/{id}/progress` | `learning.result.read_all` | — | 否 |
 | GET | `/api/enrollments/{id}/completion` | 同上 | — | 否 | 回 CompletionEvaluation trace |
 
 ### Activity Runtime
@@ -2868,3 +2871,4 @@ Browser (X-Request-Id) → Nginx → API (correlation_id)
 | v1.16 | 2026-09-13 | UC-ENR-001 指派時對象須為組織啟用成員、課程須已發布；被指派者自動具備學員角色。UC-ENR-005／006 實作退課、暫停、恢復（恢復一律回到 active）。UC-ENR-010 我的課程（SD §6.8） | System Analyst |
 | v1.17 | 2026-09-13 | UC-LRN-001/002/004/006/007/008 與 UC-ENR-008 實作（SEQ-03）：學員課程大綱、活動鎖定（學習順序＋先修條件）、作答次數以已送出者計、送出時同步評分與完成判定；原生選擇題、影片、閱讀、參數操作、排序的評分語意；尚未支援的元件類型不可作答（SD §6.9） | System Analyst |
 | v1.18 | 2026-09-13 | 新增批次匯入（使用者回饋：開學逐筆輸入不切實際）：UC-ORG-003 可批次建立成員並一併分課；UC-ENR-001 可批次加入學員。先預覽（結果與實際相同）再確認；錯誤列不處理；既有成員不經匯入變更角色；受授權學員人數上限限制（SD §6.11） | System Analyst |
+| v1.19 | 2026-09-13 | 學習事件（Phase 2-3a）：activity.started 改由伺服器在建立作答時產生；新增 client 事件 activity.heartbeat（學習畫面在前景時每 60 秒，用於學習時間）；學習時間定義為相鄰事件間隔加總、離開超過 5 分鐘不計；設有影片網址的影片以事件佐證觀看比例；學員讀自己的 timeline 改走 `/api/me/enrollments/{id}/timeline`（SD §6.12） | System Analyst |

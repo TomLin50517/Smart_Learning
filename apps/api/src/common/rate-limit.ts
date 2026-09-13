@@ -18,14 +18,15 @@ import { metrics } from './metrics.js';
 export class RateLimiter {
   constructor(@Inject(DB_API) private readonly db: pg.Pool) {}
 
-  async hit(bucket: string, limit: number, windowSec: number): Promise<{ allowed: boolean; retryAfterSec: number }> {
+  /** cost：此次計入的次數（例：一批學習事件以筆數計） */
+  async hit(bucket: string, limit: number, windowSec: number, cost = 1): Promise<{ allowed: boolean; retryAfterSec: number }> {
     const r = await this.db.query<{ hits: number; remaining: number }>(
       `INSERT INTO rate_limit_counters (bucket, window_start, hits)
-       VALUES ($1, to_timestamp(floor(extract(epoch FROM now()) / $2::float8) * $2::float8), 1)
-       ON CONFLICT (bucket, window_start) DO UPDATE SET hits = rate_limit_counters.hits + 1
+       VALUES ($1, to_timestamp(floor(extract(epoch FROM now()) / $2::float8) * $2::float8), $3)
+       ON CONFLICT (bucket, window_start) DO UPDATE SET hits = rate_limit_counters.hits + $3
        RETURNING hits,
                  ceil(extract(epoch FROM (window_start + make_interval(secs => $2::float8) - now())))::int AS remaining`,
-      [bucket, windowSec],
+      [bucket, windowSec, cost],
     );
     // 偶爾清理過期時間窗，避免無限成長
     if (Math.random() < 0.01) {
@@ -38,8 +39,8 @@ export class RateLimiter {
   }
 
   /** 超過限額即拋出 429 RATE_LIMITED（附 Retry-After） */
-  async enforce(bucket: string, limit: number, windowSec: number): Promise<void> {
-    const r = await this.hit(bucket, limit, windowSec);
+  async enforce(bucket: string, limit: number, windowSec: number, cost = 1): Promise<void> {
+    const r = await this.hit(bucket, limit, windowSec, cost);
     if (!r.allowed) {
       // endpoint_group 只取 bucket 前綴（login／pwreset…），不含 IP 或帳號雜湊，避免 label 基數爆炸
       metrics.rateLimitHits.inc({ endpoint_group: bucket.split(':')[0] ?? 'unknown' });

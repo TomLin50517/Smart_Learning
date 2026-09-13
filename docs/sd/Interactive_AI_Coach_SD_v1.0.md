@@ -2285,6 +2285,20 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 模組邊界 | 兩個端點在 MOD-ENROLL；成員處理經 MOD-ORG 新開放的 `ORG_MEMBERSHIP` 介面（交易內 ensureMember／grantCourseRole、提交後 inviteNew）；選課共用 `EnrollmentService.enrollInTx`（單筆指派也改用它） |
 | 前端 | 貼上（Excel 複製的 Tab 分隔亦可）或上傳 CSV（含 BOM、引號、CRLF）；標題列可任意順序並接受中文欄名與中文角色名，無標題列時依欄位順序；提供範本下載。先「預覽」表格逐列顯示結果，確認後才匯入；超過授權上限時停用確認 |
 
+## 6.12 學習事件、學習時間與教師檢視（Phase 2-3a，v1.22）
+
+實作：`packages/domain/src/runtime/learning-time.ts`（純函式）、`apps/api/src/modules/learning-record/application/learning-events.service.ts`、`completion-engine.service.ts`。前端（影片播放器、heartbeat、學習歷程頁、教師的學員詳情頁）於 2-3b。
+
+| 項目 | 實作 |
+|---|---|
+| 學員端事件 | `POST /attempts/{id}/events`（202）。只收進行中作答的白名單事件：video.started、video.progressed、activity.input_changed、activity.heartbeat；payload 逐型檢查（觀看區間 ≤ 200 段、payload ≤ 4 KB）。身分欄位一律由作答與選課推導；activityId 若有帶須與作答相符。occurredAt 限未來 1 分鐘～過去 24 小時，另記 clock_skew_ms。event_id 冪等：重送回 duplicated。每筆選課每分鐘 120 筆（以事件數計），超過 429 並丟棄 |
+| 伺服器端事件 | 與業務寫入同一交易（經 MOD-RECORD 的 `LEARNING_EVENTS`）：選課 course.enrolled（method assign／bulk_import——批次匯入預覽復原時一起復原）；建立作答 activity.started（第 1 次）／activity.retry_started；送出 activity.submitted（input_hash）、activity.result_ready（status、score）、首次完成時 activity.completed、選課轉完成時 course.completed。SA §10.2 原列 activity.started 為 client 事件，改由伺服器在建立作答時寫入（不會漏送、不能偽造） |
+| 學習時間 | 相鄰學習事件的間隔加總；相隔超過 5 分鐘視為離開，整段不計。間隔歸給前一個事件的活動，再歸到單元。學習畫面在前景時每 60 秒送 heartbeat。完成條件 `time_spent_minimum` 以此計算（分鐘，捨去到 0.1）。限制：以學員端時間戳記為準，最多只能補到實際經過的時間 |
+| 影片觀看比例 | 活動 config 設有 `video_url` 時：合併 video.progressed 的觀看區間 ÷ 影片長度（`config.duration_sec` 優先，否則用播放器回報的長度）；可採計的秒數不超過「影片事件的學習時間 × 2 倍速 ＋ 15 秒」——一次宣稱整部看完不會被採信。送出時以此比例評分，忽略學員端的 watchedRatio。未設 `video_url`（依老師指示在別處觀看）維持學員自行確認 |
+| Timeline | 課程人員 `GET /enrollments/{id}/timeline`（learning.timeline.read_all，只限自己授課／管理的課程）；學員 `GET /me/enrollments/{id}/timeline`（read_self，不是本人 404）——self 授權不被上層範圍涵蓋（ADR-016），因此分成兩條路由。新到舊、keyset 分頁（游標保留微秒）；高頻事件不列出（已彙總為學習時間與觀看比例）；payload 只挑白名單欄位（input_hash 等不外露）；附學習時間 |
+| 教師檢視學員 | `GET /enrollments/{id}/progress`（learning.result.read_all）：內容與學員看到的大綱相同（各活動狀態、最佳成績、次數、觀看比例、進度、未完成原因、學習時間），另附學員資料。學員名單加上進度快照（必修完成數、加權分數）與最後學習時間 |
+| 大綱 | 學員大綱加入學習時間（總計、各單元、最後學習時間）與影片活動的觀看比例 |
+
 ---
 
 # 7. Frontend 設計
@@ -4274,3 +4288,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.19 | 2026-09-13 | Phase 2-2a 學習 Runtime 與完成判定：新增 §6.9（學員端點與歸屬、課程大綱端點、解鎖、Runtime 白名單、作答規則、送出流程、內建評分器語意、完成判定引擎、C5 納入原生選擇題、模組邊界） | Software Designer |
 | v1.20 | 2026-09-13 | Phase 2-2b 學習畫面：新增 §6.10（路由與回顧模式、版面、內容區塊的安全渲染、活動面板、各元件作答介面、排序題的打亂規則、結果呈現） | Software Designer |
 | v1.21 | 2026-09-13 | Phase 2-1b 批次匯入：新增 §6.11（成員與課程學員兩個入口、預覽即實際的 dry-run、逐列結果代碼、既有成員不改角色、建帳號權限、交易內授權上限、鎖序、提交後邀請與批次稽核、ORG_MEMBERSHIP 介面、前端 CSV） | Software Designer |
+| v1.22 | 2026-09-13 | Phase 2-3a 學習事件：新增 §6.12（學員端事件白名單與限流、伺服器端事件與交易、學習時間算法、以事件佐證的影片觀看比例、教師與學員兩條 timeline 路由、教師檢視學員進度、學員名單的進度與最後學習時間） | Software Designer |
