@@ -43,4 +43,8 @@ export interface CourseLearnerDto extends EnrollmentDto {
   progress: { requiredCompleted: number; requiredTotal: number; weightedScore: number | null } | null;
   /** 最後一筆學習事件的時間 */
   lastActivityAt: string | null;
+  /** 學號／員工編號（目前） */
+  memberNo: string | null;
+  /** 選課時所在的班級（快照；多個以「、」連接） */
+  cohortLabel: string | null;
 }

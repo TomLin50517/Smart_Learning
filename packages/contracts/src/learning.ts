@@ -153,7 +153,7 @@ export interface LearnerOutlineDto {
 
 /** GET /enrollments/{id}/progress：課程人員檢視單一學員（大綱＋學員資料） */
 export interface LearnerProgressDto extends LearnerOutlineDto {
-  learner: { id: string; displayName: string; email: string };
+  learner: { id: string; displayName: string; email: string; memberNo: string | null; cohortLabel: string | null };
   /** 人工核可（SD §6.14）：完成條件要求的核可者角色與已有的核可 */
   approval: {
     required: ApproverRole[];
