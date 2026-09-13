@@ -4,3 +4,5 @@ export * from './completion/validate-rule.js';
 export * from './publish/canonical-json.js';
 export * from './publish/json-schema-lite.js';
 export * from './publish/reachability.js';
+export * from './runtime/evaluators.js';
+export * from './runtime/unlock.js';

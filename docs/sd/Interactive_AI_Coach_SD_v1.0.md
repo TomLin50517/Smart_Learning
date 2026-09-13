@@ -2236,6 +2236,24 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 模組邊界 | 選課模組以 SQL 讀課程狀態與已發布版本，不 import 課程模組內部（模組間只能經 `*.contracts.ts`） |
 | 前端 | 「我的課程」頁（`/app/learn`，學習畫面於 2-2 開放）；課程頁「學員」卡片：指派（可設完成期限）、狀態篩選、暫停／恢復／退課 |
 
+## 6.9 學習 Runtime 與完成判定實作（Phase 2-2a，v1.19）
+
+實作：`packages/domain/src/runtime/`（評分器、解鎖判斷，純函式）、`apps/api/src/modules/completion/`（完成判定引擎，經 `COMPLETION_ENGINE` 對外）、`apps/api/src/modules/learning-record/`（學員端點）。學習事件、時間軸、教師成果檢視於 2-3；前端學習畫面於 2-2b。
+
+| 項目 | 實作 |
+|---|---|
+| 學員端點與歸屬 | 大綱、runtime、作答、送出、結果皆為 self 範圍權限：guard 只確認「是學員」，選課歸屬由服務逐一驗證，不是本人的一律 404（AC-LRN-007）。活動以「學員在該活動所屬版本的未退課選課」定位 |
+| 課程大綱 | `GET /enrollments/{id}/outline`（新端點）：結構、內容區塊、各活動狀態 locked／available／in_progress／attempted／completed 與鎖定原因、最佳成績、次數、進度與未完成原因。不含活動設定與答案 |
+| 解鎖 | 純函式 `activityAvailability`：隱含規則 strict 需完成前一活動、mixed 需完成前一單元的所有必修活動；顯式先修條件以完成條件評估器判定，只有 TRUE 才解鎖。已完成的活動永遠可回顧。鎖定 → 403 `ACTIVITY_PREREQUISITE_NOT_MET`（AC-LRN-005） |
+| 選課狀態 | 只有 active／reopened 可學習，其他 409 `ENROLLMENT_NOT_ACTIVE`（已完成的選課唯讀回顧；重新開啟另批） |
+| Runtime | config 以白名單回傳，SELECT 不含 answer_key（SD §7.3.4）。無互動元件的活動 componentType 為 `builtin.reading`／`builtin.video`／`builtin.quiz`；無評分器的類型（H5P、ScenarioChoice、FormSimulation、Process／FlowBuilder、DataInterpretation、作業）`supported: false`，不可建立作答 |
+| 作答 | 同一活動只能有一個進行中的作答：新建時舊的轉 abandoned（SA §7.3，DB 部分唯一索引為第二層）；`attempt_no = max + 1`；次數上限以已送出的作答計（`max_attempts_reached`）；鎖定選課列，並行排隊；首次作答記 `started_at` |
+| 送出 | 不採信 client 的分數與狀態：請求以非 strict 解析，多餘欄位剝除（AC-LRN-003）。評分器先驗證輸入（422 `ACTIVITY_INPUT_INVALID`，作答維持進行中可重送）再評分 → learning_results（append-only，`evaluator` 記名稱與版本）→ 作答轉 scored → **同一交易**重算完成判定、寫入 progress_snapshots，成立且選課為 active／reopened 時轉 completed（ADR-020）。回應 `completionChanged` |
+| 評分器 | 閱讀：送出即完成。影片：`watchedRatio` 達 `config.completion_ratio`（預設 0.9）才完成——目前以前端回報的比例為準，2-3 改以學習事件佐證。選擇題（原生）：config 放題目與選項、answerKey 放 `correct` 與 `pass_threshold`（答對比例 %，預設 60）；依答對題數給分，feedbackData 只回各題對錯，不回正解。ParameterRange：每個 acceptable_range 內得分，超出以 `issue_code_if_high／low` 回報；`scoring.pass_threshold` 為得分比例 %（預設 100）。SequenceOrder：與 `correct_order` 比對，完全正確才通過；`partial_credit` 依位置給分、`tolerance` 容許位置誤差（Timeline） |
+| 完成判定引擎 | 讀結構、完成條件、作答與結果建構 CompletionContext：最佳成績依「通過 > 完成 > 需改進 > 未通過」再比分數；次數以已送出者計；影片比例取結果中的最大值；學習時間與人工核可暫為 0／空（2-3 與核可功能接上）。評估交給 `evaluateRule`；`weightedScore` 同 minimum_score 的算法 |
+| C5 補充 | 原生選擇題的 config／answerKey 以內建 schema（`CHOICE_QUIZ_CONFIG_SCHEMA` 等）納入發布前檢查 |
+| 模組邊界 | 完成判定屬 MOD-COMPLETE，只經 `completion.contracts.ts` 的介面與 DI token 提供給 MOD-RECORD；教師的 `GET /enrollments/{id}/completion` 即時重算、不寫入 |
+
 ---
 
 # 7. Frontend 設計
@@ -4222,3 +4240,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.16 | 2026-09-13 | Phase 1-2a 完成條件與 AI 教練設定：新增 §6.6（語法型別位置、儲存時驗證與 422 明細格式、驗證器補充規則、必修活動定義、評估器補充語意、先修條件子集、Coach Policy 值域白名單、僅草稿可寫、前端卡片） | Software Designer |
 | v1.17 | 2026-09-13 | Phase 1-2b 發布前檢查與發布：新增 §6.7（C1–C5 的具體定義與代碼、validate 回報格式、publish 交易步驟、內容快照雜湊、知識綁定凍結、權限、前端發布卡片） | Software Designer |
 | v1.18 | 2026-09-13 | Phase 2-1 選課：新增 §6.8（管理者指派與鎖序、自動補學員角色、狀態轉換、enrollment 資源解析、我的課程、學員名單、模組邊界、前端） | Software Designer |
+| v1.19 | 2026-09-13 | Phase 2-2a 學習 Runtime 與完成判定：新增 §6.9（學員端點與歸屬、課程大綱端點、解鎖、Runtime 白名單、作答規則、送出流程、內建評分器語意、完成判定引擎、C5 納入原生選擇題、模組邊界） | Software Designer |

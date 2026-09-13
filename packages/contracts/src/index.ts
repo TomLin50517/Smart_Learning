@@ -8,4 +8,5 @@ export * from './settings.js';
 export * from './course.js';
 export * from './completion.js';
 export * from './enrollment.js';
+export * from './learning.js';
 export * from './permissions.generated.js';

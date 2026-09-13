@@ -449,9 +449,12 @@ components:
       description: |
         `answer_key` 由序列化白名單剝除，永遠不會出現在此回應中
         （SD §7.3.4、SA THR-T-002）。
-      required: [activityId, title, activityType, componentType, schemaVersion, config]
+      required: [activityId, enrollmentId, title, activityType, componentType, schemaVersion, config, supported]
       properties:
         activityId:     { type: string, format: uuid }
+        enrollmentId:   { type: string, format: uuid }
+        supported:      { type: boolean, description: 伺服器有對應評分器；false 時前端顯示「尚未支援」 }
+        inProgressAttemptId: { type: [string, 'null'], format: uuid }
         title:          { type: string }
         activityType:   { type: string, enum: [video, quiz, interactive, reading, assignment] }
         componentType:  { type: string }
@@ -475,9 +478,9 @@ components:
       description: |
         **刻意不接受 `score` / `status`**。成績一律由 server 端
         ActivityEvaluator 依 answer_key 產生（ADR-024、AC-LRN-003）。
-        client 送來的任何評分欄位會被忽略。
+        client 送來的任何評分欄位會被忽略（剝除，不報錯）。input 的形狀依元件而定（contracts/learning.ts）：
+        閱讀 `{}`、影片 `{ watchedRatio }`、選擇題 `{ answers: { 題號: [選項] } }`、參數操作 `{ values }`、排序 `{ order }`。
       required: [input]
-      additionalProperties: false
       properties:
         input:            {}
         clientDurationMs: { type: integer }
@@ -502,7 +505,8 @@ components:
               code:     { type: string }
               category: { type: string }
               severity: { type: string, enum: [low, medium, high] }
-        feedbackData:      { type: object }
+              target:   { type: string, description: 問題所在的題目／參數／項目 id }
+        feedbackData:      { type: object, description: 評分細節（例：各題對錯）；不含正解 }
         evaluatedAt:       { type: string, format: date-time }
         completionChanged: { type: boolean }
 
@@ -1707,12 +1711,27 @@ paths:
       operationId: getCompletionEvaluation
       tags: [Enrollment]
       x-required-permission: learning.result.read_all
+      description: 課程人員檢視單一學員的完成判定（即時重算、不寫入；SD §6.9）。含 trace 與 blocking_reasons
       responses:
         '200':
           description: OK
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CompletionEvaluation' }
+
+  /enrollments/{id}/outline:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      operationId: getLearnerOutline
+      tags: [Runtime]
+      x-required-permission: learning.result.read_self
+      description: |
+        學員的課程大綱（SD §6.9）：單元／課節／內容區塊、各活動狀態（locked／available／in_progress／attempted／completed）
+        與鎖定原因（sequence＝學習順序、prerequisite＝先修條件）、最佳成績、進度與未完成原因。
+        **不含活動設定與答案**。self 範圍：不是本人的選課一律 404。
+      responses:
+        '200': { description: '`LearnerOutlineDto`' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   # ---------------------------------------------------------------- Runtime
   /activities/{id}/runtime:
@@ -1722,6 +1741,11 @@ paths:
       tags: [Runtime]
       x-required-permission: learning.attempt.write_self
       x-required-capability: runtimeAllowed
+      description: |
+        學員在此活動所屬版本的選課須為 active／reopened（否則 409 `ENROLLMENT_NOT_ACTIVE`；沒有選課 404），
+        活動須已解鎖（否則 403 `ACTIVITY_PREREQUISITE_NOT_MET`，`details[0].issue` 為 sequence／prerequisite）。
+        config 以白名單回傳，answer_key 不在查詢欄位中。沒有互動元件的活動 componentType 為
+        `builtin.reading`／`builtin.video`／`builtin.quiz`；伺服器沒有評分器的類型 `supported: false`（SD §6.9）。
       responses:
         '200':
           description: OK
@@ -1740,9 +1764,14 @@ paths:
       tags: [Runtime]
       x-required-permission: learning.attempt.write_self
       x-required-capability: runtimeAllowed
+      description: |
+        同一活動只能有一個進行中的作答：新建時舊的轉 abandoned（SA §7.3）。次數上限以已送出的作答計。
+        檢查同 runtime（選課可學習、活動已解鎖）。
       responses:
-        '201': { description: 已建立 }
+        '201': { description: '`{ attemptId, attemptNo }`' }
+        '400': { description: '`max_attempts_reached`／`activity_not_supported`' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
 
   /attempts/{id}/events:
     parameters: [{ $ref: '#/components/parameters/ResourceId' }]
@@ -1775,8 +1804,9 @@ paths:
       x-required-permission: learning.attempt.write_self
       x-required-capability: runtimeAllowed
       description: |
-        同步執行完成判定（ADR-020）。評估路徑上零 LLM 呼叫，
-        因此 Coach 中斷不影響完成與發證（INV-4、AC-LRN-002）。
+        伺服器評分 → 寫入 append-only 結果 → 作答轉 scored → 同一交易重算完成判定並寫入進度快照（ADR-020）。
+        評估路徑上零 LLM 呼叫，因此 Coach 中斷不影響完成與發證（INV-4、AC-LRN-002）。
+        輸入格式錯誤 422 `ACTIVITY_INPUT_INVALID`（`details[].issue` 為評分器的代碼、`params.message` 為說明），作答維持進行中可重送。
       requestBody:
         required: true
         content:
@@ -1788,6 +1818,9 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ActivityResult' }
+        '400': { description: '`attempt_not_in_progress`／`activity_not_supported`' }
+        '404': { description: 不是本人的作答 }
+        '409': { description: '`ENROLLMENT_NOT_ACTIVE`' }
         '422': { $ref: '#/components/responses/UnprocessableEntity' }
 
   /attempts/{id}/result:
@@ -1796,6 +1829,7 @@ paths:
       operationId: getAttemptResult
       tags: [Runtime]
       x-required-permission: learning.result.read_self
+      description: 只有作答者本人看得到，其他人一律 404（AC-LRN-007）；尚未評分 409 `RESULT_NOT_READY`
       responses:
         '200':
           description: OK

@@ -23,6 +23,8 @@ const ORG = '9a9a9a9a-0000-0000-0000-00000000000a';
 const U = { admin: 'abababab-0000-0000-0000-00000000000a', instr: 'abababab-0000-0000-0000-0000000000c1' };
 const ID = { M1: randomUUID(), M2: randomUUID(), L1: randomUUID(), L2: randomUUID(), QUIZ: randomUUID(), INTER: randomUUID(), READ: randomUUID() };
 const VALID_CONFIG = { parameters: [{ id: 'p', label: '溫度', min: 0, max: 100, step: 1 }] };
+/** 原生選擇題也受 C5 檢查（SD §6.9） */
+const QUIZ_CONFIG = { questions: [{ id: 'q1', prompt: '1+1', options: [{ id: 'a', label: '1' }, { id: 'b', label: '2' }] }] };
 const POLICY = {
   responseMode: 'hint_first',
   maxDirectnessLevel: 2,
@@ -76,7 +78,7 @@ function modules(config: object, quizPrerequisite: object | null) {
           id: ID.L1,
           title: '課節一',
           activities: [
-            { id: ID.QUIZ, title: '小考', activityType: 'quiz', prerequisite: quizPrerequisite },
+            { id: ID.QUIZ, title: '小考', activityType: 'quiz', config: QUIZ_CONFIG, prerequisite: quizPrerequisite },
             { id: ID.INTER, title: '參數實驗', activityType: 'interactive', interactiveDefinitionId: defId, config },
           ],
         },
