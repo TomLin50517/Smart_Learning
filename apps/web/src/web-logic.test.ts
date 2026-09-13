@@ -115,6 +115,14 @@ describe('bulk import CSV', () => {
     expect(toLearnerRows(parseCsv('Email,Name\na@x.test,\nb@x.test,李小華'))).toEqual([{ email: 'a@x.test' }, { email: 'b@x.test', displayName: '李小華' }]);
   });
 
+  it('reads member numbers and cohorts (header aliases or positions 5 and 6)', () => {
+    expect(toMemberRows(parseCsv('Email,姓名,學號,班級\na@x.test,王小明,S001,113 三年二班\nb@x.test,李小華,,'))).toEqual([
+      { email: 'a@x.test', displayName: '王小明', memberNo: 'S001', cohort: '113 三年二班' },
+      { email: 'b@x.test', displayName: '李小華' },
+    ]);
+    expect(toMemberRows(parseCsv('c@x.test,陳同學,學生,,S009,第 5 期'))).toEqual([{ email: 'c@x.test', displayName: '陳同學', role: 'learner', memberNo: 'S009', cohort: '第 5 期' }]);
+  });
+
   it('the templates round-trip through the parser', () => {
     expect(toMemberRows(parseCsv(csvTemplate('members')))[2]).toEqual({ email: 'teacher01@example.com', displayName: '陳老師', role: 'instructor', courseCode: 'C-0001' });
     expect(toLearnerRows(parseCsv(csvTemplate('learners')))).toHaveLength(2);
@@ -270,6 +278,7 @@ describe('navigation by permission (display only — the server enforces access)
     expect(items.map((n) => [n.label, n.to])).toEqual([
       ['首頁', '/app'],
       ['成員管理', '/app/org/users'],
+      ['班級管理', '/app/org/cohorts'],
     ]);
   });
 

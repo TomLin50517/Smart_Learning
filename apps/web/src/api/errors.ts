@@ -103,6 +103,11 @@ const FIELD_LABELS: Record<string, string> = {
   knowledgeBindings: '教材綁定',
   reason: '原因',
   note: '備註',
+  memberNo: '學號',
+  cohortIds: '班級',
+  cohortId: '班級',
+  cohort: '班級',
+  term: '學年／期別',
 };
 
 /** 伺服器 details.issue → 文案。未列出的沿用原文（多為 zod 的驗證訊息） */
@@ -151,6 +156,12 @@ const ISSUE_MESSAGES: Record<string, string> = {
   already_approved: '你已經核可過了',
   approval_not_required: '這門課的完成條件不需要人工核可',
   not_revocable: '只有有效的證書可以撤銷',
+  member_no_taken: '已被其他成員使用',
+  cohort_not_found: '找不到這個班級，或班級已封存',
+  cohort_already_archived: '班級已經封存',
+  cohort_not_archived: '班級未封存，不需要恢復',
+  cohort_empty: '這個班級目前沒有成員',
+  cohort_too_large: '班級人數超過 500 人，請改用批次匯入分批加入',
   // 完成條件驗證（SD §3.6）：伺服器於 params.message 附上具體說明
   RULE_SCHEMA_INVALID: '{message}',
   RULE_DEPTH_EXCEEDED: '{message}',

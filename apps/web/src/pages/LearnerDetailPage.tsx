@@ -40,6 +40,8 @@ export function LearnerDetailPage() {
         title={d.learner.displayName}
         subtitle={
           <>
+            {d.learner.memberNo && <>學號 {d.learner.memberNo}・</>}
+            {d.learner.cohortLabel && <>{d.learner.cohortLabel}・</>}
             {d.learner.email}・{d.enrollment.courseTitle}（v{d.enrollment.versionNo}）{' '}
             <span className={`badge ${ENROLLMENT_STATUS_BADGE[d.enrollment.status]}`}>{ENROLLMENT_STATUS_LABELS[d.enrollment.status]}</span>
           </>

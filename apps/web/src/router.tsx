@@ -11,6 +11,7 @@ import { JobsPage } from './pages/JobsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { LicensePage } from './pages/LicensePage';
 import { MyCertificatePage, MyCertificatesPage } from './pages/CertificatesPage';
+import { CohortsPage } from './pages/CohortsPage';
 import { LearnerDetailPage } from './pages/LearnerDetailPage';
 import { VerifyPage } from './pages/VerifyPage';
 import { LearnPage } from './pages/LearnPage';
@@ -53,6 +54,7 @@ export const router = createBrowserRouter([
       { path: 'courses/:courseId/versions/:versionId/edit', element: <VersionEditorPage /> },
       // Org Admin：目前組織的成員與角色（SD 的 /app/org/roles 併入此頁）
       { path: 'org/users', element: <OrgMembersPage /> },
+      { path: 'org/cohorts', element: <CohortsPage /> },
       // Platform Admin
       { path: 'platform/organizations', element: <OrganizationsPage /> },
       { path: 'platform/organizations/:orgId/users', element: <OrgMembersPage /> },
