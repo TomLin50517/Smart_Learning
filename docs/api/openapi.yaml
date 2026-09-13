@@ -826,9 +826,121 @@ paths:
       x-required-permission: org.settings.write
       x-required-capability: configurationWriteAllowed
       x-audit: org.updated
+      description: 只改組織名稱；品牌改由 PATCH /organizations/{id}/branding（SD §6.16）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 200 }
       responses:
         '200': { description: OK }
         '403': { $ref: '#/components/responses/Forbidden' }
+
+  /organizations/{id}/branding:
+    parameters: [{ $ref: '#/components/parameters/OrgId' }]
+    get:
+      operationId: getOrganizationBranding
+      tags: [Organization]
+      x-required-permission: org.read
+      description: 品牌設定值與實際套用結果（平台名稱、配色、Logo／小圖示網址；SD §6.16）
+      responses:
+        '200': { description: '`OrgBrandingDto`' }
+    patch:
+      operationId: updateOrganizationBranding
+      tags: [Organization]
+      x-required-permission: org.settings.write
+      x-required-capability: configurationWriteAllowed
+      x-audit: org.branding.updated
+      description: |
+        平台名稱（null＝平台預設名稱）、八組預設配色之一，或自訂主色——自訂主色與白字的對比度須達 4.5
+        （`color_contrast_too_low`，params.ratio）。選擇預設配色會清除自訂主色。平台管理員可設定任何組織。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                theme:        { type: string, enum: [academy_blue, ocean, teal, forest, wine, violet, orange, graphite] }
+                customColor:  { type: string, pattern: '^#[0-9a-fA-F]{6}$', description: null＝清除 }
+                platformName: { type: string, maxLength: 60, description: 空字串或 null＝平台預設名稱 }
+      responses:
+        '200': { description: '`OrgBrandingDto`' }
+        '400': { description: '`color_contrast_too_low`／`nothing_to_update`' }
+
+  /organizations/{id}/branding/{kind}:
+    parameters:
+      - $ref: '#/components/parameters/OrgId'
+      - { name: kind, in: path, required: true, schema: { type: string, enum: [logo, icon] } }
+    put:
+      operationId: putOrganizationBrandAsset
+      tags: [Organization]
+      x-required-permission: org.settings.write
+      x-required-capability: configurationWriteAllowed
+      x-audit: org.branding.updated
+      description: |
+        Logo（橫式）或小圖示（方形）。以檔頭判斷格式，只收 PNG／JPEG／WebP（`unsupported_image_type`——不收 SVG）、
+        512 KB 以內（`image_too_large`）。存於資料庫，取代舊的。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [dataBase64]
+              properties:
+                dataBase64: { type: string, maxLength: 700000 }
+      responses:
+        '200': { description: '`OrgBrandingDto`' }
+        '400': { description: '`unsupported_image_type`／`image_too_large`' }
+    delete:
+      operationId: deleteOrganizationBrandAsset
+      tags: [Organization]
+      x-required-permission: org.settings.write
+      x-required-capability: configurationWriteAllowed
+      x-audit: org.branding.updated
+      responses:
+        '200': { description: '`OrgBrandingDto`' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /branding/{code}:
+    parameters:
+      - { name: code, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: getPublicBranding
+      tags: [Organization]
+      security: []
+      description: |
+        組織登入畫面（前端 `/o/{code}`）用的品牌（不需登入；SD §6.16）：組織名稱、平台名稱、配色、Logo／小圖示網址。
+        只限啟用中的組織，其他一律 404。每個 IP 每分鐘 300 次。放在 /api 之下而非 /public/：學校常共用對外 IP。
+      responses:
+        '200': { description: '`PublicBrandingDto`' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /branding/{code}/{kind}:
+    parameters:
+      - { name: code, in: path, required: true, schema: { type: string } }
+      - { name: kind, in: path, required: true, schema: { type: string, enum: [logo, icon] } }
+    get:
+      operationId: getPublicBrandAsset
+      tags: [Organization]
+      security: []
+      description: 圖檔（以儲存時判斷的型別回傳；nosniff、CSP default-src 'none'、快取一天、ETag＝sha256）。每個 IP 每分鐘 600 次
+      responses:
+        '200':
+          description: 圖檔
+          content:
+            image/png: { schema: { type: string, format: binary } }
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/webp: { schema: { type: string, format: binary } }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   /organizations/{id}/disable:
     parameters: [{ $ref: '#/components/parameters/OrgId' }]

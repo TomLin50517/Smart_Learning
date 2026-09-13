@@ -2874,3 +2874,4 @@ Browser (X-Request-Id) → Nginx → API (correlation_id)
 | v1.19 | 2026-09-13 | 學習事件（Phase 2-3a）：activity.started 改由伺服器在建立作答時產生；新增 client 事件 activity.heartbeat（學習畫面在前景時每 60 秒，用於學習時間）；學習時間定義為相鄰事件間隔加總、離開超過 5 分鐘不計；設有影片網址的影片以事件佐證觀看比例；學員讀自己的 timeline 改走 `/api/me/enrollments/{id}/timeline`（SD §6.12） | System Analyst |
 | v1.20 | 2026-09-13 | 人工核可與證書（Phase 2-4）：新增人工核可端點與 `completion.approved` 稽核／學習事件，核可人須擔任完成條件指定的角色；UC-CRT-002 改為網頁版證書（瀏覽器列印／另存 PDF），伺服器端 PDF 與發證通知延後；證書撤銷後不自動重發；公開查驗頁 `/verify/{code}`（SD §6.14） | System Analyst |
 | v1.21 | 2026-09-14 | 班級（梯次）與學號（使用者回饋：老師需辨認學員的學年班級或期別，每年更新不能重新邀請）：組織可建立班級並封存舊班級；成員有組織內唯一的學號；批次匯入可更新既有成員的學號與班級；課程可整班加入；選課記錄當時的班級（SD §6.15） | System Analyst |
+| v1.22 | 2026-09-14 | 組織品牌：每個組織有自己的登入網址（/o/{code}）、Logo、平台名稱與配色（八組預設或通過對比度檢查的自訂主色）；**平台管理員增加 org.settings.write**，可替任何組織設定品牌（SD §6.16） | System Analyst |
