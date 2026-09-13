@@ -31,9 +31,10 @@ export class EnrollmentController {
   /** openapi: listCourseLearners */
   @Get('courses/:id/learners')
   @RequirePermission('learning.result.read_all', { scope: 'course', resource: 'course' })
-  async learners(@Param('id') id: string, @Query() query: unknown): Promise<{ data: CourseLearnerDto[]; meta: { next_cursor: string | null } }> {
+  async learners(@Param('id') id: string, @Query() query: unknown): Promise<{ data: CourseLearnerDto[]; meta: { next_cursor: string | null; cohorts: string[] } }> {
     const r = await this.enrollments.learners(id, parseInput(LearnerQuery, query));
-    return { data: r.data, meta: { next_cursor: r.nextCursor } };
+    // meta.cohorts：本課程出現過的班級（選課快照），供篩選
+    return { data: r.data, meta: { next_cursor: r.nextCursor, cohorts: r.cohorts } };
   }
 
   /** openapi: listMyEnrollments——self 範圍：只回本人的選課 */

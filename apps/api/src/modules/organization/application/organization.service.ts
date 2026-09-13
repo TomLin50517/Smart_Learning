@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
   COURSE_ROLES,
+  type CohortRefDto,
   type MemberRoleDto,
   type MembershipStatus,
   type OrgMemberDto,
@@ -12,7 +13,8 @@ import pg from 'pg';
 import { DB_API } from '../../../common/database.module.js';
 import { DomainError } from '../../../common/domain-error.js';
 import { USER_INVITATIONS, type UserInvitations } from '../../identity/identity.contracts.js';
-import type { MembershipResult, OrgMembership } from '../organization.contracts.js';
+import type { MembershipResult, OrgMembership, ProfileUpdateResult } from '../organization.contracts.js';
+import { findOrCreateCohortTx, joinCohortTx, setMemberNoTx } from './cohort.service.js';
 
 type Tx = pg.PoolClient;
 type Q = pg.Pool | pg.PoolClient;
@@ -27,8 +29,10 @@ export interface MemberQuery {
   limit: number;
   /** 只列出持有此角色的成員（課程角色不分課程） */
   role?: OrgRole | undefined;
-  /** 姓名或 email 的部分字串，不分大小寫 */
+  /** 姓名、email 或學號的部分字串，不分大小寫 */
   q?: string | undefined;
+  /** 只列出此班級的成員 */
+  cohortId?: string | undefined;
 }
 
 interface RoleRow {
@@ -155,26 +159,34 @@ export class OrganizationService implements OrgMembership {
       last_login_at: Date | null;
       pending: boolean;
       member_disabled: boolean;
+      member_no: string | null;
+      cohorts: CohortRefDto[];
       roles: RoleRow[];
     }>(
       `SELECT u.id, u.email, u.display_name, u.status, u.last_login_at, u.password_hash IS NULL AS pending,
               EXISTS (SELECT 1 FROM disabled_memberships dm WHERE dm.organization_id = $1 AND dm.user_id = u.id) AS member_disabled,
+              (SELECT mp.member_no FROM member_profiles mp WHERE mp.organization_id = $1 AND mp.user_id = u.id) AS member_no,
+              (SELECT COALESCE(json_agg(json_build_object('id', co.id, 'name', co.name) ORDER BY co.name), '[]'::json)
+                 FROM cohort_members cm JOIN cohorts co ON co.id = cm.cohort_id
+                WHERE cm.organization_id = $1 AND cm.user_id = u.id AND co.status = 'active') AS cohorts,
               ${ROLE_AGG}
          FROM user_org_roles uor
          JOIN users u  ON u.id = uor.user_id
          JOIN roles ro ON ro.id = uor.role_id
          LEFT JOIN courses c ON uor.scope_type = 'course' AND c.id = uor.scope_id
         WHERE uor.organization_id = $1 AND ($2::citext IS NULL OR u.email > $2::citext)
-          AND ($4::text IS NULL OR u.email::text ILIKE $4 OR u.display_name ILIKE $4)
+          AND ($4::text IS NULL OR u.email::text ILIKE $4 OR u.display_name ILIKE $4
+               OR EXISTS (SELECT 1 FROM member_profiles mp WHERE mp.organization_id = $1 AND mp.user_id = u.id AND mp.member_no ILIKE $4))
           AND ($5::text IS NULL OR EXISTS (
                 SELECT 1 FROM user_org_roles f JOIN roles fr ON fr.id = f.role_id
                  WHERE f.user_id = u.id AND f.organization_id = $1 AND fr.code = $5))
           AND ($6::text IS NULL OR ($6::text = 'disabled') = EXISTS (
                 SELECT 1 FROM disabled_memberships dm WHERE dm.organization_id = $1 AND dm.user_id = u.id))
+          AND ($7::uuid IS NULL OR EXISTS (SELECT 1 FROM cohort_members cm WHERE cm.cohort_id = $7::uuid AND cm.user_id = u.id))
         GROUP BY u.id
         ORDER BY u.email
         LIMIT $3`,
-      [orgId, after, q.limit + 1, pattern, q.role ?? null, q.status ?? null],
+      [orgId, after, q.limit + 1, pattern, q.role ?? null, q.status ?? null, q.cohortId ?? null],
     );
     const page = r.rows.slice(0, q.limit);
     return {
@@ -187,6 +199,8 @@ export class OrganizationService implements OrgMembership {
         pendingInvitation: m.pending,
         membershipStatus: m.member_disabled ? 'disabled' : 'active',
         roles: m.roles.map(toMemberRole),
+        memberNo: m.member_no,
+        cohorts: m.cohorts,
       })),
       nextCursor: r.rows.length > q.limit ? Buffer.from(page[page.length - 1]!.email).toString('base64url') : null,
     };
@@ -408,6 +422,19 @@ export class OrganizationService implements OrgMembership {
     await this.insertGrant(tx, orgId, userId, input.spec, input.actorId);
     await syncCourseStaff(tx, orgId, userId, [input.spec], input.actorId);
     return { userId, created: true, added: true };
+  }
+
+  async updateProfileTx(
+    tx: Tx,
+    orgId: string,
+    userId: string,
+    input: { memberNo?: string | undefined; cohortName?: string | undefined; createCohort: boolean; actorId: string },
+  ): Promise<ProfileUpdateResult> {
+    const memberNoChanged = input.memberNo !== undefined ? await setMemberNoTx(tx, orgId, userId, input.memberNo, input.actorId) : false;
+    if (input.cohortName === undefined) return { memberNoChanged, cohort: null, cohortJoined: false, cohortCreated: false };
+    const co = await findOrCreateCohortTx(tx, orgId, input.cohortName, input.createCohort, input.actorId);
+    const cohortJoined = await joinCohortTx(tx, orgId, co.id, userId, input.actorId);
+    return { memberNoChanged, cohort: { id: co.id, name: co.name }, cohortJoined, cohortCreated: co.created };
   }
 
   async grantCourseRoleTx(tx: Tx, orgId: string, userId: string, spec: RoleSpec, actorId: string): Promise<boolean> {

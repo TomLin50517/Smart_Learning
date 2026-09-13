@@ -100,9 +100,10 @@ export class LearningService {
 
   /** 課程人員檢視單一學員（GET /enrollments/{id}/progress）：與學員看到的大綱相同，另附學員資料。授權由路由守門 */
   async staffProgress(enrollmentId: string): Promise<LearnerProgressDto> {
-    const r = await this.db.query<{ title: string; version_no: number; user_id: string; display_name: string; email: string }>(
-      `SELECT c.title, cv.version_no, u.id AS user_id, u.display_name, u.email::text AS email
+    const r = await this.db.query<{ title: string; version_no: number; user_id: string; display_name: string; email: string; member_no: string | null; cohort_label: string | null }>(
+      `SELECT c.title, cv.version_no, u.id AS user_id, u.display_name, u.email::text AS email, mp.member_no, e.cohort_label
          FROM enrollments e JOIN courses c ON c.id = e.course_id JOIN course_versions cv ON cv.id = e.course_version_id JOIN users u ON u.id = e.user_id
+         LEFT JOIN member_profiles mp ON mp.organization_id = e.organization_id AND mp.user_id = e.user_id
         WHERE e.id = $1`,
       [enrollmentId],
     );
@@ -117,7 +118,7 @@ export class LearningService {
     );
     return {
       ...this.buildOutline(p, x.title, x.version_no),
-      learner: { id: x.user_id, displayName: x.display_name, email: x.email },
+      learner: { id: x.user_id, displayName: x.display_name, email: x.email, memberNo: x.member_no, cohortLabel: x.cohort_label },
       approval: {
         required: manualApprovalRoles(p.rule?.rule),
         given: given.rows.map((g) => ({ approverRole: g.approver_role, approverName: g.display_name, approvedAt: g.approved_at.toISOString(), note: g.note })),

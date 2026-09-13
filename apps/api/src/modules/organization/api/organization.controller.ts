@@ -55,6 +55,7 @@ const MemberQuery = Paging.extend({
     .max(MEMBER_SEARCH_MAX)
     .optional()
     .transform((v) => v || undefined),
+  cohortId: z.guid().optional(),
 });
 
 @Controller('api/organizations')
