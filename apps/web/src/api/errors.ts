@@ -142,6 +142,9 @@ const ISSUE_MESSAGES: Record<string, string> = {
   course_id_mismatch: '課程角色必須指定課程，其他角色不可指定課程',
   course_not_in_organization: '課程不屬於此組織',
   duplicate: '不可重複',
+  already_enrolled: '已在這門課程中',
+  course_not_published: '課程尚未發布，發布後才能加入學員',
+  invalid_transition: '目前的選課狀態無法進行此操作',
   // 完成條件驗證（SD §3.6）：伺服器於 params.message 附上具體說明
   RULE_SCHEMA_INVALID: '{message}',
   RULE_DEPTH_EXCEEDED: '{message}',

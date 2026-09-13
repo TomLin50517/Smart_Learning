@@ -71,7 +71,7 @@ export class PermissionGuard implements CanActivate {
       }
 
       case 'course': {
-        const kind = r.resource === 'course_version' ? 'course_version' : 'course';
+        const kind = r.resource === 'course_version' || r.resource === 'enrollment' ? r.resource : 'course';
         return { scope: 'course', ...(await this.scopes.resolve(kind, id)), userId: null };
       }
     }
