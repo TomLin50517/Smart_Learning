@@ -15,7 +15,7 @@ import type { AuthUser } from './context.js';
 export interface ScopeTarget {
   scope: ScopeType | 'any';
   /** 對應的資源種類；course scope 可由 course、course_version 或 enrollment 反查 */
-  resource?: 'organization' | 'course' | 'course_version' | 'enrollment';
+  resource?: 'organization' | 'course' | 'course_version' | 'enrollment' | 'certificate';
   /** route param 名稱，預設 'id' */
   param?: string;
   /** 僅 scope 'any'：self 授權也可進入——handler 必須只回本人相關的資料（例：稽核的 audit.read_self） */
