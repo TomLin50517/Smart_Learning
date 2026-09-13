@@ -199,6 +199,29 @@ fieldset {
 .role-list li + li {
   margin-top: 2px;
 }
+.rule-group {
+  border-left: 3px solid var(--border);
+  padding: 4px 0 4px 12px;
+  margin: 6px 0;
+}
+.rule-children {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0;
+}
+.rule-condition {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+.rule-condition input.num {
+  width: 5.5em;
+}
 .row-actions {
   display: flex;
   flex-wrap: wrap;
