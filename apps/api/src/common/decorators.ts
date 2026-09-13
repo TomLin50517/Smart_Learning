@@ -8,14 +8,14 @@ import type { AuthUser } from './context.js';
  * 路由的目標 scope 如何解析（SA §6.1 / §6.5）。
  * - platform：不需參數
  * - organization：取 route param（預設 'id'），未指定則用 session 的 active organization
- * - course / course_version：取 route param，再由 ScopeResolver 查出所屬組織
+ * - course / course_version / enrollment：取 route param，再由 ScopeResolver 查出所屬課程與組織
  * - self：目標就是目前使用者
  * - any：列表端點——任何範圍持有此權限即可進入，handler 必須依授權過濾結果
  */
 export interface ScopeTarget {
   scope: ScopeType | 'any';
-  /** 對應的資源種類；course scope 可由 course 或 course_version 反查 */
-  resource?: 'organization' | 'course' | 'course_version';
+  /** 對應的資源種類；course scope 可由 course、course_version 或 enrollment 反查 */
+  resource?: 'organization' | 'course' | 'course_version' | 'enrollment';
   /** route param 名稱，預設 'id' */
   param?: string;
   /** 僅 scope 'any'：self 授權也可進入——handler 必須只回本人相關的資料（例：稽核的 audit.read_self） */

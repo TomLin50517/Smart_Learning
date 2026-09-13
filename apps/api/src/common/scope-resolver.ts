@@ -19,7 +19,7 @@ const MISSING: ResolvedResource = { exists: false, organizationId: null, courseI
 export class ScopeResolver {
   constructor(@Inject(DB_API) private readonly db: pg.Pool) {}
 
-  async resolve(resource: 'organization' | 'course' | 'course_version', id: string | undefined): Promise<ResolvedResource> {
+  async resolve(resource: 'organization' | 'course' | 'course_version' | 'enrollment', id: string | undefined): Promise<ResolvedResource> {
     if (!id || !UUID.test(id)) return MISSING;
 
     switch (resource) {
@@ -36,6 +36,10 @@ export class ScopeResolver {
           `SELECT organization_id, course_id FROM course_versions WHERE id = $1`,
           [id],
         );
+        return r.rows[0] ? { exists: true, organizationId: r.rows[0].organization_id, courseId: r.rows[0].course_id } : MISSING;
+      }
+      case 'enrollment': {
+        const r = await this.db.query<{ organization_id: string; course_id: string }>(`SELECT organization_id, course_id FROM enrollments WHERE id = $1`, [id]);
         return r.rows[0] ? { exists: true, organizationId: r.rows[0].organization_id, courseId: r.rows[0].course_id } : MISSING;
       }
     }
