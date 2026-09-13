@@ -5,6 +5,8 @@ export type ClientErrorCode = ErrorCode | 'NETWORK_ERROR';
 export interface ErrorDetail {
   field?: string;
   issue: string;
+  /** 文案中的 {name} 以此代入（例如衝突課程的名稱） */
+  params?: Record<string, string>;
 }
 
 /** API 錯誤（ARCH §29 錯誤格式）。message 為伺服器的英文訊息，只供除錯；畫面文案一律由 code 在地化 */
@@ -104,6 +106,8 @@ const ISSUE_MESSAGES: Record<string, string> = {
   already_exists: '已被使用',
   already_member: '已是此組織的成員',
   last_org_admin: '組織至少需要保留一位管理員',
+  cannot_remove_own_admin: '不能取消自己的組織管理員角色，請由其他組織管理員處理',
+  code_in_use: '已被課程「{title}」使用',
   not_in_organization: '不屬於此組織',
   range_too_large: '日期區間最多 366 天',
   too_many_rows: '符合條件的紀錄超過 50,000 筆，請縮小日期區間或加上動作篩選',
@@ -157,7 +161,8 @@ export function humanizeStructurePath(field: string): string | null {
 export function describeDetail(d: ErrorDetail): string {
   const structural = d.field ? humanizeStructurePath(d.field) : null;
   const label = d.field ? (structural ?? FIELD_LABELS[d.field.split('.')[0] ?? ''] ?? d.field) : '';
-  const issue = ISSUE_MESSAGES[d.issue] ?? d.issue;
+  const template = ISSUE_MESSAGES[d.issue] ?? d.issue;
+  const issue = template.replace(/\{(\w+)\}/g, (_, k: string) => d.params?.[k] ?? '');
   return label ? `${label}：${issue}` : issue;
 }
 

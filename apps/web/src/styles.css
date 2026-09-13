@@ -181,6 +181,45 @@ fieldset {
   flex-direction: column;
   gap: 14px;
 }
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.toolbar input[type='search'] {
+  flex: 1 1 220px;
+  max-width: 360px;
+}
+.role-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.role-list li + li {
+  margin-top: 2px;
+}
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0 8px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 0.88rem;
+}
+.chip-removed {
+  text-decoration: line-through;
+  color: var(--muted);
+  background: var(--surface-2);
+}
 .row {
   display: flex;
   align-items: center;

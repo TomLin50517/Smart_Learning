@@ -116,7 +116,7 @@ function CreateCourse({ onCreated }: { onCreated(): void }) {
     setError(null);
     try {
       const c = await api<CourseDto>('POST', '/api/courses', {
-        code: code.trim(),
+        ...(code.trim() && { code: code.trim() }),
         title: title.trim(),
         ...(description.trim() && { description: description.trim() }),
       });
@@ -140,8 +140,14 @@ function CreateCourse({ onCreated }: { onCreated(): void }) {
           <Field label="課程名稱">
             <input required maxLength={200} value={title} onChange={(e) => setTitle(e.target.value)} />
           </Field>
-          <Field label="代碼" hint="英數字、連字號與底線，組織內不可重複">
-            <input required maxLength={64} pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}" value={code} onChange={(e) => setCode(e.target.value)} />
+          <Field label="代碼（選填）" hint="留空則自動編號（C-0001 起）；也可填入自己的課號（英數字、連字號與底線）">
+            <input
+              maxLength={64}
+              pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}"
+              placeholder="自動編號"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+            />
           </Field>
           <Field label="說明（選填）">
             <textarea rows={2} maxLength={5000} value={description} onChange={(e) => setDescription(e.target.value)} />
