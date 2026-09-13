@@ -1,5 +1,48 @@
 /**
  * MOD-COMPLETE 對外介面。其他模組只能 import 此檔或 completion.module.ts（SD §1.2、.dependency-cruiser.cjs）。
- * 尚無對外介面。
  */
-export {};
+import type { ActivityType, CompletionEvaluationDto, EnrollmentStatus, LessonBlock, NavigationMode, RuleNode } from '@iac/contracts';
+import type { CompletionContext } from '@iac/domain';
+import type pg from 'pg';
+
+export interface ProgressActivity {
+  id: string;
+  title: string;
+  activityType: ActivityType;
+  /** 有效必修：活動、課節、單元皆必修 */
+  isRequired: boolean;
+  interactiveDefinitionId: string | null;
+  serverEvaluator: string | null;
+  maxAttempts: number | null;
+  weight: number;
+  maxScore: number;
+  prerequisite: RuleNode | null;
+}
+
+/** 某筆選課的學習進度：課程結構（依排序）、完成條件與評估上下文 */
+export interface EnrollmentProgress {
+  enrollment: { id: string; userId: string; organizationId: string; courseId: string; courseVersionId: string; status: EnrollmentStatus };
+  navigationMode: NavigationMode;
+  modules: {
+    id: string;
+    title: string;
+    description: string | null;
+    isRequired: boolean;
+    lessons: { id: string; title: string; isRequired: boolean; contentBlocks: LessonBlock[]; activities: ProgressActivity[] }[];
+  }[];
+  rule: { grammarVersion: string; rule: RuleNode } | null;
+  ctx: CompletionContext;
+  /** 每個活動已送出的作答數與進行中的作答 */
+  attempts: Record<string, { used: number; inProgressId: string | null }>;
+}
+
+export interface CompletionEngine {
+  /** 讀取進度（唯一碰 DB 的步驟）；可在呼叫端的交易內執行 */
+  progress(enrollmentId: string, q?: pg.Pool | pg.PoolClient): Promise<EnrollmentProgress>;
+  /** 評估完成條件（純計算，不寫入） */
+  evaluate(p: EnrollmentProgress): CompletionEvaluationDto;
+  /** 寫入進度快照；成立時選課轉 completed。回傳是否因此完成 */
+  persist(p: EnrollmentProgress, evaluation: CompletionEvaluationDto, c: pg.PoolClient): Promise<boolean>;
+}
+
+export const COMPLETION_ENGINE = Symbol('COMPLETION_ENGINE');
