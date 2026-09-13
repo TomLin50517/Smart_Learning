@@ -1,9 +1,9 @@
-import { Body, Controller, Get, HttpCode, Param, Patch, Post, Req } from '@nestjs/common';
-import type { CourseVersionDetailDto, InteractiveDefinitionDto, VersionImpactDto } from '@iac/contracts';
+import { Body, Controller, Get, HttpCode, Param, Patch, Post, Put, Req } from '@nestjs/common';
+import type { CoachPolicyDto, CourseVersionDetailDto, InteractiveDefinitionDto, ValidationIssueDto, VersionImpactDto } from '@iac/contracts';
 import type { FastifyRequest } from 'fastify';
 import { Audit, RequireCapability, RequirePermission } from '../../../common/decorators.js';
 import { parseInput } from '../../../common/validation.js';
-import { DraftPatch } from '../application/course-inputs.js';
+import { CoachPolicyInput, CompletionRulesInput, DraftPatch } from '../application/course-inputs.js';
 import { CourseService } from '../application/course.service.js';
 
 @Controller('api/course-versions')
@@ -38,6 +38,32 @@ export class CourseVersionController {
     const v = await this.courses.clone(id);
     req.ctx.audit = { resourceId: v.id, after: { versionNo: v.versionNo }, metadata: { source_version_id: id } };
     return v;
+  }
+
+  /** openapi: updateCompletionRules——儲存前驗證（錯誤 422、RULE_* 子代碼）；警告隨回應回傳；null 清除 */
+  @Put(':id/completion-rules')
+  @RequirePermission('course.completion_rule.write', { scope: 'course', resource: 'course_version' })
+  @RequireCapability({ capability: 'authoringAllowed' })
+  @Audit({ action: 'course.completion_rule.updated', resourceType: 'course_version' })
+  async updateCompletionRules(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Req() req: FastifyRequest,
+  ): Promise<{ completionRuleSet: CourseVersionDetailDto['completionRuleSet']; warnings: ValidationIssueDto[] }> {
+    const r = await this.courses.updateCompletionRules(id, parseInput(CompletionRulesInput, body));
+    req.ctx.audit = { before: r.before as Record<string, unknown>, after: r.after as Record<string, unknown> };
+    return { completionRuleSet: r.completionRuleSet, warnings: r.warnings };
+  }
+
+  /** openapi: updateCoachPolicy——整組取代；值域白名單（會組進 AI 提示詞） */
+  @Put(':id/coach-policy')
+  @RequirePermission('course.coach_policy.write', { scope: 'course', resource: 'course_version' })
+  @RequireCapability({ capability: 'authoringAllowed' })
+  @Audit({ action: 'course.coach_policy.updated', resourceType: 'course_version' })
+  async updateCoachPolicy(@Param('id') id: string, @Body() body: unknown, @Req() req: FastifyRequest): Promise<CoachPolicyDto> {
+    const r = await this.courses.updateCoachPolicy(id, parseInput(CoachPolicyInput, body));
+    req.ctx.audit = { before: r.before, after: r.after };
+    return r.policy;
   }
 
   /** openapi: getCourseVersionImpact */

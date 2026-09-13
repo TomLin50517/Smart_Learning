@@ -1,5 +1,7 @@
 /** 課程與課程版本（SA §5.5、§7.1；SD §2.3、§6.2.2、§6.5） */
 
+import type { RuleNode } from './completion.js';
+
 export type CourseStatus = 'draft' | 'active' | 'archived';
 export type CourseVersionStatus = 'draft' | 'review' | 'published' | 'superseded' | 'archived';
 
@@ -89,11 +91,41 @@ export interface CourseVersionDetailDto extends CourseVersionSummaryDto {
   summary: string | null;
   navigationMode: NavigationMode;
   modules: ModuleDto[];
-  completionRuleSet: { grammarVersion: string; rule: Record<string, unknown> } | null;
-  coachPolicy: Record<string, unknown> | null;
+  completionRuleSet: { grammarVersion: string; rule: RuleNode } | null;
+  coachPolicy: CoachPolicyDto | null;
   knowledgeBindings: { documentVersionId: string; bindingType: string; priority: number }[];
   /** 等同 status === 'draft'；false 時所有內容寫入回 409 COURSE_VERSION_IMMUTABLE */
   editable: boolean;
+}
+
+/**
+ * AI 教練設定（SD §2.3 coach_policies、§10.1.2 POLICY 段）。隨版本凍結：已發布版本不可修改。
+ * 值域以白名單限定——這些值會組進送給 AI 的提示詞。
+ */
+export const COACH_RESPONSE_MODES = ['hint_first', 'coach_first', 'direct_allowed'] as const;
+export type CoachResponseMode = (typeof COACH_RESPONSE_MODES)[number];
+export const COACH_TONE_PROFILES = ['supportive', 'neutral', 'concise'] as const;
+export type CoachToneProfile = (typeof COACH_TONE_PROFILES)[number];
+/** 對應知識索引的 knowledge_type（SD §4.2）：教材、已驗證 FAQ、常見錯誤、平台知識 */
+export const COACH_KNOWLEDGE_SCOPES = ['course_source', 'verified_faq', 'common_error', 'platform'] as const;
+export type CoachKnowledgeScope = (typeof COACH_KNOWLEDGE_SCOPES)[number];
+export const COACH_LANGUAGES = ['zh-TW', 'en'] as const;
+export type CoachLanguage = (typeof COACH_LANGUAGES)[number];
+export const COACH_POLICY_LIMITS = { revealAfterMax: 20, prohibitedTopics: 20, topicChars: 100, extraInstructionsChars: 1000 } as const;
+
+export interface CoachPolicyDto {
+  responseMode: CoachResponseMode;
+  /** 1（只給提示）～5（可完整解說） */
+  maxDirectnessLevel: number;
+  /** 嘗試幾次後可直接給答案；null＝永不 */
+  allowAnswerRevealAfterAttempts: number | null;
+  preferredLanguage: CoachLanguage;
+  citationRequired: boolean;
+  allowedKnowledgeScopes: CoachKnowledgeScope[];
+  toneProfile: CoachToneProfile;
+  followUpQuestions: boolean;
+  prohibitedTopics: string[];
+  extraInstructions: string | null;
 }
 
 export interface CourseDto {
