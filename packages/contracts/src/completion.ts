@@ -78,12 +78,21 @@ export const RULE_ISSUE_CODES = [
 ] as const;
 export type RuleIssueCode = (typeof RULE_ISSUE_CODES)[number];
 
-/** 驗證問題（SD §6.2.2）。path 為 JSON 路徑，如 `$.conditions[1].activity_id` */
+/** 發布前檢查項目（SA SEQ-01、ARCH §6.3） */
+export const PUBLISH_CHECKS = ['C1', 'C2', 'C3', 'C4', 'C5'] as const;
+export type PublishCheck = (typeof PUBLISH_CHECKS)[number];
+
+/**
+ * 驗證問題（SD §6.2.2）。path：完成條件為 JSON 路徑（`$.conditions[1].activity_id`）；
+ * 課程結構為點分路徑（`modules.0.lessons.1.activities.2.config`）；其他為 `coachPolicy`、`knowledgeBindings.0`。
+ */
 export interface ValidationIssueDto {
   code: string;
   path: string;
   message: string;
   targetId?: string;
+  /** 發布前檢查的項目（儲存完成條件時不帶） */
+  check?: PublishCheck;
 }
 
 export interface ValidationReportDto {

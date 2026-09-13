@@ -2200,6 +2200,27 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 僅草稿可寫 | 兩個端點都先 `FOR UPDATE` 鎖定版本並確認為 draft，否則 409 `COURSE_VERSION_IMMUTABLE`（DB 觸發器 `trg_crs_immutable`／`trg_cp_immutable` 為第二層） |
 | 前端 | 版本編輯頁新增「完成條件」卡片（遞迴的群組／條件編輯器，引用對象取自**已儲存**的結構，結構有未儲存變更時提示）與「AI 教練設定」卡片，各自獨立儲存 |
 
+## 6.7 發布前檢查與發布實作（Phase 1-2b，v1.17）
+
+實作：`packages/domain/src/publish/`（`checkReachability`、`validateJsonSchema`、`canonicalJson`，純函式）、`apps/api/src/modules/course/application/publish.service.ts`。
+
+| 檢查 | 定義 | 代碼 |
+|---|---|---|
+| C1 無法到達的必修單元 | 依賴圖：節點為活動，邊 a→b 表示 a 開始前 b 須完成。顯式依賴取先修條件中「一定要先完成」的引用——只沿 AND 群組、不含 negate；OR／NOT 分支有替代路徑，計入會誤報。隱含依賴依 §3.7：strict 依排序依賴前一活動；mixed 依賴前一單元的所有必修活動。從無依賴的活動逐步解鎖，解不開者即無法到達（循環、依賴無法到達者、先修條件要求完成沒有必修活動的單元／課節）。必修 → 錯誤、選修 → 警告；另警告「必修但無必修活動」的單元／課節 | `C1_UNREACHABLE`、`C1_EMPTY_REQUIRED_SCOPE`（警告） |
+| C2 完成條件引用 | 完成條件必須存在；以 §3.6 驗證器重驗（結構可能在儲存規則後被改）。各活動的先修條件以同一驗證器、`PREREQUISITE_CONDITION_TYPES` 子集驗證 | `COMPLETION_RULE_MISSING`、`RULE_*` |
+| C3 來源文件處理完成 | 綁定的 document_version 狀態須為 ready。要求引用但沒有任何綁定時警告（教練將無法回答課程內容） | `C3_DOCUMENT_NOT_READY`、`C3_NO_KNOWLEDGE`（警告） |
+| C4 Coach Policy | 存在，且通過與 PUT 相同的值域白名單（擋下舊資料或繞過 API 寫入的值） | `C4_POLICY_MISSING`、`C4_POLICY_INVALID` |
+| C5 互動活動 schema | 互動活動須選元件；元件須存在且啟用；config／answerKey 須符合元件的 config_schema／answer_key_schema。以精簡驗證器檢查內建元件用到的關鍵字（type、required、properties、additionalProperties、items、enum、const、長度與數值範圍）；**不支援 pattern**（不在伺服器執行 schema 內的任意正規表示式）。遇到未支援的關鍵字不默默通過，改發警告「這部分未檢查」。每個活動最多列 5 項 | `C5_DEFINITION_REQUIRED`、`C5_DEFINITION_UNAVAILABLE`、`C5_CONFIG_INVALID`、`C5_ANSWER_KEY_INVALID`、`C5_SCHEMA_PARTIAL`（警告） |
+
+| 項目 | 實作 |
+|---|---|
+| validate 端點 | `POST /course-versions/{id}/validate`（course.version.validate）一律回 200 與報告，`valid: false` 時 UI 逐項顯示；問題帶 `check` 分組與 `path`（結構路徑或 JSON 路徑）供定位 |
+| publish 交易 | 鎖定課程列（與建立版本、複製同一把鎖，同課程排隊）→ 鎖定版本並確認為 draft／review（否則 409）→ 課程已封存則 400 `course_archived` → **同一交易、同一連線重跑 validate**（檢查與發布之間內容不會被改），有錯誤即 422，`details[].params` 帶 `check` 與 `message` → 舊 published 轉 superseded（先轉舊版，部分唯一索引保證單一 published）→ 本版轉 published、寫入 `published_at`／`published_by`／`content_snapshot_hash` → 課程由 draft 轉 active。稽核 `course.version.published` 記 before／after 狀態、雜湊與被取代的版本 |
+| 內容快照雜湊 | `sha256:` + `canonicalJson`（鍵排序的穩定序列化）的雜湊；輸入只含內容（課程、版號、標題、簡介、導覽模式、結構、完成條件、教練設定、知識綁定），不含狀態與時間戳。日後以同一函式重算即可偵測繞過應用層的修改（AC-CRS-001）。DB 觸發器擋已發布版本改寫此欄 |
+| 知識綁定凍結 | 綁定本就指向特定 `document_version_id`，發布後由觸發器擋寫，無需另外處理 |
+| 權限 | 依 migration 0012：講師、課程管理員可檢查與發布；組織管理員不可（僅可唯讀內容） |
+| 前端 | 版本編輯頁新增「發布」卡片：「發布前檢查」預覽報告（依 C1–C5 分組、標示位置），「發布此版本」先檢查、全數通過且確認後才發布；有未儲存的結構變更時停用。已發布版本顯示內容雜湊 |
+
 ---
 
 # 7. Frontend 設計
@@ -4184,3 +4205,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.14 | 2026-09-13 | 成員管理與管理員保護：§8.9 新增可直接邀請講師＋課程、成員清單的角色篩選／搜尋與課程資訊、管理員保護（不能移除自己、只計啟用中管理員、鎖定組織列防並行互相移除）；§6.5 課程代碼選填並自動編號、代碼衝突帶出課程名稱、課程列表 `organizationId` 篩選；錯誤細節新增選填 `params` | Software Designer |
 | v1.15 | 2026-09-13 | 停用成員與恢復課程：§2.9 新增 0018（`disabled_memberships`）；§8.9 新增停用／恢復成員資格（只影響本組織、角色保留、GrantLoader 排除、啟用中管理員的共同定義）；§6.5 新增恢復封存與列表 `status` 篩選；§12.2 新增 `org.user.enabled`、`course.restored` | Software Designer |
 | v1.16 | 2026-09-13 | Phase 1-2a 完成條件與 AI 教練設定：新增 §6.6（語法型別位置、儲存時驗證與 422 明細格式、驗證器補充規則、必修活動定義、評估器補充語意、先修條件子集、Coach Policy 值域白名單、僅草稿可寫、前端卡片） | Software Designer |
+| v1.17 | 2026-09-13 | Phase 1-2b 發布前檢查與發布：新增 §6.7（C1–C5 的具體定義與代碼、validate 回報格式、publish 交易步驟、內容快照雜湊、知識綁定凍結、權限、前端發布卡片） | Software Designer |

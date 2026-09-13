@@ -94,6 +94,8 @@ export interface CourseVersionDetailDto extends CourseVersionSummaryDto {
   completionRuleSet: { grammarVersion: string; rule: RuleNode } | null;
   coachPolicy: CoachPolicyDto | null;
   knowledgeBindings: { documentVersionId: string; bindingType: string; priority: number }[];
+  /** 發布時計算的內容雜湊（`sha256:…`）；草稿為 null（SA AC-CRS-001 的偵測手段） */
+  contentSnapshotHash: string | null;
   /** 等同 status === 'draft'；false 時所有內容寫入回 409 COURSE_VERSION_IMMUTABLE */
   editable: boolean;
 }
