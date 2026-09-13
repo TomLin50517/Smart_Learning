@@ -2299,6 +2299,20 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 教師檢視學員 | `GET /enrollments/{id}/progress`（learning.result.read_all）：內容與學員看到的大綱相同（各活動狀態、最佳成績、次數、觀看比例、進度、未完成原因、學習時間），另附學員資料。學員名單加上進度快照（必修完成數、加權分數）與最後學習時間 |
 | 大綱 | 學員大綱加入學習時間（總計、各單元、最後學習時間）與影片活動的觀看比例 |
 
+## 6.13 影片播放器、學習歷程與教師的學員詳情（Phase 2-3b，v1.23）
+
+實作：`apps/web/src/learn-events.ts`（觀看追蹤、事件佇列、heartbeat hook）、`pages/activity-panel.tsx`（VideoInput）、`pages/timeline-view.tsx`、`MyTimelinePage.tsx`、`LearnerDetailPage.tsx`。前端只依賴 `@iac/contracts`，所以區間合併在前端另有一份（與伺服器同一算法，單元測試對照）。
+
+| 項目 | 實作 |
+|---|---|
+| 影片播放器 | `config.video_url` 為 http(s) 網址時以 HTML5 `<video>` 播放（MP4／WebM 等瀏覽器可直接播放的格式）。只有**連續播放**的片段算看過：相鄰兩次 timeupdate 相差 ≤ 2 秒才延伸區間，拖曳跳轉（seeking）與暫停會中斷；重看不重複計算。首次播放送 video.started；每 15 秒或觀看比例每增加 10%、以及暫停／播完時送 video.progressed（合併後的區間，最多 200 段）。畫面顯示已觀看比例與門檻；完成與否由伺服器依事件判定。沒有網址時維持「我已看完影片」 |
+| heartbeat 與事件佇列 | 作答進行中、學習畫面在前景時每 60 秒一筆 activity.heartbeat；每 15 秒、切到背景、離開頁面、作答結束時送出（每批最多 50 筆）。送出作答前先送完事件。網路中斷時留在佇列（最多 200 筆）下次再送——event_id 讓重送不重複；429 與其他錯誤直接丟棄，**不影響作答**。限制：學習時間從按下「開始」後起算，只閱讀課節內容、尚未開始作答的時間不計 |
+| 學員的學習歷程 | `/app/learn/:enrollmentId/timeline`（課程頁上方「學習歷程」連結）：學習時間（總計、各單元、最後學習）與紀錄列表（新到舊、「載入更早的紀錄」）。學習頁的進度卡顯示學習時間 |
+| 教師的學員詳情 | `/app/courses/:courseId/learners/:enrollmentId`（課程頁學員名單點姓名）：進度與未完成原因、依單元列出各活動的狀態／最佳結果／作答次數／影片觀看比例、學習時間與學習歷程。學員名單加上「進度」（必修完成數、分數）與「最後學習」欄 |
+| 編輯器 | 影片活動（未選互動元件）顯示「影片網址／影片長度（秒）／完成比例」欄位，直接改寫 config JSON（與進階區同步；JSON 無效時提示先修正） |
+| 發布檢查 C5 | 影片 config 以內建 schema 檢查（欄位白名單、長度 1～86400 秒、完成比例 0.1～1）；`video_url` 必須以 http:// 或 https:// 開頭（json-schema-lite 不支援 pattern，另以固定規則檢查）——網址會直接放進學員的播放器 |
+| 路由說明 | SD §7.1 規劃的 `/app/my/timeline/:enrollmentId` 依現行學員路由（`/app/learn/...`）改為 `/app/learn/:enrollmentId/timeline` |
+
 ---
 
 # 7. Frontend 設計
@@ -4289,3 +4303,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.20 | 2026-09-13 | Phase 2-2b 學習畫面：新增 §6.10（路由與回顧模式、版面、內容區塊的安全渲染、活動面板、各元件作答介面、排序題的打亂規則、結果呈現） | Software Designer |
 | v1.21 | 2026-09-13 | Phase 2-1b 批次匯入：新增 §6.11（成員與課程學員兩個入口、預覽即實際的 dry-run、逐列結果代碼、既有成員不改角色、建帳號權限、交易內授權上限、鎖序、提交後邀請與批次稽核、ORG_MEMBERSHIP 介面、前端 CSV） | Software Designer |
 | v1.22 | 2026-09-13 | Phase 2-3a 學習事件：新增 §6.12（學員端事件白名單與限流、伺服器端事件與交易、學習時間算法、以事件佐證的影片觀看比例、教師與學員兩條 timeline 路由、教師檢視學員進度、學員名單的進度與最後學習時間） | Software Designer |
+| v1.23 | 2026-09-13 | Phase 2-3b 學習畫面：新增 §6.13（HTML5 影片播放器與連續播放判定、heartbeat 與事件佇列的失敗處理、學員學習歷程頁、教師學員詳情頁、學員名單新欄位、編輯器影片欄位、影片 config 的 C5 檢查與網址限制） | Software Designer |
