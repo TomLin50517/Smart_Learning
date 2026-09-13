@@ -11,4 +11,5 @@ export * from './enrollment.js';
 export * from './learning.js';
 export * from './bulk-import.js';
 export * from './certificate.js';
+export * from './branding.js';
 export * from './permissions.generated.js';

@@ -268,8 +268,8 @@ SELECT pg_temp.t('T58 4 monthly partitions per table', NULL,
      OR (SELECT count(*) FROM pg_inherits i JOIN pg_class c ON c.oid=i.inhrelid
           WHERE i.inhparent='audit_logs'::regclass AND c.relname ~ '_\d{4}_\d{2}$') <> 4
      THEN RAISE EXCEPTION 'PARTITIONS'; END IF; END $d$ $$, 'OK');
-SELECT pg_temp.t('T59 19 migrations recorded', NULL,
- $$DO $d$ BEGIN IF (SELECT count(*) FROM schema_migrations) <> 19 THEN RAISE EXCEPTION 'COUNT'; END IF; END $d$ $$, 'OK');
+SELECT pg_temp.t('T59 20 migrations recorded', NULL,
+ $$DO $d$ BEGIN IF (SELECT count(*) FROM schema_migrations) <> 20 THEN RAISE EXCEPTION 'COUNT'; END IF; END $d$ $$, 'OK');
 
 -- ============================================================ 0015 auth tables
 SELECT pg_temp.t('T60 app_coach cannot read password_reset_tokens', 'app_coach',
@@ -351,6 +351,21 @@ SELECT pg_temp.t('T80 app_coach cannot write cohorts', 'app_coach',
 SELECT pg_temp.t('T81 enrollments keep the cohort at enrollment time', NULL,
  $$DO $d$ BEGIN IF NOT EXISTS (SELECT 1 FROM information_schema.columns
       WHERE table_name = 'enrollments' AND column_name = 'cohort_label') THEN RAISE EXCEPTION 'MISSING'; END IF; END $d$ $$, 'OK');
+
+-- ============================================================ 0020 branding
+SELECT pg_temp.t('T82 brand assets: only logo and icon', NULL,
+ $$INSERT INTO organization_assets (organization_id, kind, content_type, data, sha256, byte_size)
+   VALUES ('11111111-0000-0000-0000-000000000001', 'banner', 'image/png', '\x89504e47', repeat('a', 64), 4)$$, '23514');
+SELECT pg_temp.t('T83 brand assets: SVG is never stored', NULL,
+ $$INSERT INTO organization_assets (organization_id, kind, content_type, data, sha256, byte_size)
+   VALUES ('11111111-0000-0000-0000-000000000001', 'logo', 'image/svg+xml', '\x3c737667', repeat('a', 64), 4)$$, '23514');
+SELECT pg_temp.t('T84 brand assets: byte_size must match the data', NULL,
+ $$INSERT INTO organization_assets (organization_id, kind, content_type, data, sha256, byte_size)
+   VALUES ('11111111-0000-0000-0000-000000000001', 'logo', 'image/png', '\x89504e47', repeat('a', 64), 5)$$, '23514');
+SELECT pg_temp.t('T85 platform_admin can set organization branding', NULL,
+ $$DO $d$ BEGIN IF NOT EXISTS (SELECT 1 FROM role_permissions rp JOIN roles r ON r.id = rp.role_id
+      JOIN permissions p ON p.id = rp.permission_id WHERE r.code = 'platform_admin' AND p.code = 'org.settings.write')
+   THEN RAISE EXCEPTION 'MISSING'; END IF; END $d$ $$, 'OK');
 
 -- ------------------------------------------------------------------ report
 \pset border 1

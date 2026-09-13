@@ -23,6 +23,7 @@ export const AUDIT_ACTIONS = [
   'org.cohort.updated',
   'org.cohort.archived',
   'org.cohort.restored',
+  'org.branding.updated',
   'cms.updated',
   'cms.published',
   'cms.rolled_back',
