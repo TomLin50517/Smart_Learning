@@ -3,6 +3,7 @@ import pg from 'pg';
 import { pino } from 'pino';
 import { z } from 'zod';
 import { Dispatcher } from './dispatcher.js';
+import { CertificateGenerateHandler } from './handlers/certificate-generate.js';
 
 const env = z
   .object({
@@ -22,8 +23,8 @@ const dispatcher = new Dispatcher(db, log, {
   queues: env.WORKER_QUEUES.split(',').map((q) => q.trim()).filter(Boolean),
   pollIntervalMs: env.WORKER_POLL_MS,
 });
-// Handlers 依 SD §11.1 的 job 目錄於各 Phase 加入：
-// dispatcher.register(new DocumentParseHandler(...));
+// Handlers 依 SD §11.1 的 job 目錄於各 Phase 加入
+dispatcher.register(new CertificateGenerateHandler(db));
 
 async function shutdown(signal: string): Promise<void> {
   log.info({ signal }, 'shutting down');

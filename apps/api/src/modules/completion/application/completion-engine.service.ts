@@ -87,6 +87,10 @@ export class CompletionEngineService implements CompletionEngine {
          FROM learning_attempts WHERE enrollment_id = $1 GROUP BY activity_id`,
       [enrollmentId],
     );
+    const approvals = await q.query<{ approver_role: string; approved_at: Date }>(
+      `SELECT approver_role, approved_at FROM completion_approvals WHERE enrollment_id = $1 ORDER BY approved_at`,
+      [enrollmentId],
+    );
     // 學習事件：時間點算學習時間；影片事件的 payload 算觀看比例（SD §6.12）
     const events = await q.query<{ event_type: string; activity_id: string | null; at: Date; payload: Record<string, unknown> | null }>(
       `SELECT event_type, activity_id, occurred_at AS at, CASE WHEN event_type IN ('video.started', 'video.progressed') THEN payload END AS payload
@@ -105,8 +109,8 @@ export class CompletionEngineService implements CompletionEngine {
       attemptCounts: {},
       videoWatchRatios: {},
       timeSpentMinutes: { course: 0, byModule: {} },
-      // 人工核可於後續批次接上
-      manualApprovals: [],
+      // 人工核可（SD §6.14）
+      manualApprovals: approvals.rows.map((a) => ({ approverRole: a.approver_role, approvedAt: a.approved_at.toISOString() })),
     };
     const requiredIds: string[] = [];
     for (const a of acts.rows) {

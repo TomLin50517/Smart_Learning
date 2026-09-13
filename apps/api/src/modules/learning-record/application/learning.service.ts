@@ -2,8 +2,11 @@ import { createHash } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import {
   BUILTIN_COMPONENTS,
+  CERTIFICATE_JOB,
   LEARNABLE_STATUSES,
+  certificateJobKey,
   type ActivityResultDto,
+  type ApproverRole,
   type ActivityRuntimeDto,
   type EnrollmentStatus,
   type LearnerOutlineDto,
@@ -12,10 +15,11 @@ import {
   type ResultIssue,
   type ResultStatus,
 } from '@iac/contracts';
-import { activityAvailability, canonicalJson, resolveEvaluator } from '@iac/domain';
+import { activityAvailability, canonicalJson, manualApprovalRoles, resolveEvaluator } from '@iac/domain';
 import pg from 'pg';
 import { DB_API } from '../../../common/database.module.js';
 import { DomainError } from '../../../common/domain-error.js';
+import { enqueueJobTx } from '../../../common/job-queue.js';
 import { COMPLETION_ENGINE, type CompletionEngine, type EnrollmentProgress } from '../../completion/completion.contracts.js';
 import type { ServerEvent } from '../learning-record.contracts.js';
 import { LearningEventService } from './learning-events.service.js';
@@ -104,8 +108,21 @@ export class LearningService {
     );
     const x = r.rows[0];
     if (!x) throw new DomainError('NOT_FOUND');
-    const outline = this.buildOutline(await this.engine.progress(enrollmentId), x.title, x.version_no);
-    return { ...outline, learner: { id: x.user_id, displayName: x.display_name, email: x.email } };
+    const p = await this.engine.progress(enrollmentId);
+    const given = await this.db.query<{ approver_role: string; approved_at: Date; note: string | null; display_name: string }>(
+      `SELECT ca.approver_role, ca.approved_at, ca.note, u.display_name
+         FROM completion_approvals ca JOIN users u ON u.id = ca.approved_by
+        WHERE ca.enrollment_id = $1 ORDER BY ca.approved_at`,
+      [enrollmentId],
+    );
+    return {
+      ...this.buildOutline(p, x.title, x.version_no),
+      learner: { id: x.user_id, displayName: x.display_name, email: x.email },
+      approval: {
+        required: manualApprovalRoles(p.rule?.rule),
+        given: given.rows.map((g) => ({ approverRole: g.approver_role, approverName: g.display_name, approvedAt: g.approved_at.toISOString(), note: g.note })),
+      },
+    };
   }
 
   private buildOutline(p: EnrollmentProgress, courseTitle: string, versionNo: number): LearnerOutlineDto {
@@ -287,18 +304,13 @@ export class LearningService {
       );
       await c.query(`UPDATE learning_attempts SET status = 'scored', submitted_at = now(), scored_at = now(), updated_at = now() WHERE id = $1`, [a.id]);
 
-      const p = await this.engine.progress(a.enrollment_id, c);
-      const ev = this.engine.evaluate(p);
-      const completionChanged = await this.engine.persist(p, ev, c);
-
       const ids = { activityId: a.activity_id, attemptId: a.id };
       const events: ServerEvent[] = [
         { eventType: 'activity.submitted', ...ids, payload: { input_hash: createHash('sha256').update(canonicalJson(input ?? null)).digest('hex') } },
         { eventType: 'activity.result_ready', ...ids, payload: { status: out.status, score: out.score, max_score: maxScore } },
       ];
       if (DONE.has(out.status) && !wasDone.rowCount) events.push({ eventType: 'activity.completed', ...ids });
-      if (completionChanged) events.push({ eventType: 'course.completed', payload: { grammar_version: ev.grammarVersion } });
-      await this.events.recordTx(c, a.enrollment_id, events);
+      const completionChanged = await this.settle(c, a.enrollment_id, events);
 
       return {
         attemptId: a.id,
@@ -311,6 +323,65 @@ export class LearningService {
         evaluatedAt: lr.rows[0]!.evaluated_at.toISOString(),
         completionChanged,
       };
+    });
+  }
+
+  /**
+   * 評估後的共同處理（送出作答、人工核可）：寫入進度快照；選課因此轉為完成時寫 course.completed，
+   * 並在同一交易排入發證（SEQ-10；同一筆選課只排一次）。回傳是否因此完成。
+   */
+  private async settle(c: pg.PoolClient, enrollmentId: string, events: ServerEvent[]): Promise<boolean> {
+    const p = await this.engine.progress(enrollmentId, c);
+    const ev = this.engine.evaluate(p);
+    const changed = await this.engine.persist(p, ev, c);
+    if (changed) {
+      events.push({ eventType: 'course.completed', payload: { grammar_version: ev.grammarVersion } });
+      await enqueueJobTx(c, {
+        jobType: CERTIFICATE_JOB.type,
+        queue: CERTIFICATE_JOB.queue,
+        priority: CERTIFICATE_JOB.priority,
+        maxAttempts: CERTIFICATE_JOB.maxAttempts,
+        payload: { enrollmentId },
+        idempotencyKey: certificateJobKey(enrollmentId),
+        organizationId: p.enrollment.organizationId,
+      });
+    }
+    await this.events.recordTx(c, enrollmentId, events);
+    return changed;
+  }
+
+  /**
+   * 人工核可（SD §6.14）：完成條件含 manual_approval 時，由條件指定角色的人核可。核可者須在此課程（或其組織）
+   * 實際擔任該角色——路由的 learning.result.read_all 只確認是課程人員。一次核可涵蓋其擔任且尚未核可的所有角色；
+   * 同一交易重算完成判定。鎖定選課列，並行的核可與送出作答會排隊。
+   */
+  async approve(enrollmentId: string, approverId: string, note: string | null): Promise<{ approvedRoles: ApproverRole[]; completionChanged: boolean }> {
+    return this.tx(async (c) => {
+      const e = await c.query<{ status: EnrollmentStatus; course_id: string; organization_id: string }>(
+        `SELECT status, course_id, organization_id FROM enrollments WHERE id = $1 FOR UPDATE`,
+        [enrollmentId],
+      );
+      const enr = e.rows[0];
+      if (!enr) throw new DomainError('NOT_FOUND');
+      if (!LEARNABLE_STATUSES.includes(enr.status)) throw new DomainError('ENROLLMENT_NOT_ACTIVE');
+      const p = await this.engine.progress(enrollmentId, c);
+      const required = manualApprovalRoles(p.rule?.rule);
+      if (!required.length) throw rejected('approval_not_required');
+      const held = await c.query<{ code: string }>(
+        `SELECT DISTINCT r.code FROM user_org_roles uor JOIN roles r ON r.id = uor.role_id
+          WHERE uor.user_id = $1 AND r.code = ANY($4::text[])
+            AND ((uor.scope_type = 'course' AND uor.scope_id = $2) OR (uor.scope_type = 'organization' AND uor.scope_id = $3))`,
+        [approverId, enr.course_id, enr.organization_id, required],
+      );
+      const mine = required.filter((role) => held.rows.some((h) => h.code === role));
+      if (!mine.length) throw new DomainError('PERMISSION_DENIED', 'Approver role required', [{ issue: 'approver_role_required', params: { roles: required.join(',') } }]);
+      const pending = mine.filter((role) => !p.ctx.manualApprovals.some((x) => x.approverRole === role));
+      if (!pending.length) throw rejected('already_approved');
+      for (const role of pending) {
+        await c.query(`INSERT INTO completion_approvals (enrollment_id, approver_role, approved_by, note) VALUES ($1, $2, $3, $4)`, [enrollmentId, role, approverId, note]);
+      }
+      const completionChanged = await this.settle(c, enrollmentId, [{ eventType: 'completion.approved', payload: { approver_roles: pending.join(',') } }]);
+      return { approvedRoles: pending, completionChanged };
     });
   }
 

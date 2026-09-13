@@ -41,6 +41,7 @@ export const AUDIT_ACTIONS = [
   'enrollment.resumed',
   'enrollment.reopened',
   'enrollment.relearning.assigned',
+  'completion.approved',
   'knowledge.document.uploaded',
   'knowledge.document.version_added',
   'knowledge.document.deleted',

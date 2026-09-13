@@ -34,6 +34,9 @@ const DETAIL_FIELDS: Record<string, [string, string][]> = {
     ['max_score', 'maxScore'],
   ],
   'video.started': [['duration_sec', 'durationSec']],
+  'completion.approved': [['approver_roles', 'approverRoles']],
+  'certificate.issued': [['public_id', 'publicId']],
+  'certificate.revoked': [['public_id', 'publicId']],
 };
 const Cursor = z.tuple([z.string().max(64), z.guid()]);
 const invalid = (field: string, issue: string) => new DomainError('VALIDATION_FAILED', 'Validation failed', [{ field, issue }]);

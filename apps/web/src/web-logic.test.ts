@@ -13,6 +13,14 @@ import { blockingReasonText, issueText, parseMarkdownLite, seededShuffle, timeli
 import { csvTemplate, parseCsv, toLearnerRows, toMemberRows } from './csv';
 import { formatMinutes } from './format';
 import { EventQueue, mergeRanges, WatchTracker } from './learn-events';
+import { bundleFromHtml } from './version-check';
+
+describe('new version check', () => {
+  it('reads the hashed main script from index.html; dev builds have none', () => {
+    expect(bundleFromHtml('<script type="module" crossorigin src="/assets/index-C1BVx92f.js"></script>')).toBe('/assets/index-C1BVx92f.js');
+    expect(bundleFromHtml('<script type="module" src="/src/main.tsx"></script>')).toBeNull();
+  });
+});
 
 describe('learning events (learner side)', () => {
   it('counts only continuous playback; skipping ahead and re-watching add nothing', () => {
@@ -78,6 +86,8 @@ describe('learning events (learner side)', () => {
     expect(timelineText(item('activity.result_ready', { status: 'passed', score: 8, maxScore: 10 }))).toBe('「小考」評分：通過（8／10 分）');
     expect(timelineText(item('activity.retry_started', { attemptNo: 2 }))).toBe('重新作答「小考」（第 2 次）');
     expect(timelineText(item('course.enrolled', { method: 'bulk_import' }, null))).toBe('加入課程（批次匯入）');
+    expect(timelineText(item('completion.approved', { approverRoles: 'instructor,org_admin' }, null))).toBe('完成條件已由講師、組織管理員核可');
+    expect(timelineText(item('certificate.issued', {}, null))).toBe('📜 取得結業證書');
     expect(timelineText(item('something.new'))).toBe('something.new');
     expect([0, 0.4, 59.9, 120, 125].map(formatMinutes)).toEqual(['0 分鐘', '不到 1 分鐘', '59 分鐘', '2 小時', '2 小時 5 分鐘']);
   });

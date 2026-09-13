@@ -1,6 +1,6 @@
 /** 學習 Runtime、作答與完成判定（SA §7.3、SEQ-03、UC-LRN-*；SD §6.2.3、§6.9） */
 
-import type { BlockingReason, RuleTraceEntry, Tri } from './completion.js';
+import type { ApproverRole, BlockingReason, RuleTraceEntry, Tri } from './completion.js';
 import type { ActivityType, LessonBlock, NavigationMode } from './course.js';
 import type { EnrollmentStatus } from './enrollment.js';
 
@@ -154,6 +154,18 @@ export interface LearnerOutlineDto {
 /** GET /enrollments/{id}/progress：課程人員檢視單一學員（大綱＋學員資料） */
 export interface LearnerProgressDto extends LearnerOutlineDto {
   learner: { id: string; displayName: string; email: string };
+  /** 人工核可（SD §6.14）：完成條件要求的核可者角色與已有的核可 */
+  approval: {
+    required: ApproverRole[];
+    given: { approverRole: string; approverName: string; approvedAt: string; note: string | null }[];
+  };
+}
+
+/** POST /enrollments/{id}/completion-approvals */
+export interface CompletionApprovalDto {
+  approvedRoles: ApproverRole[];
+  /** 這次核可讓選課轉為已完成（會排入發證） */
+  completionChanged: boolean;
 }
 
 // ---- 學習事件（SA §10、SD §6.12） ------------------------------------------------------
