@@ -71,7 +71,8 @@ export const DraftPatch = z
 export type DraftPatchT = z.infer<typeof DraftPatch>;
 
 export const CreateCourse = z.strictObject({
-  code: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/, 'invalid_code'),
+  /** 選填：留空時由伺服器依組織自動編號（C-0001 起，SD §6.5） */
+  code: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/, 'invalid_code').optional(),
   title: Title,
   description: z.string().max(5000).optional(),
 });
@@ -91,6 +92,8 @@ export const AssignStaff = z.strictObject({
 });
 
 export const CoursePaging = z.object({
+  /** 只列某組織的課程（仍受 course.read 範圍限制；供成員頁的課程選單使用） */
+  organizationId: Id.optional(),
   cursor: z.string().max(400).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });

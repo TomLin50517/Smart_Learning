@@ -2861,3 +2861,4 @@ Browser (X-Request-Id) → Nginx → API (correlation_id)
 | v1.9 | 2026-09-12 | 平台設定實作：設定鍵以白名單目錄管理（SD §8.11）；§22 #2 `upload.max_size`、#12 `derived.min_threshold` 已可設定，於對應 Phase 起生效 | System Analyst |
 | v1.10 | 2026-09-12 | 規格缺口補齊：UC-ORG-005 個人資料與變更密碼實作為本人端點（不以 `self.profile.*` 把關，SD §8.12）；新增切換組織；ADR-030 的復原缺口由 SD ADR-033 補上；§11.3.1 `user_org_roles` 唯一約束納入 organization_id（修正多組織學員） | System Analyst |
 | v1.11 | 2026-09-13 | Phase 1-1 課程與版本編輯實作：UC-CRS-012 以 email 指派且對象須為組織成員；同一課程同時至多一個編輯中版本；`PATCH /courses/{id}` 僅封存（SD §6.5）。§6.3 角色表為節錄，instructor 實際另有 course.read／course.version.read／publish 等（以 migration 0012 為準） | System Analyst |
+| v1.12 | 2026-09-13 | 成員管理與管理員保護：UC-ORG-003 新增成員時可直接指定講師／課程管理員與課程（不必先為學員）；成員清單可依角色篩選、依姓名／email 搜尋，課程角色顯示課程代碼與名稱；UC-ORG-004 不能移除自己的組織管理員角色、組織不得失去最後一位啟用中的管理員（含並行情境）；UC-CRS-001 課程代碼改為選填並依組織自動編號（SD §6.5、§8.9） | System Analyst |

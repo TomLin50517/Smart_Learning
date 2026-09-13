@@ -28,6 +28,14 @@ describe('error messages', () => {
     });
   });
 
+  it('fills {placeholders} from details.params (e.g. which course already uses a code)', () => {
+    const e = new ApiError(400, 'VALIDATION_FAILED', 'x', null, [
+      { field: 'code', issue: 'code_in_use', params: { title: '程式設計入門' } },
+      { field: 'roles', issue: 'cannot_remove_own_admin' },
+    ]);
+    expect(describeError(e).details).toEqual(['代碼：已被課程「程式設計入門」使用', '角色：不能取消自己的組織管理員角色，請由其他組織管理員處理']);
+  });
+
   it('never surfaces raw exception text for unknown errors', () => {
     expect(describeError(new Error('SELECT * FROM users failed')).message).toBe(ERROR_MESSAGES.INTERNAL_ERROR);
   });

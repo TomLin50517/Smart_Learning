@@ -48,17 +48,25 @@ interface CourseRow {
   wv_id: string | null;
   wv_no: number | null;
   wv_status: CourseVersionStatus | null;
+  staff: CourseDto['staff'];
 }
 
+/** 課程人員只列啟用中的帳號：已停用的講師不能上課，列出來會讓人以為已有講師 */
 const COURSE_SELECT = `
   SELECT c.id, c.organization_id, c.code, c.title, c.description, c.status, c.created_at,
-         pv.id AS pv_id, pv.version_no AS pv_no, wv.id AS wv_id, wv.version_no AS wv_no, wv.status AS wv_status
+         pv.id AS pv_id, pv.version_no AS pv_no, wv.id AS wv_id, wv.version_no AS wv_no, wv.status AS wv_status, st.staff
     FROM courses c
     LEFT JOIN course_versions pv ON pv.course_id = c.id AND pv.status = 'published'
     LEFT JOIN LATERAL (
       SELECT id, version_no, status FROM course_versions
        WHERE course_id = c.id AND status IN ('draft', 'review') ORDER BY version_no DESC LIMIT 1
-    ) wv ON true`;
+    ) wv ON true
+    LEFT JOIN LATERAL (
+      SELECT COALESCE(json_agg(json_build_object('userId', u.id, 'displayName', u.display_name, 'role', cs.staff_role)
+                               ORDER BY (cs.staff_role = 'instructor') DESC, u.display_name), '[]'::json) AS staff
+        FROM course_staff cs JOIN users u ON u.id = cs.user_id
+       WHERE cs.course_id = c.id AND cs.staff_role IN ('instructor', 'course_admin') AND u.status = 'active'
+    ) st ON true`;
 
 function toCourse(r: CourseRow): CourseDto {
   return {
@@ -71,10 +79,26 @@ function toCourse(r: CourseRow): CourseDto {
     createdAt: r.created_at.toISOString(),
     publishedVersion: r.pv_id ? { id: r.pv_id, versionNo: r.pv_no! } : null,
     workingVersion: r.wv_id ? { id: r.wv_id, versionNo: r.wv_no!, status: r.wv_status! } : null,
+    staff: r.staff,
   };
 }
 
 const Cursor = z.tuple([z.string().max(64), z.guid()]);
+
+/**
+ * 依序執行查詢。getVersion 也會在交易內以同一條連線呼叫（clone）——同一條連線不可並行送出查詢
+ * （pg@9 將移除自動排隊）；在連線池上依序讀取只多幾毫秒。
+ */
+async function inOrder<T extends unknown[]>(...jobs: { [K in keyof T]: () => Promise<T[K]> }): Promise<T> {
+  const out: unknown[] = [];
+  for (const job of jobs) out.push(await job());
+  return out as T;
+}
+
+/** 自動編號的課程代碼：C-0001、C-0002…（超過 9999 時自然延長位數） */
+export function autoCourseCode(n: number): string {
+  return `C-${String(n).padStart(4, '0')}`;
+}
 
 /**
  * 課程與課程版本（SA UC-CRS-001~003/009/010/012、SD §6.5）。
@@ -104,7 +128,10 @@ export class CourseService {
 
   // ------------------------------------------------------------------ courses
 
-  async list(s: GrantScopes, q: { cursor?: string | undefined; limit: number }): Promise<{ data: CourseDto[]; nextCursor: string | null }> {
+  async list(
+    s: GrantScopes,
+    q: { organizationId?: string | undefined; cursor?: string | undefined; limit: number },
+  ): Promise<{ data: CourseDto[]; nextCursor: string | null }> {
     if (!s.all && !s.organizations.length && !s.courses.length) return { data: [], nextCursor: null };
     let code: string | null = null;
     let id: string | null = null;
@@ -119,9 +146,10 @@ export class CourseService {
       `${COURSE_SELECT}
         WHERE ($1::bool OR c.organization_id = ANY($2::uuid[]) OR c.id = ANY($3::uuid[]))
           AND ($4::text IS NULL OR (c.code, c.id) > ($4::text, $5::uuid))
+          AND ($7::uuid IS NULL OR c.organization_id = $7::uuid)
         ORDER BY c.code, c.id
         LIMIT $6`,
-      [s.all, s.organizations, s.courses, code, id, q.limit + 1],
+      [s.all, s.organizations, s.courses, code, id, q.limit + 1, q.organizationId ?? null],
     );
     const page = r.rows.slice(0, q.limit);
     const last = page[page.length - 1];
@@ -131,14 +159,39 @@ export class CourseService {
     };
   }
 
-  async create(organizationId: string, input: { code: string; title: string; description?: string | undefined }, actorId: string): Promise<CourseDto> {
-    const r = await this.db.query<{ id: string }>(
-      `INSERT INTO courses (organization_id, code, title, description, created_by) VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (organization_id, code) DO NOTHING RETURNING id`,
-      [organizationId, input.code, input.title, input.description ?? null, actorId],
-    );
-    if (!r.rows[0]) throw invalid('code', 'already_exists');
-    return this.get(r.rows[0].id);
+  /**
+   * 建立課程。代碼留空時依組織自動編號（C-0001 起，取現有 C-#### 的最大值 + 1）；
+   * 手動代碼重複時回 code_in_use 並帶出使用中的課程名稱。
+   * 兩條路徑都先鎖定組織列，同一組織的建立排隊進行——並行建立也不會編出相同號碼。
+   */
+  async create(
+    organizationId: string,
+    input: { code?: string | undefined; title: string; description?: string | undefined },
+    actorId: string,
+  ): Promise<CourseDto> {
+    const id = await this.tx(async (c) => {
+      await c.query(`SELECT 1 FROM organizations WHERE id = $1 FOR NO KEY UPDATE`, [organizationId]);
+      let code = input.code;
+      if (code === undefined) {
+        const n = await c.query<{ n: number }>(
+          `SELECT COALESCE(MAX(substring(code FROM '^C-([0-9]{1,9})$')::int), 0) + 1 AS n
+             FROM courses WHERE organization_id = $1 AND code ~ '^C-[0-9]{1,9}$'`,
+          [organizationId],
+        );
+        code = autoCourseCode(n.rows[0]!.n);
+      } else {
+        const taken = await c.query<{ title: string }>(`SELECT title FROM courses WHERE organization_id = $1 AND code = $2`, [organizationId, code]);
+        if (taken.rows[0]) {
+          throw new DomainError('VALIDATION_FAILED', 'code: code_in_use', [{ field: 'code', issue: 'code_in_use', params: { title: taken.rows[0].title } }]);
+        }
+      }
+      const r = await c.query<{ id: string }>(
+        `INSERT INTO courses (organization_id, code, title, description, created_by) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+        [organizationId, code, input.title, input.description ?? null, actorId],
+      );
+      return r.rows[0]!.id;
+    });
+    return this.get(id);
   }
 
   async get(courseId: string): Promise<CourseDetailDto> {
@@ -184,37 +237,43 @@ export class CourseService {
     const row = v.rows[0];
     if (!row) throw new DomainError('NOT_FOUND');
 
-    const [mods, lessons, acts, rules, policy, bindings] = await Promise.all([
-      q.query<{ id: string; title: string; description: string | null; is_required: boolean }>(
-        `SELECT id, title, description, is_required FROM modules WHERE course_version_id = $1 ORDER BY sort_order`,
-        [id],
-      ),
-      q.query<{ id: string; module_id: string; title: string; is_required: boolean; content_blocks: LessonBlock[] }>(
-        `SELECT id, module_id, title, is_required, content_blocks FROM lessons WHERE course_version_id = $1 ORDER BY sort_order`,
-        [id],
-      ),
-      q.query<ActivityRow>(
+    const [mods, lessons, acts, rules, policy, bindings] = await inOrder(
+      () =>
+        q.query<{ id: string; title: string; description: string | null; is_required: boolean }>(
+          `SELECT id, title, description, is_required FROM modules WHERE course_version_id = $1 ORDER BY sort_order`,
+          [id],
+        ),
+      () =>
+        q.query<{ id: string; module_id: string; title: string; is_required: boolean; content_blocks: LessonBlock[] }>(
+          `SELECT id, module_id, title, is_required, content_blocks FROM lessons WHERE course_version_id = $1 ORDER BY sort_order`,
+          [id],
+        ),
+      () =>
+        q.query<ActivityRow>(
         `SELECT a.id, a.lesson_id, a.title, a.activity_type, a.interactive_definition_id, a.config, a.answer_key,
                 a.is_required, a.max_attempts, a.weight, a.max_score, p.prerequisite_expression
            FROM activities a LEFT JOIN activity_prerequisites p ON p.activity_id = a.id
           WHERE a.course_version_id = $1 ORDER BY a.sort_order`,
-        [id],
-      ),
-      q.query<{ grammar_version: string; rule_json: Record<string, unknown> }>(
-        `SELECT grammar_version, rule_json FROM completion_rule_sets WHERE course_version_id = $1`,
-        [id],
-      ),
-      q.query<Record<string, unknown>>(
-        `SELECT response_mode, max_directness_level, allow_answer_reveal_after_attempts, preferred_language, citation_required,
-                allowed_knowledge_scopes, tone_profile, follow_up_questions, prohibited_topics, extra_instructions
-           FROM coach_policies WHERE course_version_id = $1`,
-        [id],
-      ),
-      q.query<{ document_version_id: string; binding_type: string; priority: number }>(
-        `SELECT document_version_id, binding_type, priority FROM knowledge_bindings WHERE course_version_id = $1 ORDER BY priority, document_version_id`,
-        [id],
-      ),
-    ]);
+          [id],
+        ),
+      () =>
+        q.query<{ grammar_version: string; rule_json: Record<string, unknown> }>(
+          `SELECT grammar_version, rule_json FROM completion_rule_sets WHERE course_version_id = $1`,
+          [id],
+        ),
+      () =>
+        q.query<Record<string, unknown>>(
+          `SELECT response_mode, max_directness_level, allow_answer_reveal_after_attempts, preferred_language, citation_required,
+                  allowed_knowledge_scopes, tone_profile, follow_up_questions, prohibited_topics, extra_instructions
+             FROM coach_policies WHERE course_version_id = $1`,
+          [id],
+        ),
+      () =>
+        q.query<{ document_version_id: string; binding_type: string; priority: number }>(
+          `SELECT document_version_id, binding_type, priority FROM knowledge_bindings WHERE course_version_id = $1 ORDER BY priority, document_version_id`,
+          [id],
+        ),
+    );
 
     const actsByLesson = groupBy(acts.rows, (a) => a.lesson_id);
     const lessonsByModule = groupBy(lessons.rows, (l) => l.module_id);

@@ -1,5 +1,5 @@
 import { Body, Controller, Get, HttpCode, Param, Patch, Post, Query, Req } from '@nestjs/common';
-import { COURSE_ROLES, type OrgMemberDto, type OrganizationDto } from '@iac/contracts';
+import { COURSE_ROLES, MEMBER_SEARCH_MAX, type OrgMemberDto, type OrgRole, type OrganizationDto } from '@iac/contracts';
 import type { FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { organizationsGranted } from '../../../common/authz.js';
@@ -34,22 +34,27 @@ const UpdateOrg = z
   })
   .refine((v) => v.name !== undefined || v.branding !== undefined, 'nothing_to_update');
 
-/** 直接新增成員時只能給組織層級角色；課程角色經由角色指派端點設定 */
-const AddMember = Person.extend({ role: z.enum(['learner', 'org_admin', 'auditor']).default('learner') });
+const Role = z.enum(['org_admin', 'course_admin', 'instructor', 'learner', 'auditor']);
+/** 課程角色必須指定 courseId，其他角色不可指定（issue 代碼，見 validation.ts） */
+const courseIdMatchesRole = (r: { role: OrgRole; courseId?: string | undefined }) => COURSE_ROLES.includes(r.role) === (r.courseId !== undefined);
+const COURSE_ID_MISMATCH = { message: 'course_id_mismatch', path: ['courseId'] };
 
-const RoleSpecSchema = z
-  .strictObject({
-    role: z.enum(['org_admin', 'course_admin', 'instructor', 'learner', 'auditor']),
-    courseId: z.guid().optional(),
-  })
-  .refine((r) => COURSE_ROLES.includes(r.role) === (r.courseId !== undefined), {
-    // 課程角色必須指定 courseId，其他角色不可指定（issue 代碼，見 validation.ts）
-    message: 'course_id_mismatch',
-    path: ['courseId'],
-  });
+/** 新增成員：講師／課程管理員可直接指定課程，不必先掛成學員 */
+const AddMember = Person.extend({ role: Role.default('learner'), courseId: z.guid().optional() }).refine(courseIdMatchesRole, COURSE_ID_MISMATCH);
+
+const RoleSpecSchema = z.strictObject({ role: Role, courseId: z.guid().optional() }).refine(courseIdMatchesRole, COURSE_ID_MISMATCH);
 const SetRoles = z.strictObject({ roles: z.array(RoleSpecSchema).max(50) });
 
 const Paging = z.object({ cursor: z.string().max(400).optional(), limit: z.coerce.number().int().min(1).max(100).default(20) });
+const MemberQuery = Paging.extend({
+  role: Role.optional(),
+  q: z
+    .string()
+    .trim()
+    .max(MEMBER_SEARCH_MAX)
+    .optional()
+    .transform((v) => v || undefined),
+});
 
 @Controller('api/organizations')
 export class OrganizationController {
@@ -120,12 +125,11 @@ export class OrganizationController {
     return r.organization;
   }
 
-  /** openapi: listOrganizationUsers */
+  /** openapi: listOrganizationUsers——可依角色篩選、依姓名／email 搜尋 */
   @Get(':id/users')
   @RequirePermission('org.user.read', { scope: 'organization', param: 'id' })
   async members(@Param('id') id: string, @Query() query: unknown): Promise<{ data: OrgMemberDto[]; meta: { next_cursor: string | null } }> {
-    const { cursor, limit } = parseInput(Paging, query);
-    const r = await this.orgs.listMembers(id, cursor, limit);
+    const r = await this.orgs.listMembers(id, parseInput(MemberQuery, query));
     return { data: r.data, meta: { next_cursor: r.nextCursor } };
   }
 
@@ -138,7 +142,10 @@ export class OrganizationController {
   async addMember(@Param('id') id: string, @Body() body: unknown, @CurrentUser() actor: AuthUser, @Req() req: FastifyRequest) {
     const input = parseInput(AddMember, body);
     const r = await this.orgs.addMember(id, input, actor.id);
-    req.ctx.audit = { resourceId: r.userId, after: { email: input.email, role: input.role, invited: r.invited, emailSent: r.emailSent } };
+    req.ctx.audit = {
+      resourceId: r.userId,
+      after: { email: input.email, role: input.role, ...(input.courseId && { courseId: input.courseId }), invited: r.invited, emailSent: r.emailSent },
+    };
     return r;
   }
 
@@ -164,7 +171,7 @@ export class OrganizationController {
     return r;
   }
 
-  /** openapi: assignUserRoles——整組取代；變更前後寫入稽核 */
+  /** openapi: assignUserRoles——整組取代；變更前後寫入稽核；回應的角色附課程代碼與名稱 */
   @Patch(':id/users/:userId/roles')
   @RequirePermission('org.role.assign', { scope: 'organization', param: 'id' })
   @RequireCapability({ capability: 'configurationWriteAllowed' })
@@ -179,6 +186,6 @@ export class OrganizationController {
     const { roles } = parseInput(SetRoles, body);
     const r = await this.orgs.setRoles(id, parseInput(z.guid(), userId), roles, actor.id);
     req.ctx.audit = { resourceId: userId, before: { roles: r.before }, after: { roles: r.after } };
-    return { roles: r.after };
+    return { roles: r.roles };
   }
 }

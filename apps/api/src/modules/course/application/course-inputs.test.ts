@@ -62,6 +62,11 @@ describe('DraftPatch / CreateCourse', () => {
     expect(DraftPatch.safeParse({ title: 'v2' }).success).toBe(true);
   });
 
+  it('the course code is optional (blank → numbered by the server)', () => {
+    expect(CreateCourse.safeParse({ title: 'T' }).success).toBe(true);
+    expect(CreateCourse.safeParse({ code: '', title: 'T' }).success).toBe(false);
+  });
+
   it('course codes: letters, digits, dash and underscore', () => {
     expect(CreateCourse.safeParse({ code: 'CA-101_x', title: 'T' }).success).toBe(true);
     expect(CreateCourse.safeParse({ code: '-bad', title: 'T' }).success).toBe(false);

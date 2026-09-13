@@ -1,4 +1,4 @@
-import type { ErrorCode } from '@iac/contracts';
+import type { ErrorCode, ErrorDetail } from '@iac/contracts';
 
 /**
  * 業務錯誤。由 AppExceptionFilter 轉為 ARCH §29 的錯誤格式，
@@ -8,7 +8,7 @@ export class DomainError extends Error {
   constructor(
     readonly code: ErrorCode,
     message?: string,
-    readonly details?: { field?: string; issue: string }[],
+    readonly details?: ErrorDetail[],
     /** RATE_LIMITED 時帶出 Retry-After（秒） */
     readonly options: { retryAfterSec?: number } = {},
   ) {

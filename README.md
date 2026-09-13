@@ -28,7 +28,7 @@ packages/
   domain/     純領域規則，無 I/O（license capability…）
 migrations/   0001–0016 SQL
 tools/        migrate.ts、gen-permissions.ts、create-admin.ts、license-*（供應方專用）
-tests/        contract/（INV-T4）、e2e/（testcontainers + 行程內 SMTP）、db/（67 項 DB 不變條件）
+tests/        contract/（INV-T4）、e2e/（testcontainers + 行程內 SMTP）、db/（71 項 DB 不變條件）
 infra/        Dockerfile（api/worker）、Dockerfile.web（nginx + SPA）、docker-compose、nginx
 ```
 
@@ -50,7 +50,7 @@ npm run test:db           # migration + 67 項 DB 不變條件（需 Docker）
 
 ```bash
 cp .env.example .env      # 填入密碼，並加上 PG_SUPERUSER_PASSWORD
-docker compose -f infra/compose/docker-compose.yml up --build
+docker compose --env-file .env -f infra/compose/docker-compose.yml up --build   # 在 repo 根目錄執行
 ```
 
 網頁與 API 皆經 nginx：`http://127.0.0.1:8080/`（API 在 `/api/`）；PostgreSQL 綁 `127.0.0.1:55432`。
