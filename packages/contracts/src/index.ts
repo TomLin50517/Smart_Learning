@@ -6,4 +6,5 @@ export * from './audit-actions.js';
 export * from './audit.js';
 export * from './settings.js';
 export * from './course.js';
+export * from './completion.js';
 export * from './permissions.generated.js';
