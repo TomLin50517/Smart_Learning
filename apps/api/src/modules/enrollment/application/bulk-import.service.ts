@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  COHORT_NAME_MAX,
   COURSE_ROLES,
+  IMPORT_MAX_ROWS,
+  MEMBER_NO_MAX,
+  type CohortDto,
   type ImportAction,
   type ImportReportDto,
   type ImportRowResult,
@@ -21,6 +25,7 @@ import { EnrollmentService } from './enrollment.service.js';
 
 const ROLES: readonly OrgRole[] = ['learner', 'instructor', 'course_admin', 'org_admin', 'auditor'];
 const EmailFormat = z.email().max(254);
+const rejected = (issue: string) => new DomainError('VALIDATION_FAILED', issue, [{ issue }]);
 
 interface CourseRef {
   id: string;
@@ -35,6 +40,8 @@ interface Item {
   displayName: string | null;
   role: string;
   course: string | null;
+  memberNo: string | null;
+  cohort: string | null;
 }
 
 export interface ImportOptions {
@@ -69,27 +76,68 @@ export class BulkImportService {
   ) {}
 
   /** 成員匯入：role 預設學員；courseCode 選填 */
-  importMembers(orgId: string, rows: MemberImportRow[], o: ImportOptions & { canEnroll: boolean; canAssignCourseRole: boolean }): Promise<ImportReportDto> {
+  importMembers(
+    orgId: string,
+    rows: MemberImportRow[],
+    o: ImportOptions & { canEnroll: boolean; canAssignCourseRole: boolean; createMissingCohorts: boolean },
+  ): Promise<ImportReportDto> {
     const items = rows.map((r, i) => ({
       line: i + 1,
       email: r.email.trim().toLowerCase(),
       displayName: r.displayName?.trim() || null,
       role: (r.role?.trim() || 'learner').toLowerCase(),
       course: r.courseCode?.trim() || null,
+      memberNo: r.memberNo?.trim() || null,
+      cohort: r.cohort?.trim() || null,
     }));
     return this.run(orgId, items, { ...o, allowCreate: true, courseBy: 'code' });
   }
 
   /** 課程學員匯入：一律為學員選這門課；建立新帳號需有新增成員的權限 */
   importLearners(courseId: string, orgId: string, rows: LearnerImportRow[], o: ImportOptions & { canCreateAccounts: boolean }): Promise<ImportReportDto> {
-    const items = rows.map((r, i) => ({ line: i + 1, email: r.email.trim().toLowerCase(), displayName: r.displayName?.trim() || null, role: 'learner', course: courseId }));
-    return this.run(orgId, items, { ...o, allowCreate: o.canCreateAccounts, canEnroll: true, canAssignCourseRole: false, courseBy: 'id' });
+    const items = rows.map((r, i) => ({
+      line: i + 1,
+      email: r.email.trim().toLowerCase(),
+      displayName: r.displayName?.trim() || null,
+      role: 'learner',
+      course: courseId,
+      memberNo: null,
+      cohort: null,
+    }));
+    return this.run(orgId, items, { ...o, allowCreate: o.canCreateAccounts, canEnroll: true, canAssignCourseRole: false, createMissingCohorts: false, courseBy: 'id' });
+  }
+
+  /** 課程所屬組織的使用中班級（供整班加入；課程人員看得到，不需組織的成員讀取權限） */
+  async cohortOptions(courseId: string): Promise<CohortDto[]> {
+    const r = await this.db.query<{ id: string; name: string; term: string | null; created_at: Date; member_count: number }>(
+      `SELECT c.id, c.name, c.term, c.created_at, (SELECT count(*)::int FROM cohort_members cm WHERE cm.cohort_id = c.id) AS member_count
+         FROM cohorts c JOIN courses co ON co.organization_id = c.organization_id
+        WHERE co.id = $1 AND c.status = 'active' ORDER BY c.name LIMIT 1000`,
+      [courseId],
+    );
+    return r.rows.map((x) => ({ id: x.id, name: x.name, term: x.term, status: 'active', memberCount: x.member_count, createdAt: x.created_at.toISOString(), archivedAt: null }));
+  }
+
+  /**
+   * 整班加入（SD §6.15）：班級目前的成員全部選這門課，走課程學員匯入同一段程式（預覽、逐列結果、授權上限、稽核）。
+   * 不建立帳號——班級成員都已是本組織成員。
+   */
+  async enrollCohort(courseId: string, orgId: string, cohortId: string, o: ImportOptions): Promise<ImportReportDto> {
+    const co = await this.db.query(`SELECT 1 FROM cohorts WHERE id = $1 AND organization_id = $2 AND status = 'active'`, [cohortId, orgId]);
+    if (!co.rowCount) throw new DomainError('VALIDATION_FAILED', 'cohort_not_found', [{ field: 'cohortId', issue: 'cohort_not_found' }]);
+    const m = await this.db.query<{ email: string }>(
+      `SELECT u.email::text AS email FROM cohort_members cm JOIN users u ON u.id = cm.user_id WHERE cm.cohort_id = $1 ORDER BY u.email`,
+      [cohortId],
+    );
+    if (!m.rowCount) throw rejected('cohort_empty');
+    if (m.rows.length > IMPORT_MAX_ROWS) throw rejected('cohort_too_large');
+    return this.importLearners(courseId, orgId, m.rows.map((x) => ({ email: x.email })), { ...o, canCreateAccounts: false });
   }
 
   private async run(
     orgId: string,
     items: Item[],
-    o: ImportOptions & { allowCreate: boolean; canEnroll: boolean; canAssignCourseRole: boolean; courseBy: 'code' | 'id' },
+    o: ImportOptions & { allowCreate: boolean; canEnroll: boolean; canAssignCourseRole: boolean; createMissingCohorts: boolean; courseBy: 'code' | 'id' },
   ): Promise<ImportReportDto> {
     const batchId = o.dryRun ? null : randomUUID();
     const audits: AuditRecord[] = [];
@@ -143,6 +191,8 @@ export class BulkImportService {
             if (!course.publishedVersionId) throw new RowError('course_not_published');
           }
           if (course && courseRole && !o.canAssignCourseRole) throw new RowError('permission_denied');
+          if (it.memberNo && it.memberNo.length > MEMBER_NO_MAX) throw new RowError('invalid_member_no');
+          if (it.cohort && it.cohort.length > COHORT_NAME_MAX) throw new RowError('invalid_cohort');
 
           await c.query('SAVEPOINT import_row');
           try {
@@ -156,6 +206,26 @@ export class BulkImportService {
               actions.push('member_added');
               audits.push(this.record(o, orgId, null, 'org.user.created', 'user', m.userId, { email: it.email, role, invited: m.created }, batchId));
               if (courseRole) audits.push(this.record(o, orgId, course!.id, 'org.role.assigned', 'user', m.userId, { roles: [spec] }, batchId));
+            }
+            // 學號與班級（SD §6.15）：既有成員也更新，不寄邀請
+            if (it.memberNo || it.cohort) {
+              const p = await this.membership.updateProfileTx(c, orgId, m.userId, {
+                ...(it.memberNo && { memberNo: it.memberNo }),
+                ...(it.cohort && { cohortName: it.cohort }),
+                createCohort: o.createMissingCohorts,
+                actorId: o.actorId,
+              });
+              if (p.memberNoChanged) actions.push('profile_updated');
+              if (p.cohortCreated && p.cohort) {
+                actions.push('cohort_created');
+                audits.push(this.record(o, orgId, null, 'org.cohort.created', 'cohort', p.cohort.id, { name: p.cohort.name }, batchId));
+              }
+              if (p.cohortJoined) actions.push('cohort_joined');
+              if (p.memberNoChanged || p.cohortJoined) {
+                audits.push(
+                  this.record(o, orgId, null, 'org.member.updated', 'user', m.userId, { ...(p.memberNoChanged && { memberNo: it.memberNo }), ...(p.cohortJoined && { cohortJoined: p.cohort?.name }) }, batchId),
+                );
+              }
             }
             if (course && courseRole && !m.added && (await this.membership.grantCourseRoleTx(c, orgId, m.userId, spec, o.actorId))) {
               actions.push('course_role_granted');
@@ -219,6 +289,9 @@ export class BulkImportService {
         membersAdded: count('member_added'),
         enrollments: count('enrolled'),
         courseRoles: count('course_role_granted'),
+        profilesUpdated: count('profile_updated'),
+        cohortJoins: count('cohort_joined'),
+        cohortsCreated: count('cohort_created'),
         invitationsSent,
       },
       license: { maxActiveLearners, activeLearnersAfter: activeAfter, exceededBy },

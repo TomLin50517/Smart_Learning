@@ -268,8 +268,8 @@ SELECT pg_temp.t('T58 4 monthly partitions per table', NULL,
      OR (SELECT count(*) FROM pg_inherits i JOIN pg_class c ON c.oid=i.inhrelid
           WHERE i.inhparent='audit_logs'::regclass AND c.relname ~ '_\d{4}_\d{2}$') <> 4
      THEN RAISE EXCEPTION 'PARTITIONS'; END IF; END $d$ $$, 'OK');
-SELECT pg_temp.t('T59 18 migrations recorded', NULL,
- $$DO $d$ BEGIN IF (SELECT count(*) FROM schema_migrations) <> 18 THEN RAISE EXCEPTION 'COUNT'; END IF; END $d$ $$, 'OK');
+SELECT pg_temp.t('T59 19 migrations recorded', NULL,
+ $$DO $d$ BEGIN IF (SELECT count(*) FROM schema_migrations) <> 19 THEN RAISE EXCEPTION 'COUNT'; END IF; END $d$ $$, 'OK');
 
 -- ============================================================ 0015 auth tables
 SELECT pg_temp.t('T60 app_coach cannot read password_reset_tokens', 'app_coach',
@@ -326,6 +326,31 @@ SELECT pg_temp.t('T73 app_api can disable a membership', 'app_api',
 SELECT pg_temp.t('T74 app_coach cannot write memberships', 'app_coach',
  $$INSERT INTO disabled_memberships (organization_id, user_id)
    VALUES ('11111111-0000-0000-0000-000000000002','aaaaaaaa-0000-0000-0000-000000000003')$$, '42501');
+
+-- ============================================================ 0019 cohorts & member numbers
+SELECT pg_temp.t('T75 member number unique within an organization', NULL,
+ $$INSERT INTO member_profiles (organization_id, user_id, member_no) VALUES
+   ('11111111-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','S001'),
+   ('11111111-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000003','S001')$$, '23505');
+SELECT pg_temp.t('T76 same member number allowed in different organizations', NULL,
+ $$INSERT INTO member_profiles (organization_id, user_id, member_no) VALUES
+   ('11111111-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000003','S001'),
+   ('11111111-0000-0000-0000-000000000002','aaaaaaaa-0000-0000-0000-000000000003','S001')$$, 'OK');
+SELECT pg_temp.t('T77 active cohort names unique per organization (case-insensitive)', NULL,
+ $$INSERT INTO cohorts (organization_id, name) VALUES
+   ('11111111-0000-0000-0000-000000000001','Class A'),
+   ('11111111-0000-0000-0000-000000000001','class a')$$, '23505');
+SELECT pg_temp.t('T78 an archived cohort may share a name with an active one', NULL,
+ $$INSERT INTO cohorts (organization_id, name, status, archived_at) VALUES
+   ('11111111-0000-0000-0000-000000000001','Class B','active',NULL),
+   ('11111111-0000-0000-0000-000000000001','class b','archived',now())$$, 'OK');
+SELECT pg_temp.t('T79 archived status must carry archived_at', NULL,
+ $$INSERT INTO cohorts (organization_id, name, status) VALUES ('11111111-0000-0000-0000-000000000001','Class C','archived')$$, '23514');
+SELECT pg_temp.t('T80 app_coach cannot write cohorts', 'app_coach',
+ $$INSERT INTO cohorts (organization_id, name) VALUES ('11111111-0000-0000-0000-000000000001','Coach')$$, '42501');
+SELECT pg_temp.t('T81 enrollments keep the cohort at enrollment time', NULL,
+ $$DO $d$ BEGIN IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+      WHERE table_name = 'enrollments' AND column_name = 'cohort_label') THEN RAISE EXCEPTION 'MISSING'; END IF; END $d$ $$, 'OK');
 
 -- ------------------------------------------------------------------ report
 \pset border 1

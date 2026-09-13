@@ -28,6 +28,24 @@ export interface OrgMembership {
   grantCourseRoleTx(tx: pg.PoolClient, orgId: string, userId: string, spec: RoleSpec, actorId: string): Promise<boolean>;
   /** 交易提交後寄出設定密碼邀請；回傳已交給郵件伺服器的數量 */
   inviteNew(orgId: string, userIds: readonly string[]): Promise<number>;
+  /**
+   * 更新成員資料（SD §6.15）：設定學號、加入班級（依名稱；createCohort 時不存在就建立）。不改角色、不寄邀請。
+   * 原因代碼：member_no_taken、cohort_not_found。
+   */
+  updateProfileTx(
+    tx: pg.PoolClient,
+    orgId: string,
+    userId: string,
+    input: { memberNo?: string | undefined; cohortName?: string | undefined; createCohort: boolean; actorId: string },
+  ): Promise<ProfileUpdateResult>;
+}
+
+export interface ProfileUpdateResult {
+  memberNoChanged: boolean;
+  /** 指定的班級（找到或建立的） */
+  cohort: { id: string; name: string } | null;
+  cohortJoined: boolean;
+  cohortCreated: boolean;
 }
 
 export const ORG_MEMBERSHIP = Symbol('ORG_MEMBERSHIP');

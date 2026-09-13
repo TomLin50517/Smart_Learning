@@ -45,4 +45,36 @@ export interface OrgMemberDto {
   /** 尚未設定密碼（邀請中） */
   pendingInvitation: boolean;
   roles: MemberRoleDto[];
+  /** 學號／員工編號（組織內，不隨學年改變） */
+  memberNo: string | null;
+  /** 目前（使用中）的班級 */
+  cohorts: CohortRefDto[];
+}
+
+// ---- 班級／梯次與學號（SD §6.15） -----------------------------------------------------
+
+export const COHORT_NAME_MAX = 100;
+export const COHORT_TERM_MAX = 50;
+export const MEMBER_NO_MAX = 64;
+
+export type CohortStatus = 'active' | 'archived';
+
+export interface CohortRefDto {
+  id: string;
+  name: string;
+}
+
+export interface CohortDto extends CohortRefDto {
+  /** 學年或期別標籤（選填），例：113 學年、第 5 期 */
+  term: string | null;
+  status: CohortStatus;
+  memberCount: number;
+  createdAt: string;
+  archivedAt: string | null;
+}
+
+/** PATCH /organizations/{id}/users/{userId}/profile 的結果 */
+export interface MemberProfileDto {
+  memberNo: string | null;
+  cohorts: CohortRefDto[];
 }

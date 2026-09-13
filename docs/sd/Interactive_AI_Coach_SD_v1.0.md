@@ -2329,6 +2329,21 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 前端 | 側欄「我的證書」；學習頁完成時連到證書；課程頁「證書」卡片（撤銷）；學員詳情頁「人工核可」卡片（核可者、時間、備註；按鈕顯示給課程人員，能否核可由伺服器判斷）；學習歷程顯示核可、發證、撤銷 |
 | 新版本提示 | 部署新版後，已開啟的頁面每 5 分鐘（及切回分頁時）比對 index.html 的主程式檔名，不同時顯示「系統已更新，請重新整理」 |
 
+## 6.15 班級（梯次）與學號（Phase 2-5，v1.25）
+
+實作：`migrations/0019_cohorts.sql`、`organization/application/cohort.service.ts`、`organization/api/cohort.controller.ts`、`enrollment/application/bulk-import.service.ts`、`apps/web/src/pages/{CohortsPage,OrgMembersPage,learners-panel}.tsx`。使用者回饋：老師要能辨認學員所屬的學年班級或期別；每年更新時不能重新邀請成員。
+
+| 項目 | 實作 |
+|---|---|
+| 資料 | `member_profiles`（組織 × 成員）：學號／員工編號，組織內唯一、不隨學年改變；同一人在不同組織可有不同編號。`cohorts`：班級名稱、學年／期別（選填）、使用中／封存——使用中的名稱在組織內唯一（不分大小寫），封存的可同名（每年都有「三年二班」）。`cohort_members`：一人可在多個班級，封存班級的紀錄保留。成員資格仍由 `user_org_roles` 決定——班級與學號只是成員資料，不影響帳號、角色與權限 |
+| 管理 | 班級：`GET/POST /organizations/{id}/cohorts`、`PATCH …/cohorts/{cohortId}`、`POST …/archive`、`…/restore`（恢復時已有同名使用中班級 → `already_exists`）。成員資料：`PATCH /organizations/{id}/users/{userId}/profile`（memberNo、cohortIds——整組取代「使用中」班級，封存班級的紀錄不動）。讀取 org.user.read、寫入 org.user.write＋configurationWriteAllowed；稽核 org.cohort.*、org.member.updated |
+| 每年更新 | 建立新學年的班級 → 把成員放進去（逐一編輯或批次匯入）→ 封存舊班級。**不需要重新邀請**：帳號、密碼、角色都不變 |
+| 批次匯入 | 成員匯入多兩欄「學號」「班級」（有標題列時接受中文欄名；無標題列時為第 5、6 欄）。**既有成員也會更新**學號並加入班級，不改角色、不寄邀請。班級依名稱比對使用中的班級；找不到時該列 `cohort_not_found`，或勾選「自動建立不存在的班級」（`createMissingCohorts`）由匯入建立。學號與他人重複 → `member_no_taken`。新動作 profile_updated／cohort_created／cohort_joined，摘要多三項計數 |
+| 整班加入 | `GET /courses/{id}/cohorts`（enrollment.assign——課程管理員不需組織的成員讀取權限）列出組織的使用中班級與人數；`POST /courses/{id}/enrollments/cohort`（dryRun＋cohortId）把班級目前的成員全部選課，**走課程學員匯入同一段程式**（預覽即實際、逐列結果、授權上限、批次稽核），不建立帳號。封存或他組織的班級 → `cohort_not_found` |
+| 選課時的班級 | `enrollments.cohort_label`：建立選課時寫入學員當下所在的使用中班級名稱（多個以「、」連接）。學員日後換班，舊課程的學員名單仍顯示當時的班級 |
+| 老師看到什麼 | 課程學員名單多「班級」欄（選課時的快照）與學號（在 email 旁）；可依班級篩選（`cohort`，選項來自 `meta.cohorts`）、依姓名／email／學號搜尋（`q`）。學員詳情頁標題顯示學號與班級 |
+| 前端 | 側欄「班級管理」（`/app/org/cohorts`：新增、修改、封存／恢復，人數連到成員管理的篩選）；成員管理多「學號／班級」欄、依班級篩選、「學號／班級」編輯；批次匯入範本多兩欄；課程學員卡的「整班加入」 |
+
 ---
 
 # 7. Frontend 設計
@@ -4321,3 +4336,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.22 | 2026-09-13 | Phase 2-3a 學習事件：新增 §6.12（學員端事件白名單與限流、伺服器端事件與交易、學習時間算法、以事件佐證的影片觀看比例、教師與學員兩條 timeline 路由、教師檢視學員進度、學員名單的進度與最後學習時間） | Software Designer |
 | v1.23 | 2026-09-13 | Phase 2-3b 學習畫面：新增 §6.13（HTML5 影片播放器與連續播放判定、heartbeat 與事件佇列的失敗處理、學員學習歷程頁、教師學員詳情頁、學員名單新欄位、編輯器影片欄位、影片 config 的 C5 檢查與網址限制） | Software Designer |
 | v1.24 | 2026-09-13 | Phase 2-4 人工核可與證書：新增 §6.14（核可人須擔任條件指定角色、完成後同交易排入發證、worker 發證與冪等、網頁版證書（伺服器端 PDF 延後）、查詢與撤銷、公開驗證、新版本提示） | Software Designer |
+| v1.25 | 2026-09-14 | Phase 2-5 班級與學號：新增 §6.15（member_profiles／cohorts／cohort_members、每年更新流程、批次匯入更新既有成員、整班加入、選課時的班級快照、老師的篩選與搜尋）；migration 0019 | Software Designer |

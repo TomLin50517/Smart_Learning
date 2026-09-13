@@ -142,8 +142,12 @@ export class EnrollmentService {
       [userId, course.organizationId, actorId],
     );
     const e = await c.query<{ id: string }>(
-      `INSERT INTO enrollments (organization_id, course_id, course_version_id, user_id, status, enroll_method, assigned_by, due_date)
-       VALUES ($1, $2, $3, $4, 'active', 'assign', $5, $6) RETURNING id`,
+      // cohort_label：選課當下所在的使用中班級（快照，SD §6.15）
+      `INSERT INTO enrollments (organization_id, course_id, course_version_id, user_id, status, enroll_method, assigned_by, due_date, cohort_label)
+       VALUES ($1, $2, $3, $4, 'active', 'assign', $5, $6,
+               (SELECT string_agg(co.name, '、' ORDER BY co.name) FROM cohort_members cm JOIN cohorts co ON co.id = cm.cohort_id
+                 WHERE cm.organization_id = $1 AND cm.user_id = $4 AND co.status = 'active'))
+       RETURNING id`,
       [course.organizationId, course.id, course.publishedVersionId, userId, actorId, dueDate],
     );
     const enrollmentId = e.rows[0]!.id;
@@ -155,8 +159,8 @@ export class EnrollmentService {
   /** 課程的學員名單（UC-LRN-011 的名單部分）；依 email keyset 分頁 */
   async learners(
     courseId: string,
-    q: { status?: EnrollmentStatus | undefined; cursor?: string | undefined; limit: number },
-  ): Promise<{ data: CourseLearnerDto[]; nextCursor: string | null }> {
+    q: { status?: EnrollmentStatus | undefined; cursor?: string | undefined; limit: number; cohort?: string | undefined; q?: string | undefined },
+  ): Promise<{ data: CourseLearnerDto[]; nextCursor: string | null; cohorts: string[] }> {
     let email: string | null = null;
     let id: string | null = null;
     if (q.cursor) {
@@ -175,22 +179,32 @@ export class EnrollmentService {
         required_completed: number | null;
         weighted_score: string | null;
         last_activity_at: Date | null;
+        member_no: string | null;
+        cohort_label: string | null;
       }
     >(
       `SELECT ${BASE_COLUMNS}, u.display_name, u.email::text AS email,
               EXISTS (SELECT 1 FROM disabled_memberships dm WHERE dm.organization_id = e.organization_id AND dm.user_id = e.user_id) AS member_disabled,
               ps.required_total, ps.required_completed, ps.weighted_score,
-              (SELECT max(le.occurred_at) FROM learning_events le WHERE le.enrollment_id = e.id) AS last_activity_at
+              (SELECT max(le.occurred_at) FROM learning_events le WHERE le.enrollment_id = e.id) AS last_activity_at,
+              mp.member_no, e.cohort_label
          FROM enrollments e
          JOIN course_versions cv ON cv.id = e.course_version_id
          JOIN users u ON u.id = e.user_id
          LEFT JOIN progress_snapshots ps ON ps.enrollment_id = e.id
+         LEFT JOIN member_profiles mp ON mp.organization_id = e.organization_id AND mp.user_id = e.user_id
         WHERE e.course_id = $1
           AND ($2::enrollment_status IS NULL OR e.status = $2::enrollment_status)
           AND ($3::text IS NULL OR (u.email::text, e.id) > ($3::text, $4::uuid))
+          AND ($6::text IS NULL OR e.cohort_label = $6::text)
+          AND ($7::text IS NULL OR u.email::text ILIKE $7 OR u.display_name ILIKE $7 OR mp.member_no ILIKE $7)
         ORDER BY u.email::text, e.id
         LIMIT $5`,
-      [courseId, q.status ?? null, email, id, q.limit + 1],
+      [courseId, q.status ?? null, email, id, q.limit + 1, q.cohort ?? null, q.q ? `%${q.q.replace(/[\\%_]/g, '\\$&')}%` : null],
+    );
+    const labels = await this.db.query<{ cohort_label: string }>(
+      `SELECT DISTINCT cohort_label FROM enrollments WHERE course_id = $1 AND cohort_label IS NOT NULL ORDER BY cohort_label LIMIT 200`,
+      [courseId],
     );
     const page = r.rows.slice(0, q.limit);
     const last = page[page.length - 1];
@@ -205,8 +219,11 @@ export class EnrollmentService {
             ? null
             : { requiredTotal: x.required_total, requiredCompleted: x.required_completed ?? 0, weightedScore: x.weighted_score === null ? null : Number(x.weighted_score) },
         lastActivityAt: x.last_activity_at ? x.last_activity_at.toISOString() : null,
+        memberNo: x.member_no,
+        cohortLabel: x.cohort_label,
       })),
       nextCursor: r.rows.length > q.limit && last ? Buffer.from(JSON.stringify([last.email, last.id])).toString('base64url') : null,
+      cohorts: labels.rows.map((x) => x.cohort_label),
     };
   }
 

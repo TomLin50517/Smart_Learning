@@ -24,6 +24,7 @@ export function navItems(me: MeResponse): NavItem[] {
   if (can(me, 'certificate.read_self')) items.push({ to: '/app/certificates', label: '我的證書' });
   if (me.activeOrganization && can(me, 'org.user.read')) {
     items.push({ to: '/app/org/users', label: '成員管理' });
+    items.push({ to: '/app/org/cohorts', label: '班級管理' });
   }
   if (can(me, 'course.read')) items.push({ to: '/app/courses', label: '課程管理' });
   if (can(me, 'platform.organization.create') || can(me, 'platform.organization.disable')) {

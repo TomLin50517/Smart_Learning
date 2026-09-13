@@ -11,6 +11,10 @@ export interface MemberImportRow {
   displayName?: string;
   role?: OrgRole | string;
   courseCode?: string;
+  /** 學號／員工編號：設定或更新（與他人重複時該列錯誤） */
+  memberNo?: string;
+  /** 班級名稱：加入該班級（已在其中則不變；不存在時依 createMissingCohorts 決定是否建立） */
+  cohort?: string;
 }
 
 /** 課程學員匯入的一列：尚非成員者需填姓名（且匯入者須有新增成員的權限） */
@@ -19,7 +23,7 @@ export interface LearnerImportRow {
   displayName?: string;
 }
 
-export type ImportAction = 'account_created' | 'member_added' | 'enrolled' | 'course_role_granted';
+export type ImportAction = 'account_created' | 'member_added' | 'enrolled' | 'course_role_granted' | 'profile_updated' | 'cohort_created' | 'cohort_joined';
 
 export interface ImportRowResult {
   /** 送出清單中的第幾列（1 起） */
@@ -47,6 +51,12 @@ export interface ImportReportDto {
     membersAdded: number;
     enrollments: number;
     courseRoles: number;
+    /** 設定或變更學號的人數 */
+    profilesUpdated: number;
+    /** 加入班級的人次 */
+    cohortJoins: number;
+    /** 自動建立的班級數 */
+    cohortsCreated: number;
     /** 已交給郵件伺服器的邀請信數（預覽為 0） */
     invitationsSent: number;
   };

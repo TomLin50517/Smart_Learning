@@ -1,8 +1,11 @@
 import {
   COURSE_ROLES,
+  MEMBER_NO_MAX,
   MEMBER_SEARCH_MAX,
   ORG_LEVEL_ROLES,
+  type CohortDto,
   type CourseDto,
+  type MemberProfileDto,
   type MemberRoleDto,
   type MembershipStatus,
   type OrganizationDto,
@@ -11,7 +14,7 @@ import {
   type RoleSpec,
 } from '@iac/contracts';
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { useParams } from 'react-router';
+import { Link, useParams, useSearchParams } from 'react-router';
 import { api } from '../api/client';
 import { can } from '../auth/permissions';
 import { useMe } from '../auth/session';
@@ -73,25 +76,30 @@ function useOrgCourses(orgId: string, enabled: boolean): { courses: CourseDto[] 
   return state;
 }
 
+type Editing = { id: string; what: 'roles' | 'profile' } | null;
+
 /** /app/platform/organizations/:orgId/users（指定組織）與 /app/org/users（目前組織）共用 */
 export function OrgMembersPage() {
   const me = useMe();
   const { orgId: routeOrgId } = useParams();
+  const [params] = useSearchParams();
   const orgId = routeOrgId ?? me.activeOrganization?.id ?? '';
   const allowed = can(me, 'org.user.read') && orgId !== '';
   const org = useApi<OrganizationDto>(allowed && can(me, 'org.read') ? `/api/organizations/${orgId}` : null);
+  const cohorts = useApi<CohortDto[]>(allowed ? `/api/organizations/${orgId}/cohorts` : null);
   useTitle(org.data ? `${org.data.name}・成員` : '成員管理');
 
   const [members, setMembers] = useState<OrgMemberDto[]>([]);
   const [next, setNext] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(null);
-  const [editing, setEditing] = useState<string | null>(null);
+  const [editing, setEditing] = useState<Editing>(null);
 
   const [text, setText] = useState('');
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState<OrgRole | ''>('');
   const [statusFilter, setStatusFilter] = useState<MembershipStatus | ''>('');
+  const [cohortFilter, setCohortFilter] = useState(params.get('cohort') ?? '');
   const [actionError, setActionError] = useState<unknown>(null);
   const seq = useRef(0);
 
@@ -111,6 +119,7 @@ export function OrgMembersPage() {
         if (search) q.set('q', search);
         if (roleFilter) q.set('role', roleFilter);
         if (statusFilter) q.set('status', statusFilter);
+        if (cohortFilter) q.set('cohortId', cohortFilter);
         const r = await api<MemberPage>('GET', `/api/organizations/${orgId}/users?${q.toString()}`);
         if (mine !== seq.current) return;
         setMembers((m) => (cursor ? [...m, ...r.data] : r.data));
@@ -121,7 +130,7 @@ export function OrgMembersPage() {
         if (mine === seq.current) setLoading(false);
       }
     },
-    [orgId, search, roleFilter, statusFilter],
+    [orgId, search, roleFilter, statusFilter, cohortFilter],
   );
 
   useEffect(() => {
@@ -135,7 +144,8 @@ export function OrgMembersPage() {
   const canWrite = canAdd && writable;
 
   if (!allowed) return <Forbidden />;
-  const filtered = search !== '' || roleFilter !== '' || statusFilter !== '';
+  const filtered = search !== '' || roleFilter !== '' || statusFilter !== '' || cohortFilter !== '';
+  const toggle = (id: string, what: 'roles' | 'profile') => setEditing(editing?.id === id && editing.what === what ? null : { id, what });
 
   /** 停用／恢復在本組織的成員資格；角色保留，其他組織不受影響 */
   async function changeStatus(m: OrgMemberDto) {
@@ -175,12 +185,21 @@ export function OrgMembersPage() {
         <div className="toolbar">
           <input
             type="search"
-            placeholder="搜尋姓名或 Email"
+            placeholder="搜尋姓名、Email 或學號"
             aria-label="搜尋成員"
             maxLength={MEMBER_SEARCH_MAX}
             value={text}
             onChange={(e) => setText(e.target.value)}
           />
+          <select aria-label="依班級篩選" value={cohortFilter} onChange={(e) => setCohortFilter(e.target.value)}>
+            <option value="">全部班級</option>
+            {cohortFilter && !cohorts.data?.some((c) => c.id === cohortFilter) && <option value={cohortFilter}>（已封存的班級）</option>}
+            {(cohorts.data ?? []).map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
           <select aria-label="依角色篩選" value={roleFilter} onChange={(e) => setRoleFilter(e.target.value as OrgRole | '')}>
             <option value="">全部角色</option>
             {FILTER_ROLES.map((r) => (
@@ -194,6 +213,7 @@ export function OrgMembersPage() {
             <option value="active">啟用中</option>
             <option value="disabled">已停用</option>
           </select>
+          {!routeOrgId && <Link to="/app/org/cohorts">班級管理</Link>}
         </div>
         <ErrorAlert error={error} />
         <ErrorAlert error={actionError} />
@@ -202,6 +222,7 @@ export function OrgMembersPage() {
             <thead>
               <tr>
                 <th>姓名</th>
+                <th>學號／班級</th>
                 <th>角色</th>
                 <th>狀態</th>
                 <th>最後登入</th>
@@ -215,13 +236,18 @@ export function OrgMembersPage() {
                   member={m}
                   orgId={orgId}
                   isSelf={m.id === me.user.id}
-                  editing={editing === m.id}
+                  editing={editing?.id === m.id ? editing.what : null}
                   canAssign={canAssign}
                   canWrite={canWrite}
+                  cohorts={cohorts.data ?? []}
                   onToggleStatus={() => void changeStatus(m)}
-                  onEdit={() => setEditing(editing === m.id ? null : m.id)}
-                  onSaved={(roles) => {
+                  onEdit={(what) => toggle(m.id, what)}
+                  onRolesSaved={(roles) => {
                     setMembers((list) => list.map((x) => (x.id === m.id ? { ...x, roles } : x)));
+                    setEditing(null);
+                  }}
+                  onProfileSaved={(p) => {
+                    setMembers((list) => list.map((x) => (x.id === m.id ? { ...x, memberNo: p.memberNo, cohorts: p.cohorts } : x)));
                     setEditing(null);
                   }}
                 />
@@ -245,12 +271,14 @@ function MemberRow(props: {
   member: OrgMemberDto;
   orgId: string;
   isSelf: boolean;
-  editing: boolean;
+  editing: 'roles' | 'profile' | null;
   canAssign: boolean;
   canWrite: boolean;
+  cohorts: CohortDto[];
   onToggleStatus(): void;
-  onEdit(): void;
-  onSaved(roles: MemberRoleDto[]): void;
+  onEdit(what: 'roles' | 'profile'): void;
+  onRolesSaved(roles: MemberRoleDto[]): void;
+  onProfileSaved(p: MemberProfileDto): void;
 }) {
   const { member: m } = props;
   const disabled = m.membershipStatus === 'disabled';
@@ -263,6 +291,11 @@ function MemberRow(props: {
             {props.isSelf && <span className="muted small">（你）</span>}
           </div>
           <div className="muted small">{m.email}</div>
+        </td>
+        <td>
+          {m.memberNo ? <div>{m.memberNo}</div> : null}
+          {m.cohorts.length ? <div className="muted small">{m.cohorts.map((c) => c.name).join('、')}</div> : null}
+          {!m.memberNo && !m.cohorts.length && <span className="muted">—</span>}
         </td>
         <td>
           {m.roles.length ? (
@@ -291,9 +324,14 @@ function MemberRow(props: {
         <td>{formatDateTime(m.lastLoginAt)}</td>
         <td className="actions">
           <div className="row-actions">
+            {props.canWrite && (
+              <button className="btn btn-small" onClick={() => props.onEdit('profile')} aria-expanded={props.editing === 'profile'}>
+                {props.editing === 'profile' ? '取消' : '學號／班級'}
+              </button>
+            )}
             {props.canAssign && (
-              <button className="btn btn-small" onClick={props.onEdit} aria-expanded={props.editing}>
-                {props.editing ? '取消' : '編輯角色'}
+              <button className="btn btn-small" onClick={() => props.onEdit('roles')} aria-expanded={props.editing === 'roles'}>
+                {props.editing === 'roles' ? '取消' : '編輯角色'}
               </button>
             )}
             {props.canWrite && !props.isSelf && (
@@ -304,14 +342,91 @@ function MemberRow(props: {
           </div>
         </td>
       </tr>
-      {props.editing && (
+      {props.editing === 'roles' && (
         <tr className="row-editor">
-          <td colSpan={5}>
-            <RoleEditor member={m} orgId={props.orgId} isSelf={props.isSelf} onSaved={props.onSaved} onCancel={props.onEdit} />
+          <td colSpan={6}>
+            <RoleEditor member={m} orgId={props.orgId} isSelf={props.isSelf} onSaved={props.onRolesSaved} onCancel={() => props.onEdit('roles')} />
+          </td>
+        </tr>
+      )}
+      {props.editing === 'profile' && (
+        <tr className="row-editor">
+          <td colSpan={6}>
+            <ProfileEditor member={m} orgId={props.orgId} cohorts={props.cohorts} onSaved={props.onProfileSaved} onCancel={() => props.onEdit('profile')} />
           </td>
         </tr>
       )}
     </>
+  );
+}
+
+/** 學號與目前班級（SD §6.15）：勾選的班級整組取代「使用中」的班級；封存班級的紀錄保留 */
+function ProfileEditor(props: { member: OrgMemberDto; orgId: string; cohorts: CohortDto[]; onSaved(p: MemberProfileDto): void; onCancel(): void }) {
+  const { member } = props;
+  const [memberNo, setMemberNo] = useState(member.memberNo ?? '');
+  const [selected, setSelected] = useState(() => new Set(member.cohorts.map((c) => c.id)));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+
+  function toggle(id: string) {
+    setSelected((s) => {
+      const n = new Set(s);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  }
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    try {
+      const p = await api<MemberProfileDto>('PATCH', `/api/organizations/${props.orgId}/users/${member.id}/profile`, {
+        memberNo: memberNo.trim() || null,
+        cohortIds: [...selected],
+      });
+      props.onSaved(p);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="editor">
+      <p>
+        <strong>{member.displayName}</strong> 的學號與班級：
+      </p>
+      <ErrorAlert error={error} />
+      <div className="form-grid">
+        <Field label="學號／員工編號" hint="組織內不可重複；不隨學年改變">
+          <input maxLength={MEMBER_NO_MAX} value={memberNo} onChange={(e) => setMemberNo(e.target.value)} />
+        </Field>
+      </div>
+      <p className="small">目前班級：</p>
+      {props.cohorts.length ? (
+        <div className="check-row">
+          {props.cohorts.map((c) => (
+            <label key={c.id} className="check">
+              <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggle(c.id)} disabled={busy} />
+              {c.name}
+            </label>
+          ))}
+        </div>
+      ) : (
+        <p className="muted small">尚未建立班級，請到「班級管理」建立。</p>
+      )}
+      <p className="muted small">換班級不會影響已選的課程——課程學員名單仍顯示選課時的班級。</p>
+      <div className="form-actions">
+        <button className="btn btn-primary" onClick={() => void save()} disabled={busy}>
+          {busy ? '儲存中…' : '儲存'}
+        </button>
+        <button className="btn btn-ghost" onClick={props.onCancel} disabled={busy}>
+          取消
+        </button>
+      </div>
+    </div>
   );
 }
 
