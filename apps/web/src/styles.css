@@ -199,6 +199,23 @@ fieldset {
 .role-list li + li {
   margin-top: 2px;
 }
+/* ---- 批次匯入 ------------------------------------------------------------ */
+.bulk-import textarea {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.86rem;
+}
+details.bulk {
+  margin: 10px 0 14px;
+}
+details.bulk > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.text-danger {
+  color: var(--danger);
+}
+
 /* ---- 學習畫面 ------------------------------------------------------------ */
 .player {
   display: grid;

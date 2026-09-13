@@ -2267,6 +2267,24 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 作答元件 | 閱讀：「我已讀完」。影片：尚無播放器，暫以「我已看完影片」送出 `watchedRatio: 1` 並說明——與 §6.9 相同的暫行限制，2-3 以學習事件佐證。選擇題：單選／複選，未作答題數確認。參數操作：滑桿（初值為下限）。排序：↑↓ 調整；起始順序以作答 id 為種子打亂（重新整理不變），且保證不等於編排順序（編排順序常就是答案） |
 | 結果 | 狀態、分數、答對題數；問題以中文說明並對應到「第 N 題」／參數名稱／項目名稱；元件自訂的問題代碼照原樣顯示。送出造成課程完成時顯示恭喜。成績與完成一律以伺服器回應為準 |
 
+## 6.11 批次匯入（Phase 2-1b，v1.21）
+
+實作：`apps/api/src/modules/enrollment/application/bulk-import.service.ts`、`organization.contracts.ts`（ORG_MEMBERSHIP）、`apps/web/src/csv.ts`、`pages/bulk-import.tsx`。使用者回饋：開學時一筆筆建帳號、加學員不切實際。
+
+| 項目 | 實作 |
+|---|---|
+| 兩個入口 | 成員管理頁 `POST /organizations/{id}/users/import`（org.user.write）：Email、姓名、角色（預設學員）、課程代碼（選填——學員＝選課；講師／課程管理員＝指派該課），一份檔案完成「建帳號＋分課」。課程頁 `POST /courses/{id}/enrollments/import`（enrollment.assign）：Email、姓名，一次加一整班。兩者都需 configurationWriteAllowed（可能建立帳號） |
+| 預覽即實際 | `dryRun: true` 以**同一段程式**完整執行、最後 ROLLBACK——預覽結果就是實際匯入會發生的事（除非期間有人並行變更）。每列以 SAVEPOINT 隔開，一列出錯不影響其他列；錯誤的列不處理，其餘照常 |
+| 逐列結果 | outcome ok／skipped／error；actions：account_created、member_added、enrolled、course_role_granted；原因：invalid_email、name_required、invalid_role、course_required、course_not_applicable、course_not_found、course_not_published、course_archived、member_disabled、user_not_active、not_in_organization、permission_denied、duplicate_row、already_member／already_enrolled／already_assigned。重複匯入同一份檔案是安全的（已完成的列會略過） |
+| 既有成員 | 不經由匯入變更既有角色（避免以檔案提升權限）；只新增課程指派或選課。成員資格停用、帳號停用者報錯 |
+| 權限 | 課程學員匯入建立新帳號須在該組織有 org.user.write，否則 `not_in_organization`——課程管理員能加既有成員入課，不能建帳號。成員匯入中課程相關的列另需 enrollment.assign／org.role.assign（`permission_denied`） |
+| 授權上限 | 在交易內以寫入後的實際數字計算進行中的學員（與 LicenseService.usage 同定義）；只有本批使人數增加且超過上限時才算超過。預覽回報 `license.exceededBy`；實際匯入整批 403 `LICENSE_LIMIT_EXCEEDED` |
+| 鎖序 | 鎖定組織列（與角色變更、停用成員排隊）與引用的課程列（與發布、單筆指派同鎖） |
+| 邀請與稽核 | 提交後才寄邀請（預覽不寄）、寫稽核：每位新成員 `org.user.created`、每筆選課 `enrollment.assigned`、每個課程指派 `org.role.assigned`，metadata 帶 `via: bulk_import` 與同一個 `batch_id` |
+| 上限 | 每次 500 列、同步處理；更大量改背景工作屬後續項目 |
+| 模組邊界 | 兩個端點在 MOD-ENROLL；成員處理經 MOD-ORG 新開放的 `ORG_MEMBERSHIP` 介面（交易內 ensureMember／grantCourseRole、提交後 inviteNew）；選課共用 `EnrollmentService.enrollInTx`（單筆指派也改用它） |
+| 前端 | 貼上（Excel 複製的 Tab 分隔亦可）或上傳 CSV（含 BOM、引號、CRLF）；標題列可任意順序並接受中文欄名與中文角色名，無標題列時依欄位順序；提供範本下載。先「預覽」表格逐列顯示結果，確認後才匯入；超過授權上限時停用確認 |
+
 ---
 
 # 7. Frontend 設計
@@ -4255,3 +4273,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.18 | 2026-09-13 | Phase 2-1 選課：新增 §6.8（管理者指派與鎖序、自動補學員角色、狀態轉換、enrollment 資源解析、我的課程、學員名單、模組邊界、前端） | Software Designer |
 | v1.19 | 2026-09-13 | Phase 2-2a 學習 Runtime 與完成判定：新增 §6.9（學員端點與歸屬、課程大綱端點、解鎖、Runtime 白名單、作答規則、送出流程、內建評分器語意、完成判定引擎、C5 納入原生選擇題、模組邊界） | Software Designer |
 | v1.20 | 2026-09-13 | Phase 2-2b 學習畫面：新增 §6.10（路由與回顧模式、版面、內容區塊的安全渲染、活動面板、各元件作答介面、排序題的打亂規則、結果呈現） | Software Designer |
+| v1.21 | 2026-09-13 | Phase 2-1b 批次匯入：新增 §6.11（成員與課程學員兩個入口、預覽即實際的 dry-run、逐列結果代碼、既有成員不改角色、建帳號權限、交易內授權上限、鎖序、提交後邀請與批次稽核、ORG_MEMBERSHIP 介面、前端 CSV） | Software Designer |

@@ -18,6 +18,7 @@ import { useMe } from '../auth/session';
 import { ErrorAlert, Field, Forbidden, Notice, PageHeader, Spinner } from '../components/ui';
 import { formatDateTime, ROLE_LABELS } from '../format';
 import { useApi, useTitle } from '../hooks';
+import { BulkImportCard } from './bulk-import';
 
 interface MemberPage {
   data: OrgMemberDto[];
@@ -162,6 +163,12 @@ export function OrgMembersPage() {
       <PageHeader title={org.data ? `${org.data.name}・成員管理` : '成員管理'} subtitle="新成員會收到設定密碼的邀請信；管理員不會經手任何人的密碼。" />
 
       {canAdd && <AddMember orgId={orgId} writable={writable} courses={courses.courses} onAdded={() => void load(null)} />}
+      {canAdd && writable && (
+        <section className="card">
+          <h2>批次匯入成員</h2>
+          <BulkImportCard kind="members" endpoint={`/api/organizations/${orgId}/users/import`} onDone={() => void load(null)} />
+        </section>
+      )}
 
       <section className="card">
         <h2>成員</h2>

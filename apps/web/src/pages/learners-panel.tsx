@@ -6,6 +6,7 @@ import { useMe } from '../auth/session';
 import { ErrorAlert, Field, Notice } from '../components/ui';
 import { ENROLLMENT_STATUS_BADGE, ENROLLMENT_STATUS_LABELS, formatDate } from '../format';
 import { useApi } from '../hooks';
+import { BulkImportCard } from './bulk-import';
 
 interface Page {
   data: CourseLearnerDto[];
@@ -86,6 +87,13 @@ export function LearnersPanel({ course }: { course: CourseDetailDto }) {
             </div>
           </fieldset>
         </form>
+      )}
+
+      {canAssign && assignable && (
+        <details className="bulk">
+          <summary>批次加入學員</summary>
+          <BulkImportCard kind="learners" endpoint={`/api/courses/${course.id}/enrollments/import`} onDone={() => list.reload()} />
+        </details>
       )}
 
       <div className="toolbar">

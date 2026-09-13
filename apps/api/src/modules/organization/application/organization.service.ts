@@ -12,6 +12,7 @@ import pg from 'pg';
 import { DB_API } from '../../../common/database.module.js';
 import { DomainError } from '../../../common/domain-error.js';
 import { USER_INVITATIONS, type UserInvitations } from '../../identity/identity.contracts.js';
+import type { MembershipResult, OrgMembership } from '../organization.contracts.js';
 
 type Tx = pg.PoolClient;
 type Q = pg.Pool | pg.PoolClient;
@@ -55,7 +56,7 @@ const ROLE_AGG = `json_agg(json_build_object('role', ro.code, 'scope_type', uor.
  *  - 新成員一律以邀請信自行設定密碼，管理員永不經手他人密碼
  */
 @Injectable()
-export class OrganizationService {
+export class OrganizationService implements OrgMembership {
   constructor(
     @Inject(DB_API) private readonly db: pg.Pool,
     @Inject(USER_INVITATIONS) private readonly invitations: UserInvitations,
@@ -372,6 +373,60 @@ export class OrganizationService {
     }
     const emailSent = created ? await this.invitations.invite(userId, orgName) : false;
     return { userId, invited: created, emailSent };
+  }
+
+  // ------------------------------------------------------------------ OrgMembership（批次匯入，SD §6.11）
+
+  async ensureMemberTx(
+    tx: Tx,
+    orgId: string,
+    input: { email: string; displayName: string | null; spec: RoleSpec; allowCreate: boolean; actorId: string },
+  ): Promise<MembershipResult> {
+    const u = await tx.query<{ id: string; status: string }>(`SELECT id, status FROM users WHERE email = $1`, [input.email]);
+    const existing = u.rows[0];
+    if (existing && existing.status !== 'active') throw invalid('email', 'user_not_active');
+    if (existing) {
+      const m = await tx.query<{ disabled: boolean }>(
+        `SELECT EXISTS (SELECT 1 FROM disabled_memberships dm WHERE dm.organization_id = $2 AND dm.user_id = $1) AS disabled
+           FROM user_org_roles WHERE user_id = $1 AND organization_id = $2 LIMIT 1`,
+        [existing.id, orgId],
+      );
+      if (m.rows[0]) {
+        if (m.rows[0].disabled) throw invalid('email', 'member_disabled');
+        // 已是成員：不經由匯入變更既有角色（只新增課程指派或選課）
+        return { userId: existing.id, created: false, added: false };
+      }
+      await this.insertGrant(tx, orgId, existing.id, input.spec, input.actorId);
+      await syncCourseStaff(tx, orgId, existing.id, [input.spec], input.actorId);
+      return { userId: existing.id, created: false, added: true };
+    }
+    if (!input.allowCreate) throw invalid('email', 'not_in_organization');
+    if (!input.displayName) throw invalid('displayName', 'name_required');
+    // 不設密碼：由本人經邀請信設定
+    const n = await tx.query<{ id: string }>(`INSERT INTO users (email, display_name) VALUES ($1, $2) RETURNING id`, [input.email, input.displayName]);
+    const userId = n.rows[0]!.id;
+    await this.insertGrant(tx, orgId, userId, input.spec, input.actorId);
+    await syncCourseStaff(tx, orgId, userId, [input.spec], input.actorId);
+    return { userId, created: true, added: true };
+  }
+
+  async grantCourseRoleTx(tx: Tx, orgId: string, userId: string, spec: RoleSpec, actorId: string): Promise<boolean> {
+    const r = await tx.query(
+      `INSERT INTO user_org_roles (user_id, role_id, scope_type, scope_id, organization_id, granted_by)
+       SELECT $1, id, 'course'::scope_type, $2, $3, $4 FROM roles WHERE code = $5
+       ON CONFLICT DO NOTHING`,
+      [userId, spec.courseId, orgId, actorId, spec.role],
+    );
+    await syncCourseStaff(tx, orgId, userId, [spec], actorId);
+    return (r.rowCount ?? 0) > 0;
+  }
+
+  async inviteNew(orgId: string, userIds: readonly string[]): Promise<number> {
+    if (!userIds.length) return 0;
+    const o = await this.db.query<{ name: string }>(`SELECT name FROM organizations WHERE id = $1`, [orgId]);
+    let sent = 0;
+    for (const id of userIds) if (await this.invitations.invite(id, o.rows[0]!.name)) sent++;
+    return sent;
   }
 
   private async addMemberTx(tx: Tx, orgId: string, email: string, displayName: string, spec: RoleSpec, actorId: string) {

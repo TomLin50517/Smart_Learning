@@ -908,6 +908,46 @@ paths:
         '201': { description: '回傳 `{ userId, invited, emailSent }`。新帳號 `invited: true` 並寄出設定密碼邀請，`emailSent` 表示信件是否已交給郵件伺服器（失敗時對方可改用「忘記密碼」）；既有帳號 `invited: false`、`emailSent: false`（直接加入）' }
         '400': { description: '`email: already_member`；`courseId: course_id_mismatch`／`course_not_in_organization`' }
 
+  /organizations/{id}/users/import:
+    parameters: [{ $ref: '#/components/parameters/OrgId' }]
+    post:
+      operationId: importOrganizationUsers
+      tags: [Organization]
+      x-required-permission: org.user.write
+      x-required-capability: configurationWriteAllowed
+      description: |
+        批次匯入成員（SD §6.11）：每列 Email、姓名、角色（預設 learner）、課程代碼（選填：學員＝選課；講師／課程管理員＝指派該課）。
+        `dryRun: true` 為預覽——完整執行後整批復原，回傳的逐列結果即實際匯入時會發生的事。錯誤的列不處理，其餘照常；
+        已是成員者不經由匯入變更既有角色。新帳號不設密碼，實際匯入提交後寄出邀請。每列寫一筆稽核（`metadata.batch_id`）。
+        學員人數超過授權上限時，預覽回報 `license.exceededBy`，實際匯入整批 403 `LICENSE_LIMIT_EXCEEDED`。
+        課程相關的列另需 enrollment.assign／org.role.assign（否則該列 `permission_denied`）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [dryRun, rows]
+              properties:
+                dryRun: { type: boolean }
+                rows:
+                  type: array
+                  minItems: 1
+                  maxItems: 500
+                  items:
+                    type: object
+                    required: [email]
+                    properties:
+                      email:       { type: string }
+                      displayName: { type: string, maxLength: 200 }
+                      role:        { type: string, description: 'learner／instructor／course_admin／org_admin／auditor；其他值該列回 invalid_role' }
+                      courseCode:  { type: string }
+      responses:
+        '200': { description: '`ImportReportDto`（逐列 outcome ok／skipped／error、actions、issue；summary；license）' }
+        '400': { description: 格式錯誤或超過 500 列 }
+        '403': { description: '`LICENSE_LIMIT_EXCEEDED`（實際匯入）或無權限' }
+
   /organizations/{id}/users/{userId}/disable:
     parameters:
       - $ref: '#/components/parameters/OrgId'
@@ -1513,6 +1553,41 @@ paths:
         '201': { description: '`EnrollmentDto`' }
         '400': { description: '`course_not_published`／`course_archived`；`email: not_in_organization`／`member_disabled`／`already_enrolled`' }
         '403': { description: '`LICENSE_LIMIT_EXCEEDED`（進行中的學員數達授權上限）或無權限' }
+
+  /courses/{id}/enrollments/import:
+    parameters: [{ $ref: '#/components/parameters/CourseId' }]
+    post:
+      operationId: importCourseEnrollments
+      tags: [Enrollment]
+      x-required-permission: enrollment.assign
+      x-required-capability: configurationWriteAllowed
+      description: |
+        批次加入學員（SD §6.11）：每列 Email、姓名（選填）。尚非本組織成員者需填姓名，且匯入者須在該組織有
+        org.user.write 才能建立帳號（否則該列 `not_in_organization`）。預覽、逐列結果、授權上限、稽核同成員匯入。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [dryRun, rows]
+              properties:
+                dryRun: { type: boolean }
+                rows:
+                  type: array
+                  minItems: 1
+                  maxItems: 500
+                  items:
+                    type: object
+                    required: [email]
+                    properties:
+                      email:       { type: string }
+                      displayName: { type: string, maxLength: 200 }
+      responses:
+        '200': { description: '`ImportReportDto`' }
+        '400': { description: 格式錯誤或超過 500 列 }
+        '403': { description: '`LICENSE_LIMIT_EXCEEDED`（實際匯入）或無權限' }
 
   /courses/{id}/learners:
     parameters: [{ $ref: '#/components/parameters/CourseId' }]
