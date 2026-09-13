@@ -379,7 +379,8 @@ describe('org admin safeguards (organization C: two active admins + one disabled
     (
       await admin.query<{ n: number }>(
         `SELECT count(*)::int AS n FROM user_org_roles uor JOIN roles ro ON ro.id = uor.role_id JOIN users u ON u.id = uor.user_id
-          WHERE uor.organization_id = $1 AND ro.code = 'org_admin' AND u.status = 'active'`,
+          WHERE uor.organization_id = $1 AND ro.code = 'org_admin' AND u.status = 'active'
+            AND NOT EXISTS (SELECT 1 FROM disabled_memberships dm WHERE dm.organization_id = $1 AND dm.user_id = uor.user_id)`,
         [ORG_C],
       )
     ).rows[0]!.n;
@@ -417,5 +418,66 @@ describe('org admin safeguards (organization C: two active admins + one disabled
     const loser = a.statusCode === 400 ? a : b;
     expect(loser.json().error.details).toEqual([{ field: 'roles', issue: 'last_org_admin' }]);
     expect(await activeAdmins()).toBe(1);
+  });
+
+  it('a disabled membership does not count as an active admin; admin recovery re-enables the member', async () => {
+    // 兩位管理員的成員資格都停用 → 組織只剩「停用中」的管理員，平台管理員可以復原
+    await admin.query(`INSERT INTO disabled_memberships (organization_id, user_id) VALUES ($1, $2), ($1, $3) ON CONFLICT DO NOTHING`, [ORG_C, RACE_1, RACE_2]);
+    expect(await activeAdmins()).toBe(0);
+    const res = await call('POST', `/api/organizations/${ORG_C}/admin-recovery`, s.padmin, { email: 'race1@c.test', displayName: 'ignored' });
+    expect(res.statusCode).toBe(200);
+    expect(await activeAdmins()).toBe(1);
+    expect((await admin.query(`SELECT 1 FROM disabled_memberships WHERE organization_id = $1 AND user_id = $2`, [ORG_C, RACE_1])).rowCount).toBe(0);
+  });
+});
+
+describe('disabling a membership (organization A)', () => {
+  let teacherId = '';
+  let teacher: S;
+  const change = (userId: string, action: 'disable' | 'enable', t = s.adminA) => call('POST', `/api/organizations/${ORG_A}/users/${userId}/${action}`, t);
+
+  beforeAll(async () => {
+    teacherId = (await admin.query<{ id: string }>(`SELECT id FROM users WHERE email = 'teacher@a.test'`)).rows[0]!.id;
+    teacher = await session(teacherId);
+  });
+
+  it("disables only this organization's membership: access stops on the next request, roles are kept, audit records it", async () => {
+    expect((await call('GET', `/api/courses/${COURSE_A}`, teacher)).statusCode).toBe(200);
+
+    const res = await change(teacherId, 'disable');
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ userId: teacherId, membershipStatus: 'disabled' });
+    expect(await lastAudit('org.user.disabled')).toMatchObject({
+      resource_id: teacherId,
+      before_state: { membershipStatus: 'active' },
+      after_state: { membershipStatus: 'disabled' },
+    });
+
+    expect((await call('GET', `/api/courses/${COURSE_A}`, teacher)).statusCode).not.toBe(200);
+    expect((await call('GET', '/api/me', teacher)).json().organizations).toEqual([]);
+
+    const listed = (await call('GET', `/api/organizations/${ORG_A}/users?status=disabled`, s.adminA)).json().data;
+    expect(listed).toEqual([
+      expect.objectContaining({ email: 'teacher@a.test', membershipStatus: 'disabled', roles: [expect.objectContaining({ role: 'instructor' })] }),
+    ]);
+    // 課程列表的講師欄不再列出；也不能再被指派為課程人員
+    const courseA = ((await call('GET', '/api/courses', s.adminA)).json().data as { id: string; staff: { userId: string }[] }[]).find((c) => c.id === COURSE_A)!;
+    expect(courseA.staff.map((x) => x.userId)).not.toContain(teacherId);
+    const assign = await call('POST', `/api/courses/${COURSE_A}/staff`, s.adminA, { email: 'teacher@a.test', role: 'course_admin' });
+    expect(assign.json().error.details).toEqual([{ field: 'email', issue: 'member_disabled' }]);
+  });
+
+  it('enabling restores access with the same roles; repeating is harmless', async () => {
+    const res = await change(teacherId, 'enable');
+    expect(res.json()).toEqual({ userId: teacherId, membershipStatus: 'active' });
+    expect((await call('GET', `/api/courses/${COURSE_A}`, teacher)).statusCode).toBe(200);
+    expect(await lastAudit('org.user.enabled')).toMatchObject({ after_state: { membershipStatus: 'active' } });
+    expect((await change(teacherId, 'enable')).json()).toEqual({ userId: teacherId, membershipStatus: 'active' });
+  });
+
+  it('refuses disabling yourself; non-members → 404; learners cannot', async () => {
+    expect((await change(ADMIN_A, 'disable')).json().error.details).toEqual([{ issue: 'cannot_disable_self' }]);
+    expect((await change(MEMBER_C, 'disable')).statusCode).toBe(404);
+    expect((await change(teacherId, 'disable', s.learnerA)).statusCode).toBe(403);
   });
 });

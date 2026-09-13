@@ -858,6 +858,10 @@ paths:
           in: query
           description: 姓名或 email 的部分字串，不分大小寫；`%`、`_` 視為一般字元
           schema: { type: string, maxLength: 100 }
+        - name: status
+          in: query
+          description: 依在本組織的成員資格篩選（`membershipStatus`；帳號狀態見 `status` 欄位）
+          schema: { type: string, enum: [active, disabled] }
       responses:
         '200': { description: OK }
         '400': { description: '`role` 不在列舉中' }
@@ -890,6 +894,40 @@ paths:
       responses:
         '201': { description: '回傳 `{ userId, invited, emailSent }`。新帳號 `invited: true` 並寄出設定密碼邀請，`emailSent` 表示信件是否已交給郵件伺服器（失敗時對方可改用「忘記密碼」）；既有帳號 `invited: false`、`emailSent: false`（直接加入）' }
         '400': { description: '`email: already_member`；`courseId: course_id_mismatch`／`course_not_in_organization`' }
+
+  /organizations/{id}/users/{userId}/disable:
+    parameters:
+      - $ref: '#/components/parameters/OrgId'
+      - { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      operationId: disableOrganizationUser
+      tags: [Organization]
+      x-required-permission: org.user.write
+      x-required-capability: configurationWriteAllowed
+      x-audit: org.user.disabled
+      description: |
+        停用此使用者在**本組織**的成員資格（SD §8.9）：角色原樣保留、可恢復；本組織的權限從下一個請求起失效，
+        課程列表的講師欄也不再列出。帳號本身與其他組織不受影響（停用整個帳號屬平台管理，另立端點）。
+        已停用時再呼叫不變更（冪等）。不能停用自己；不能停用最後一位啟用中的 org_admin。
+      responses:
+        '200': { description: '`{ userId, membershipStatus: disabled }`' }
+        '400': { description: '`cannot_disable_self`／`last_org_admin`' }
+        '404': { description: 非本組織成員 }
+
+  /organizations/{id}/users/{userId}/enable:
+    parameters:
+      - $ref: '#/components/parameters/OrgId'
+      - { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      operationId: enableOrganizationUser
+      tags: [Organization]
+      x-required-permission: org.user.write
+      x-required-capability: configurationWriteAllowed
+      x-audit: org.user.enabled
+      description: 恢復在本組織的成員資格，原有角色立即生效。未停用時再呼叫不變更（冪等）。
+      responses:
+        '200': { description: '`{ userId, membershipStatus: active }`' }
+        '404': { description: 非本組織成員 }
 
   /organizations/{id}/admin-recovery:
     parameters: [{ $ref: '#/components/parameters/ResourceId' }]
@@ -1080,6 +1118,9 @@ paths:
           in: query
           description: 只列此組織的課程（仍受 course.read 範圍限制；供成員頁的課程選單使用）
           schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          schema: { type: string, enum: [draft, active, archived] }
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Sort'
@@ -1141,6 +1182,21 @@ paths:
                 status: { type: string, enum: [archived] }
       responses:
         '200': { description: '封存後的 `CourseDetailDto`' }
+
+  /courses/{id}/restore:
+    parameters: [{ $ref: '#/components/parameters/CourseId' }]
+    post:
+      operationId: restoreCourse
+      tags: [Course]
+      x-required-permission: course.archive
+      x-required-capability: authoringAllowed
+      x-audit: course.restored
+      description: |
+        恢復封存（SD §6.5）：狀態依實際內容決定——有已發布版本為 `active`，否則為 `draft`。
+        封存沒有改動版本、內容與人員，恢復只解除「新選課／新版本」的阻擋。權限與封存相同。
+      responses:
+        '200': { description: '恢復後的 `CourseDetailDto`' }
+        '400': { description: '`not_archived`' }
 
   /courses/{id}/versions:
     parameters: [{ $ref: '#/components/parameters/CourseId' }]

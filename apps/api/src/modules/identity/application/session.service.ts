@@ -110,6 +110,7 @@ export class SessionService {
       `SELECT o.id FROM user_org_roles uor
          JOIN organizations o ON o.id = uor.organization_id
         WHERE uor.user_id = $1 AND o.status = 'active'
+          AND NOT EXISTS (SELECT 1 FROM disabled_memberships dm WHERE dm.organization_id = o.id AND dm.user_id = uor.user_id)
         ORDER BY o.name LIMIT 1`,
       [userId],
     );

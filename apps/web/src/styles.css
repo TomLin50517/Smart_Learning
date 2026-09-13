@@ -199,6 +199,12 @@ fieldset {
 .role-list li + li {
   margin-top: 2px;
 }
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
 .chip-row {
   display: flex;
   flex-wrap: wrap;

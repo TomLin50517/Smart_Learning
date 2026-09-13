@@ -4,6 +4,7 @@ import {
   ORG_LEVEL_ROLES,
   type CourseDto,
   type MemberRoleDto,
+  type MembershipStatus,
   type OrganizationDto,
   type OrgMemberDto,
   type OrgRole,
@@ -89,6 +90,8 @@ export function OrgMembersPage() {
   const [text, setText] = useState('');
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState<OrgRole | ''>('');
+  const [statusFilter, setStatusFilter] = useState<MembershipStatus | ''>('');
+  const [actionError, setActionError] = useState<unknown>(null);
   const seq = useRef(0);
 
   useEffect(() => {
@@ -106,6 +109,7 @@ export function OrgMembersPage() {
         if (cursor) q.set('cursor', cursor);
         if (search) q.set('q', search);
         if (roleFilter) q.set('role', roleFilter);
+        if (statusFilter) q.set('status', statusFilter);
         const r = await api<MemberPage>('GET', `/api/organizations/${orgId}/users?${q.toString()}`);
         if (mine !== seq.current) return;
         setMembers((m) => (cursor ? [...m, ...r.data] : r.data));
@@ -116,7 +120,7 @@ export function OrgMembersPage() {
         if (mine === seq.current) setLoading(false);
       }
     },
-    [orgId, search, roleFilter],
+    [orgId, search, roleFilter, statusFilter],
   );
 
   useEffect(() => {
@@ -127,9 +131,31 @@ export function OrgMembersPage() {
   const canAssign = can(me, 'org.role.assign') && writable;
   const canAdd = can(me, 'org.user.write');
   const courses = useOrgCourses(orgId, allowed && canAdd && can(me, 'course.read'));
+  const canWrite = canAdd && writable;
 
   if (!allowed) return <Forbidden />;
-  const filtered = search !== '' || roleFilter !== '';
+  const filtered = search !== '' || roleFilter !== '' || statusFilter !== '';
+
+  /** 停用／恢復在本組織的成員資格；角色保留，其他組織不受影響 */
+  async function changeStatus(m: OrgMemberDto) {
+    const next: MembershipStatus = m.membershipStatus === 'disabled' ? 'active' : 'disabled';
+    if (
+      next === 'disabled' &&
+      !window.confirm(`確定要停用「${m.displayName}」在本組織的成員資格？\n\n他在本組織的所有權限會立即失效；角色會保留，可隨時恢復。其他組織不受影響。`)
+    ) {
+      return;
+    }
+    setActionError(null);
+    try {
+      const r = await api<{ membershipStatus: MembershipStatus }>(
+        'POST',
+        `/api/organizations/${orgId}/users/${m.id}/${next === 'disabled' ? 'disable' : 'enable'}`,
+      );
+      setMembers((list) => list.map((x) => (x.id === m.id ? { ...x, membershipStatus: r.membershipStatus } : x)));
+    } catch (e) {
+      setActionError(e);
+    }
+  }
 
   return (
     <>
@@ -156,8 +182,14 @@ export function OrgMembersPage() {
               </option>
             ))}
           </select>
+          <select aria-label="依狀態篩選" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as MembershipStatus | '')}>
+            <option value="">全部狀態</option>
+            <option value="active">啟用中</option>
+            <option value="disabled">已停用</option>
+          </select>
         </div>
         <ErrorAlert error={error} />
+        <ErrorAlert error={actionError} />
         <div className="table-wrap">
           <table className="table">
             <thead>
@@ -178,6 +210,8 @@ export function OrgMembersPage() {
                   isSelf={m.id === me.user.id}
                   editing={editing === m.id}
                   canAssign={canAssign}
+                  canWrite={canWrite}
+                  onToggleStatus={() => void changeStatus(m)}
                   onEdit={() => setEditing(editing === m.id ? null : m.id)}
                   onSaved={(roles) => {
                     setMembers((list) => list.map((x) => (x.id === m.id ? { ...x, roles } : x)));
@@ -206,10 +240,13 @@ function MemberRow(props: {
   isSelf: boolean;
   editing: boolean;
   canAssign: boolean;
+  canWrite: boolean;
+  onToggleStatus(): void;
   onEdit(): void;
   onSaved(roles: MemberRoleDto[]): void;
 }) {
   const { member: m } = props;
+  const disabled = m.membershipStatus === 'disabled';
   return (
     <>
       <tr>
@@ -232,8 +269,12 @@ function MemberRow(props: {
           )}
         </td>
         <td>
-          {m.status === 'disabled' ? (
+          {disabled ? (
             <span className="badge badge-blocked">已停用</span>
+          ) : m.status === 'disabled' ? (
+            <span className="badge badge-blocked" title="帳號已由平台停用，所有組織都無法登入">
+              帳號停用
+            </span>
           ) : m.pendingInvitation ? (
             <span className="badge badge-grace">邀請中</span>
           ) : (
@@ -242,11 +283,18 @@ function MemberRow(props: {
         </td>
         <td>{formatDateTime(m.lastLoginAt)}</td>
         <td className="actions">
-          {props.canAssign && (
-            <button className="btn btn-small" onClick={props.onEdit} aria-expanded={props.editing}>
-              {props.editing ? '取消' : '編輯角色'}
-            </button>
-          )}
+          <div className="row-actions">
+            {props.canAssign && (
+              <button className="btn btn-small" onClick={props.onEdit} aria-expanded={props.editing}>
+                {props.editing ? '取消' : '編輯角色'}
+              </button>
+            )}
+            {props.canWrite && !props.isSelf && (
+              <button className={`btn btn-small${disabled ? '' : ' btn-danger'}`} onClick={props.onToggleStatus}>
+                {disabled ? '恢復' : '停用'}
+              </button>
+            )}
+          </div>
         </td>
       </tr>
       {props.editing && (

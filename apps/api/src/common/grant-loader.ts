@@ -5,7 +5,8 @@ import { DB_API } from './database.module.js';
 
 /**
  * 載入使用者的有效授權（role → permission × scope）。
- * 已停用組織的授權自動失效；過期的授權不計入。
+ * 已停用組織的授權自動失效；過期的授權不計入；在該組織的成員資格已停用者，該組織的授權不計入
+ * （SD §8.9）。每個請求重新載入，所以停用從下一個請求起生效，不必撤銷 session。
  */
 @Injectable()
 export class GrantLoader {
@@ -25,7 +26,9 @@ export class GrantLoader {
         WHERE uor.user_id = $1
           AND (uor.expires_at IS NULL OR uor.expires_at > now())
           AND (uor.organization_id IS NULL OR EXISTS (
-                SELECT 1 FROM organizations o WHERE o.id = uor.organization_id AND o.status = 'active'))`,
+                SELECT 1 FROM organizations o WHERE o.id = uor.organization_id AND o.status = 'active'))
+          AND NOT EXISTS (
+                SELECT 1 FROM disabled_memberships dm WHERE dm.organization_id = uor.organization_id AND dm.user_id = uor.user_id)`,
       [userId],
     );
     return r.rows.map((x) => ({

@@ -268,8 +268,8 @@ SELECT pg_temp.t('T58 4 monthly partitions per table', NULL,
      OR (SELECT count(*) FROM pg_inherits i JOIN pg_class c ON c.oid=i.inhrelid
           WHERE i.inhparent='audit_logs'::regclass AND c.relname ~ '_\d{4}_\d{2}$') <> 4
      THEN RAISE EXCEPTION 'PARTITIONS'; END IF; END $d$ $$, 'OK');
-SELECT pg_temp.t('T59 17 migrations recorded', NULL,
- $$DO $d$ BEGIN IF (SELECT count(*) FROM schema_migrations) <> 17 THEN RAISE EXCEPTION 'COUNT'; END IF; END $d$ $$, 'OK');
+SELECT pg_temp.t('T59 18 migrations recorded', NULL,
+ $$DO $d$ BEGIN IF (SELECT count(*) FROM schema_migrations) <> 18 THEN RAISE EXCEPTION 'COUNT'; END IF; END $d$ $$, 'OK');
 
 -- ============================================================ 0015 auth tables
 SELECT pg_temp.t('T60 app_coach cannot read password_reset_tokens', 'app_coach',
@@ -314,6 +314,18 @@ SELECT pg_temp.t('T71 duplicate platform grant still rejected (NULLS NOT DISTINC
    SELECT 'aaaaaaaa-0000-0000-0000-000000000002'::uuid, id, 'platform'::scope_type FROM roles WHERE code='platform_admin'
    UNION ALL
    SELECT 'aaaaaaaa-0000-0000-0000-000000000002'::uuid, id, 'platform'::scope_type FROM roles WHERE code='platform_admin'$$, '23505');
+
+-- ============================================================ 0018 member disable
+SELECT pg_temp.t('T72 one disabled-membership row per (organization, user)', NULL,
+ $$INSERT INTO disabled_memberships (organization_id, user_id) VALUES
+   ('11111111-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000003'),
+   ('11111111-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000003')$$, '23505');
+SELECT pg_temp.t('T73 app_api can disable a membership', 'app_api',
+ $$INSERT INTO disabled_memberships (organization_id, user_id)
+   VALUES ('11111111-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000003')$$, 'OK');
+SELECT pg_temp.t('T74 app_coach cannot write memberships', 'app_coach',
+ $$INSERT INTO disabled_memberships (organization_id, user_id)
+   VALUES ('11111111-0000-0000-0000-000000000002','aaaaaaaa-0000-0000-0000-000000000003')$$, '42501');
 
 -- ------------------------------------------------------------------ report
 \pset border 1

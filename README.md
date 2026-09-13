@@ -28,7 +28,7 @@ packages/
   domain/     純領域規則，無 I/O（license capability…）
 migrations/   0001–0016 SQL
 tools/        migrate.ts、gen-permissions.ts、create-admin.ts、license-*（供應方專用）
-tests/        contract/（INV-T4）、e2e/（testcontainers + 行程內 SMTP）、db/（71 項 DB 不變條件）
+tests/        contract/（INV-T4）、e2e/（testcontainers + 行程內 SMTP）、db/（74 項 DB 不變條件）
 infra/        Dockerfile（api/worker）、Dockerfile.web（nginx + SPA）、docker-compose、nginx
 ```
 

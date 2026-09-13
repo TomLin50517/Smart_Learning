@@ -94,6 +94,7 @@ export const AssignStaff = z.strictObject({
 export const CoursePaging = z.object({
   /** 只列某組織的課程（仍受 course.read 範圍限制；供成員頁的課程選單使用） */
   organizationId: Id.optional(),
+  status: z.enum(['draft', 'active', 'archived']).optional(),
   cursor: z.string().max(400).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
