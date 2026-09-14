@@ -75,6 +75,8 @@ let otherEnr = '';
 let convId = '';
 let chunkFerment = '';
 let citationId = '';
+let courseA = '';
+let resultConv = '';
 
 /** 這些課程版本綁定的真實 chunk（內容取自物件儲存的 extracted.txt） */
 async function chunksFor(courseVersionIds: readonly string[]): Promise<RetrievedChunk[]> {
@@ -238,6 +240,7 @@ beforeAll(async () => {
   };
   const a = await makeCourse('烘焙入門', ACT);
   v1 = a.v;
+  courseA = a.id;
   const b = await makeCourse('另一門課', randomUUID());
   vB = b.v;
   await drain();
@@ -445,5 +448,84 @@ describe('teacher test mode', () => {
     expect((await call('POST', `/api/course-versions/${v1}/coach/test`, 'me', { content: 'x' })).statusCode).toBe(403);
     // 教師也能開啟測試回答的引用
     expect((await call('GET', `/api/coach/citations/${r.json().citations[0].id}/source`, 'instr')).statusCode).toBe(200);
+  });
+});
+
+describe('result-triggered coaching (SD §6.21)', () => {
+  it('the learner asks about a result; the question is generated from the result, never from the answers', async () => {
+    const attempt = (await call('POST', `/api/activities/${ACT}/attempts`, 'me')).json().attemptId as string;
+    expect((await call('POST', `/api/attempts/${attempt}/submit`, 'me', { input: {} })).statusCode).toBe(200);
+    provider.script = [answer(chunkFerment)];
+    const r = await call('POST', '/api/coach/from-result', 'me', { attemptId: attempt });
+    expect(r.statusCode).toBe(200);
+    expect(r.json()).toMatchObject({ status: 'answered', citations: [{ citationId: 'c1' }] });
+    resultConv = r.json().conversationId;
+    const conv = await admin.query(`SELECT trigger_type, activity_id, transcript_visibility FROM coach_conversations WHERE id = $1`, [resultConv]);
+    expect(conv.rows[0]).toEqual({ trigger_type: 'result_trigger', activity_id: ACT, transcript_visibility: 'course_staff' });
+    // 學員看得到系統替他送出的問題
+    const msgs = (await call('GET', `/api/coach/conversations/${resultConv}`, 'me')).json().messages;
+    expect(msgs[0].content).toMatch(/我剛完成「溫度測驗」，結果是「完成」/);
+    expect(provider.requests.at(-1)!.messages.at(-1)!.content).toContain('"current_result":{"status":"completed"');
+    // 別人的作答、尚未有結果的作答
+    expect((await call('POST', '/api/coach/from-result', 'other', { attemptId: attempt })).statusCode).toBe(404);
+    // 已完成的閱讀活動不能再開始作答：直接建一筆尚未送出的作答
+    const open = (
+      await admin.query<{ id: string }>(
+        `INSERT INTO learning_attempts (organization_id, enrollment_id, activity_id, attempt_no, status) VALUES ($1, $2, $3, 99, 'in_progress') RETURNING id`,
+        [ORG, myEnr, ACT],
+      )
+    ).rows[0]!.id;
+    expect((await call('POST', '/api/coach/from-result', 'me', { attemptId: open })).json().error.code).toBe('RESULT_NOT_READY');
+  });
+});
+
+describe('course staff insights (SD §6.21)', () => {
+  it('usage statistics stay hidden until enough learners have used the coach', async () => {
+    const hidden = (await call('GET', `/api/courses/${courseA}/coach/usage`, 'instr')).json();
+    expect(hidden).toMatchObject({ belowThreshold: true, threshold: 5, learners: null, statuses: null, topDocuments: [], activities: [] });
+    expect((await call('GET', `/api/courses/${courseA}/coach/usage`, 'me')).statusCode).toBe(403);
+
+    await admin.query(`INSERT INTO system_settings (scope_type, scope_id, key, value) VALUES ('platform', NULL, 'derived.min_threshold', '1'::jsonb)`);
+    try {
+      const u = (await call('GET', `/api/courses/${courseA}/coach/usage`, 'instr')).json();
+      const n = (await admin.query(`SELECT count(*)::int AS n FROM coach_conversations WHERE NOT is_test AND message_count > 0`)).rows[0].n;
+      expect(u).toMatchObject({ belowThreshold: false, learners: 1, conversations: n, resultTriggered: 1, topDocuments: [{ title: '講義' }] });
+      expect(u.statuses.answered).toBeGreaterThan(0);
+      expect(u.statuses.fallback).toBeGreaterThan(0);
+      expect(u.statuses.insufficient_evidence).toBe(1);
+      expect(u.questions).toBe(Object.values(u.statuses as Record<string, number>).reduce((a, b) => a + b, 0));
+      expect(u.activities).toMatchObject([{ activityId: ACT, title: '溫度測驗', learners: 1 }]);
+    } finally {
+      await admin.query(`DELETE FROM system_settings WHERE key = 'derived.min_threshold'`);
+    }
+  });
+
+  it('transcripts are readable only when both the organization policy and the conversation stamp allow it; every read is audited', async () => {
+    const list = await call('GET', `/api/courses/${courseA}/coach/conversations`, 'instr');
+    expect(list.statusCode).toBe(200);
+    const l = list.json();
+    // convId 建立時組織尚未開放 → 不列出身分，只算在 hiddenCount；沒有訊息的對話不列
+    expect(l).toMatchObject({ policy: 'course_staff', hiddenCount: 1 });
+    expect(l.data).toMatchObject([{ id: resultConv, learnerId: U.me, learnerDisplayName: NAMES.me, triggerType: 'result_trigger', activityTitle: '溫度測驗' }]);
+    expect((await call('GET', `/api/courses/${courseA}/coach/conversations`, 'me')).statusCode).toBe(403);
+
+    const t = await call('GET', `/api/courses/${courseA}/coach/conversations/${resultConv}`, 'instr');
+    expect(t.statusCode).toBe(200);
+    expect(t.json().messages.map((m: { role: string }) => m.role)).toEqual(['user', 'assistant']);
+    const audit = await admin.query(`SELECT actor_user_id, metadata FROM audit_logs WHERE action = 'coach.transcript.read' ORDER BY occurred_at`);
+    expect(audit.rows).toHaveLength(2);
+    // 學員在自己的帳號活動看得到誰讀了他的對話
+    expect(audit.rows[1]).toMatchObject({ actor_user_id: U.instr, metadata: { kind: 'transcript', learner_id: U.me } });
+
+    const stamped = await call('GET', `/api/courses/${courseA}/coach/conversations/${convId}`, 'instr');
+    expect(stamped.statusCode).toBe(403);
+    expect(stamped.json().error).toMatchObject({ code: 'COACH_TRANSCRIPT_NOT_VISIBLE', details: [{ issue: 'conversation_stamp' }] });
+    const testConv = (await admin.query(`SELECT id FROM coach_conversations WHERE is_test LIMIT 1`)).rows[0].id;
+    expect((await call('GET', `/api/courses/${courseA}/coach/conversations/${testConv}`, 'instr')).statusCode).toBe(404);
+
+    // 組織收回政策：連建立時可讀的對話也不可讀
+    await call('PUT', `/api/organizations/${ORG}/coach-settings`, 'admin', { transcriptVisibility: 'aggregate_only' });
+    expect((await call('GET', `/api/courses/${courseA}/coach/conversations/${resultConv}`, 'instr')).json().error.details[0].issue).toBe('organization_policy');
+    expect((await call('GET', `/api/courses/${courseA}/coach/conversations`, 'instr')).json()).toEqual({ policy: 'aggregate_only', data: [], hiddenCount: 2 });
   });
 });

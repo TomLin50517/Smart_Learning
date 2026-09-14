@@ -1,5 +1,5 @@
 import { Body, Controller, Get, HttpCode, Param, Post, Req, Res } from '@nestjs/common';
-import { COACH_QUESTION_MAX, type CitationSourceDto, type CoachAvailabilityDto, type CoachConversationDto, type CoachStreamEvent } from '@iac/contracts';
+import { COACH_QUESTION_MAX, type CitationSourceDto, type CoachAnswerDto, type CoachAvailabilityDto, type CoachConversationDto, type CoachStreamEvent } from '@iac/contracts';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { AuthUser } from '../../../common/context.js';
@@ -11,6 +11,7 @@ import { CoachService } from '../application/coach.service.js';
 
 const Create = z.strictObject({ enrollmentId: z.guid(), activityId: z.guid().optional() });
 const Ask = z.strictObject({ content: z.string().trim().min(1).max(COACH_QUESTION_MAX) });
+const FromResult = z.strictObject({ attemptId: z.guid() });
 
 /**
  * SSE（ADR-025 B+）：stage → sources（已依範圍檢索，可先讀教材）→ 回答驗證通過後才送 token → done。
@@ -83,6 +84,22 @@ export class CoachController {
     const conv = await this.coach.learnerConversation(parseInput(z.guid(), id), user);
     const prepared = await this.coach.prepare(conv, content, req.ctx.correlationId);
     await streamAnswer(reply, (emit) => this.coach.answer(prepared, emit));
+  }
+
+  /** openapi: startCoachFromResult——依作答結果請教練說明（回 JSON；對話之後可在抽屜中延續） */
+  @Post('coach/from-result')
+  @RequirePermission('coach.interact_self', { scope: 'self' })
+  @RequireCapability({ capability: 'aiCoachAllowed' })
+  @RateLimit([
+    { name: 'coachresult', by: 'user', limit: 10, windowSec: 60 },
+    { name: 'coachday', by: 'user', limit: 200, windowSec: 86_400 },
+  ])
+  @HttpCode(200)
+  async fromResult(@Body() body: unknown, @CurrentUser() user: AuthUser, @Req() req: FastifyRequest): Promise<CoachAnswerDto> {
+    const { attemptId } = parseInput(FromResult, body);
+    const r = await this.coach.fromResult(user, attemptId);
+    const prepared = await this.coach.prepare(r.conv, r.question, req.ctx.correlationId, { retrievalQuery: r.retrievalQuery, currentResult: r.currentResult });
+    return this.coach.answer(prepared);
   }
 
   /** openapi: openCitationSource——每次重新檢查權限（THR-I-004） */

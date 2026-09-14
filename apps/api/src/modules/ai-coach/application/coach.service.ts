@@ -10,7 +10,6 @@ import {
   type CoachCitationDto,
   type CoachConversationDto,
   type CoachKnowledgeScope,
-  type CoachMessageDto,
   type CoachPolicyDto,
   type CoachStreamEvent,
   type CoachUnavailableReason,
@@ -42,6 +41,7 @@ import { ENV, type Env } from '../../../config/env.js';
 import { KNOWLEDGE_RETRIEVER, type KnowledgeRetriever } from '../../knowledge/knowledge.contracts.js';
 import { LLM_PROVIDER, ProviderError, type LlmProvider } from '../infrastructure/llm-provider.js';
 import { CoachSettingsService } from './coach-settings.service.js';
+import { loadMessages } from './messages.js';
 
 /** 教練設定缺漏時（例如尚未儲存設定的草稿）的保守預設 */
 const DEFAULT_POLICY: CoachPolicyDto = {
@@ -57,6 +57,7 @@ const DEFAULT_POLICY: CoachPolicyDto = {
   extraInstructions: null,
 };
 
+const RESULT_LABEL: Record<string, string> = { passed: '通過', completed: '完成', needs_improvement: '需要再加強', failed: '未通過' };
 const SCOPE_TO_TYPE: Record<CoachKnowledgeScope, KnowledgeType> = { course_source: 'source', verified_faq: 'faq', common_error: 'common_error', platform: 'platform' };
 const ACTIVE_ENROLLMENT = ['active', 'reopened', 'completed'];
 const MAX_OUTPUT_TOKENS = 16_000;
@@ -206,21 +207,6 @@ export class CoachService {
 
   async getConversation(id: string, user: AuthUser): Promise<CoachConversationDto> {
     const c = await this.conversation(id, user);
-    const msgs = await this.db.query<{ id: string; role: 'user' | 'assistant'; content: string; validation_status: string | null; policy_snapshot: { status?: CoachAnswerStatus; followUps?: string[] } | null; created_at: Date }>(
-      `SELECT id, role, content, validation_status, policy_snapshot, created_at FROM coach_messages WHERE conversation_id = $1 AND role IN ('user', 'assistant') ORDER BY seq_no`,
-      [id],
-    );
-    const cites = await this.db.query<{ id: string; message_id: string; citation_ref: string; title: string; page_no: number | null; section_path: string | null }>(
-      `SELECT cc.id, cc.message_id, cc.citation_ref, cc.title, cc.page_no, cc.section_path
-         FROM coach_citations cc JOIN coach_messages m ON m.id = cc.message_id WHERE m.conversation_id = $1 ORDER BY cc.citation_ref`,
-      [id],
-    );
-    const byMessage = new Map<string, CoachCitationDto[]>();
-    for (const x of cites.rows) {
-      const list = byMessage.get(x.message_id) ?? [];
-      list.push({ id: x.id, citationId: x.citation_ref, title: x.title, pageNo: x.page_no, sectionPath: x.section_path, quote: null });
-      byMessage.set(x.message_id, list);
-    }
     return {
       id: c.id,
       enrollmentId: c.enrollment_id,
@@ -228,17 +214,64 @@ export class CoachService {
       activityId: c.activity_id,
       isTest: c.is_test,
       startedAt: new Date(c.started_at).toISOString(),
-      messages: msgs.rows.map(
-        (m): CoachMessageDto => ({
-          id: m.id,
-          role: m.role,
-          content: m.content,
-          status: m.role === 'assistant' ? (m.policy_snapshot?.status ?? (m.validation_status === 'fallback' ? 'fallback' : 'answered')) : null,
-          citations: byMessage.get(m.id) ?? [],
-          followUpQuestions: m.policy_snapshot?.followUps ?? [],
-          createdAt: new Date(m.created_at).toISOString(),
-        }),
-      ),
+      messages: await loadMessages(this.db, id),
+    };
+  }
+
+  /**
+   * 結果觸發（SA UC-CCH-002）：學員在作答結果旁按「請教練看看」。只能用自己的作答；還沒有結果 → 409。
+   * 問題由系統依結果產生（活動、結果、分數、問題代碼），存成學員的第一則訊息，學員看得到送出了什麼。
+   * 教練不重新評分、不改變結果（INV-3）。
+   */
+  async fromResult(user: AuthUser, attemptId: string): Promise<{ conv: ConvRow; question: string; retrievalQuery: string; currentResult: NonNullable<PromptContext['currentResult']> }> {
+    const r = await this.db.query<{
+      enrollment_id: string;
+      activity_id: string;
+      lesson_id: string;
+      course_version_id: string;
+      organization_id: string;
+      enrollment_status: string;
+      title: string;
+      result_status: string | null;
+      score: string | null;
+      max_score: string | null;
+      issues: { code?: unknown; category?: unknown; severity?: unknown }[] | null;
+    }>(
+      `SELECT e.id AS enrollment_id, la.activity_id, a.lesson_id, e.course_version_id, e.organization_id, e.status AS enrollment_status, a.title,
+              lr.status AS result_status, lr.score, lr.max_score, lr.issues
+         FROM learning_attempts la JOIN enrollments e ON e.id = la.enrollment_id JOIN activities a ON a.id = la.activity_id
+         LEFT JOIN LATERAL (SELECT status, score, max_score, issues FROM learning_results WHERE attempt_id = la.id ORDER BY evaluated_at DESC LIMIT 1) lr ON true
+        WHERE la.id = $1 AND e.user_id = $2 AND e.organization_id = $3`,
+      [attemptId, user.id, user.activeOrganizationId],
+    );
+    const x = r.rows[0];
+    if (!x) throw new DomainError('NOT_FOUND');
+    if (!x.result_status) throw new DomainError('RESULT_NOT_READY', 'The attempt has no result yet', [{ field: 'attemptId', issue: 'no_result' }]);
+    // 建立對話前先確認可以回答，避免留下空對話
+    const s = await this.settings.get(x.organization_id);
+    if (!s.enabled) throw unavailable('disabled_by_organization');
+    if (!this.llm.available) throw unavailable('provider_unavailable');
+    if (!this.retriever.available) throw unavailable('search_unavailable');
+    if (!ACTIVE_ENROLLMENT.includes(x.enrollment_status)) throw unavailable('enrollment_inactive');
+
+    const created = await this.db.query<{ id: string }>(
+      `INSERT INTO coach_conversations (organization_id, enrollment_id, learner_id, course_version_id, lesson_id, activity_id, trigger_type, is_test, transcript_visibility)
+       VALUES ($1, $2, $3, $4, $5, $6, 'result_trigger', false, $7::transcript_visibility) RETURNING id`,
+      [x.organization_id, x.enrollment_id, user.id, x.course_version_id, x.lesson_id, x.activity_id, s.transcriptVisibility],
+    );
+    const issues = (x.issues ?? []).slice(0, 10).map((i) => ({ code: String(i.code ?? ''), category: String(i.category ?? ''), severity: String(i.severity ?? '') }));
+    const score = x.score === null ? null : Number(x.score);
+    const maxScore = Number(x.max_score);
+    const question = [
+      `我剛完成「${x.title}」，結果是「${RESULT_LABEL[x.result_status] ?? x.result_status}」${score !== null ? `（${score}／${maxScore} 分）` : ''}。`,
+      issues.length ? `系統指出的問題：${issues.map((i) => i.code).join('、')}。` : '',
+      '請根據教材幫我了解可以怎麼改進。',
+    ].join('');
+    return {
+      conv: await this.conversation(created.rows[0]!.id, user),
+      question,
+      retrievalQuery: [x.title, ...issues.flatMap((i) => [i.code, i.category])].filter(Boolean).join(' '),
+      currentResult: { status: x.result_status, score, maxScore, issues },
     };
   }
 
@@ -316,7 +349,12 @@ export class CoachService {
    * 問答前的檢查與準備（錯誤以一般錯誤碼回應，尚未開始串流）：組織是否停用、供應商與檢索是否可用、選課狀態、額度、檢索。
    * 檢索範圍完全由伺服器決定（組織、這個課程版本、教練設定允許的知識類型）。
    */
-  async prepare(conv: ConvRow, question: string, correlationId: string): Promise<PreparedQuestion> {
+  async prepare(
+    conv: ConvRow,
+    question: string,
+    correlationId: string,
+    extra: { retrievalQuery?: string; currentResult?: PromptContext['currentResult'] } = {},
+  ): Promise<PreparedQuestion> {
     const s = await this.settings.get(conv.organization_id);
     if (!s.enabled) throw unavailable('disabled_by_organization');
     if (!this.llm.available) throw unavailable('provider_unavailable');
@@ -330,7 +368,7 @@ export class CoachService {
     const policy = await this.policyOf(conv.course_version_id);
     const aclScopes: AclScope[] = policy.allowedKnowledgeScopes.includes('platform') ? ['course', 'organization', 'platform'] : ['course', 'organization'];
     const chunks = await this.retriever.retrieve(
-      { queryText: question, topK: TOP_K, knowledgeTypes: policy.allowedKnowledgeScopes.map((k) => SCOPE_TO_TYPE[k]) },
+      { queryText: extra.retrievalQuery ?? question, topK: TOP_K, knowledgeTypes: policy.allowedKnowledgeScopes.map((k) => SCOPE_TO_TYPE[k]) },
       { organizationId: conv.organization_id, courseVersionIds: [conv.course_version_id], allowedVerificationStatuses: ['source', 'verified'], aclScopes },
     );
     const [authorizedChunkIds, where, attempts, completed, history, others] = await Promise.all([
@@ -379,6 +417,7 @@ export class CoachService {
         completedActivities: completed?.rows[0]?.n ?? 0,
         // 不透明代號：每個對話不同，無法回推學員（SD §10.1.3）
         learnerRef: `lrn_${createHmac('sha256', this.env.SESSION_SECRET).update(`${conv.learner_id}:${conv.id}`).digest('hex').slice(0, 12)}`,
+        currentResult: extra.currentResult ?? null,
       },
       history: history.rows.reverse().map((m) => ({ role: m.role, content: m.content })),
       otherLearnerNames: others.rows.map((x) => x.name),
