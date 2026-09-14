@@ -300,7 +300,7 @@ const ACTION_LABELS: Record<string, string> = {
   'org.cohort.archived': '封存班級',
   'org.cohort.restored': '恢復班級',
   'org.branding.updated': '更新品牌設定',
-  'coach.transcript.read': '檢視 Coach 對話',
+  'coach.transcript.read': '檢視 AI 教練對話紀錄',
   'coach.transcript_policy.updated': '變更對話可見性政策',
   'org.coach_settings.updated': '更新組織 AI 教練設定',
   'knowledge.document.uploaded': '上傳教材',

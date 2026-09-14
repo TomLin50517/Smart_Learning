@@ -30,7 +30,18 @@ function targetLabels(runtime: ActivityRuntimeDto): Record<string, string> {
  * 單一活動：狀態、開始／繼續作答、各元件的作答介面、送出後的結果（UC-LRN-002/004/006/007/008）。
  * 成績一律由伺服器產生——這裡只送原始作答（ADR-024）。
  */
-export function ActivityPanel({ activity: a, canLearn, onChanged }: { activity: OutlineActivityDto; canLearn: boolean; onChanged(): void }) {
+export function ActivityPanel({
+  activity: a,
+  canLearn,
+  onChanged,
+  onAskCoach,
+}: {
+  activity: OutlineActivityDto;
+  canLearn: boolean;
+  onChanged(): void;
+  /** 有提供時，結果旁顯示「請 AI 教練看看這次結果」（SD §6.21） */
+  onAskCoach?: ((attemptId: string) => void) | undefined;
+}) {
   const [runtime, setRuntime] = useState<ActivityRuntimeDto | null>(null);
   const [attemptId, setAttemptId] = useState<string | null>(null);
   const [result, setResult] = useState<{ r: ActivityResultDto; labels: Record<string, string> } | null>(null);
@@ -100,7 +111,7 @@ export function ActivityPanel({ activity: a, canLearn, onChanged }: { activity: 
       </p>
 
       <ErrorAlert error={error} />
-      {result && <ResultView result={result.r} labels={result.labels} />}
+      {result && <ResultView result={result.r} labels={result.labels} onAskCoach={onAskCoach} />}
 
       {a.state === 'locked' ? (
         <p className="muted">🔒 {a.lockReason === 'sequence' ? '請先完成前面的內容。' : '請先完成這個活動的先修條件。'}</p>
@@ -119,7 +130,7 @@ export function ActivityPanel({ activity: a, canLearn, onChanged }: { activity: 
   );
 }
 
-function ResultView({ result: r, labels }: { result: ActivityResultDto; labels: Record<string, string> }) {
+function ResultView({ result: r, labels, onAskCoach }: { result: ActivityResultDto; labels: Record<string, string>; onAskCoach: ((attemptId: string) => void) | undefined }) {
   const fb = r.feedbackData;
   return (
     <div className="result">
@@ -143,6 +154,11 @@ function ResultView({ result: r, labels }: { result: ActivityResultDto; labels: 
             <li key={k}>{issueText(i, i.target ? labels[i.target] : undefined)}</li>
           ))}
         </ul>
+      )}
+      {onAskCoach && (
+        <button type="button" className="btn btn-small" onClick={() => onAskCoach(r.attemptId)}>
+          請 AI 教練看看這次結果
+        </button>
       )}
     </div>
   );

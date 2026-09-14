@@ -1,4 +1,5 @@
 import type { LearnerOutlineDto, LearningTimeDto, LessonBlock, OutlineActivityDto, ProgressDto } from '@iac/contracts';
+import { useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { can } from '../auth/permissions';
 import { useMe } from '../auth/session';
@@ -18,12 +19,16 @@ export function LearnPage() {
   const allowed = can(me, 'learning.result.read_self');
   const outline = useApi<LearnerOutlineDto>(allowed ? `/api/enrollments/${enrollmentId}/outline` : null);
   const [params, setParams] = useSearchParams();
+  // 結果旁「請 AI 教練看看」：交給右側教練對話處理（nonce 讓同一個作答可再按一次）
+  const [coachResult, setCoachResult] = useState<{ attemptId: string; nonce: number } | null>(null);
   useTitle(outline.data?.enrollment.courseTitle ?? '學習');
 
   if (!allowed) return <Forbidden />;
   if (!outline.data) return outline.loading ? <Spinner /> : <ErrorAlert error={outline.error} />;
   const o = outline.data;
 
+  const askCoach =
+    can(me, 'coach.interact_self') && me.licenseCapabilities.aiCoachAllowed ? (attemptId: string) => setCoachResult({ attemptId, nonce: Date.now() }) : undefined;
   const lessons = o.modules.flatMap((m) => m.lessons);
   const allActivities = lessons.flatMap((l) => l.activities);
   const titleOf = (id: string) => allActivities.find((a) => a.id === id)?.title;
@@ -88,7 +93,7 @@ export function LearnPage() {
 
         <div className="lesson-pane">
           {current ? (
-            <LessonView key={current.id} lesson={current} canLearn={o.enrollment.canLearn} onChanged={outline.reload} />
+            <LessonView key={current.id} lesson={current} canLearn={o.enrollment.canLearn} onChanged={outline.reload} onAskCoach={askCoach} />
           ) : (
             <section className="card">
               <p className="muted">這門課還沒有內容。</p>
@@ -96,7 +101,7 @@ export function LearnPage() {
           )}
         </div>
       </div>
-      <CoachPanel enrollmentId={enrollmentId} activityId={current?.activities[0]?.id} contextTitle={current?.title ?? null} />
+      <CoachPanel enrollmentId={enrollmentId} activityId={current?.activities[0]?.id} contextTitle={current?.title ?? null} resultRequest={coachResult} />
     </>
   );
 }
@@ -136,7 +141,9 @@ export function ProgressCard({ progress: p, time, titleOf }: { progress: Progres
   );
 }
 
-function LessonView({ lesson, canLearn, onChanged }: { lesson: Lesson; canLearn: boolean; onChanged(): void }) {
+type AskCoach = ((attemptId: string) => void) | undefined;
+
+function LessonView({ lesson, canLearn, onChanged, onAskCoach }: { lesson: Lesson; canLearn: boolean; onChanged(): void; onAskCoach: AskCoach }) {
   const byId = new Map<string, OutlineActivityDto>(lesson.activities.map((a) => [a.id, a]));
   const placed = new Set(lesson.contentBlocks.filter((b) => b.type === 'activity').map((b) => (b as { activityId: string }).activityId));
   const rest = lesson.activities.filter((a) => !placed.has(a.id));
@@ -144,13 +151,13 @@ function LessonView({ lesson, canLearn, onChanged }: { lesson: Lesson; canLearn:
     <section className="card lesson-content">
       <h2>{lesson.title}</h2>
       {lesson.contentBlocks.map((b, i) => (
-        <Block key={i} block={b} activity={b.type === 'activity' ? byId.get(b.activityId) : undefined} canLearn={canLearn} onChanged={onChanged} />
+        <Block key={i} block={b} activity={b.type === 'activity' ? byId.get(b.activityId) : undefined} canLearn={canLearn} onChanged={onChanged} onAskCoach={onAskCoach} />
       ))}
       {rest.length > 0 && (
         <>
           {lesson.contentBlocks.length > 0 && <h3>活動</h3>}
           {rest.map((a) => (
-            <ActivityPanel key={a.id} activity={a} canLearn={canLearn} onChanged={onChanged} />
+            <ActivityPanel key={a.id} activity={a} canLearn={canLearn} onChanged={onChanged} onAskCoach={onAskCoach} />
           ))}
         </>
       )}
@@ -159,7 +166,7 @@ function LessonView({ lesson, canLearn, onChanged }: { lesson: Lesson; canLearn:
   );
 }
 
-function Block(props: { block: LessonBlock; activity: OutlineActivityDto | undefined; canLearn: boolean; onChanged(): void }) {
+function Block(props: { block: LessonBlock; activity: OutlineActivityDto | undefined; canLearn: boolean; onChanged(): void; onAskCoach: AskCoach }) {
   const b = props.block;
   switch (b.type) {
     case 'richtext':
@@ -189,7 +196,7 @@ function Block(props: { block: LessonBlock; activity: OutlineActivityDto | undef
     case 'callout':
       return <Notice kind={b.variant === 'warning' ? 'warn' : b.variant === 'success' ? 'ok' : 'info'}>{b.body}</Notice>;
     case 'activity':
-      return props.activity ? <ActivityPanel activity={props.activity} canLearn={props.canLearn} onChanged={props.onChanged} /> : null;
+      return props.activity ? <ActivityPanel activity={props.activity} canLearn={props.canLearn} onChanged={props.onChanged} onAskCoach={props.onAskCoach} /> : null;
     case 'image':
     case 'video':
       return <p className="muted small">（{b.type === 'image' ? '圖片' : '影片'}素材將於素材管理上線後顯示）</p>;

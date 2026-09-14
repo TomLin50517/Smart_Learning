@@ -452,6 +452,27 @@ details.bulk > summary {
   background: var(--warn-bg);
   border-bottom: 2px solid var(--warn);
 }
+.stat-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 8px 0;
+}
+.stat {
+  min-width: 96px;
+  padding: 10px 14px;
+  background: var(--surface-2);
+  border-radius: var(--radius);
+}
+.stat-value {
+  font-size: 1.4rem;
+  font-weight: 600;
+}
+.coach-transcript {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
 .plain-list {
   margin: 0;
   padding: 0;
