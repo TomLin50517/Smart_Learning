@@ -93,6 +93,50 @@ export interface CitationSourceDto {
   truncatedAfter: boolean;
 }
 
+/**
+ * GET /courses/{id}/coach/usage：課程的匿名使用統計（SD §6.21、ARCH §14.5）。
+ * 最近 periodDays 天、不含教師測試。使用的學員數未達匿名門檻時，除了門檻外什麼都不提供（避免回推個人）；
+ * 各活動的數字也只列出達到門檻的活動。
+ */
+export interface CoachUsageDto {
+  periodDays: number;
+  threshold: number;
+  belowThreshold: boolean;
+  learners: number | null;
+  conversations: number | null;
+  questions: number | null;
+  /** 由作答結果觸發的對話數 */
+  resultTriggered: number | null;
+  statuses: Record<CoachAnswerStatus, number> | null;
+  /** 最常被引用的教材（前 5） */
+  topDocuments: { title: string; citations: number }[];
+  activities: { activityId: string; title: string; questions: number; learners: number }[];
+}
+
+/** 逐字稿清單：只列出「組織政策」與「對話建立時的戳印」都允許課程人員閱讀的對話（ADR-028） */
+export interface CoachTranscriptSummaryDto {
+  id: string;
+  learnerId: string;
+  learnerDisplayName: string;
+  activityTitle: string | null;
+  triggerType: 'learner_question' | 'result_trigger';
+  messageCount: number;
+  startedAt: string;
+  lastMessageAt: string | null;
+}
+
+export interface CoachTranscriptListDto {
+  /** 組織目前的政策 */
+  policy: 'aggregate_only' | 'course_staff';
+  data: CoachTranscriptSummaryDto[];
+  /** 不可閱讀的對話數（建立時承諾不公開，或組織已收回政策） */
+  hiddenCount: number;
+}
+
+export interface CoachTranscriptDto extends CoachTranscriptSummaryDto {
+  messages: CoachMessageDto[];
+}
+
 /** 組織的 AI 教練設定（org.settings） */
 export interface CoachSettingsDto {
   /** 組織可停用 AI 教練（預設啟用） */
