@@ -76,7 +76,20 @@ const schema = z.object({
   ELASTICSEARCH_API_KEY: z.string().optional().default(''),
   ELASTICSEARCH_USERNAME: z.string().optional().default(''),
   ELASTICSEARCH_PASSWORD: z.string().optional().default(''),
-  AI_PROVIDER: z.enum(['none', 'openai', 'azure_openai', 'internal']).default('none'),
+
+  // --- AI 教練（SD §10.5）：預設 none——資料出境須為刻意選擇（SA §22.1）。未設定時教練顯示暫時無法使用 ---
+  // anthropic：Claude（@anthropic-ai/sdk）；openai／azure_openai／internal：OpenAI 相容的 /chat/completions
+  AI_PROVIDER: z.enum(['none', 'anthropic', 'openai', 'azure_openai', 'internal']).default('none'),
+  /** 金鑰只放 .env；anthropic 也可改用 ANTHROPIC_API_KEY */
+  AI_API_KEY: z.string().optional().default(''),
+  ANTHROPIC_API_KEY: z.string().optional().default(''),
+  /** OpenAI 相容服務的網址（例如 https://gateway.example.com/v1）；anthropic 通常不用設定 */
+  AI_BASE_URL: z.string().optional().default(''),
+  /** 未設定時：anthropic 用 claude-opus-5；OpenAI 相容服務必填 */
+  AI_MODEL: z.string().optional().default(''),
+  /** Claude 的思考深度（low／medium／high）：教練問答以回應速度為重，預設 medium */
+  AI_EFFORT: z.enum(['low', 'medium', 'high']).default('medium'),
+  AI_TIMEOUT_MS: z.coerce.number().int().min(5_000).max(300_000).default(60_000),
   AI_DAILY_TOKEN_BUDGET_DEFAULT: z.coerce.number().int().positive().default(200_000),
 }).superRefine((v, ctx) => {
   // SMTP 設定一致性（所有環境）：設了主機就必須能寄出

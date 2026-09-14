@@ -2,6 +2,8 @@ export * from './license/compute-capabilities.js';
 export * from './completion/approvals.js';
 export * from './completion/evaluate.js';
 export * from './completion/validate-rule.js';
+export * from './coach/answer.js';
+export * from './coach/prompt.js';
 export * from './knowledge/chunk.js';
 export * from './knowledge/detect.js';
 export * from './knowledge/search.js';
