@@ -3,6 +3,7 @@ import type {
   AttemptStatusTarget,
   CapabilityName,
   CertificateStatus,
+  DocumentStatus,
   CoachKnowledgeScope,
   CoachLanguage,
   CoachResponseMode,
@@ -197,6 +198,52 @@ export const ROLE_LABELS: Record<OrgRole, string> = {
   learner: '學員',
   auditor: '稽核人員',
 };
+
+export const DOCUMENT_STATUS_LABELS: Record<DocumentStatus, string> = {
+  uploaded: '已上傳，等待處理',
+  scanning: '檢查檔案中',
+  rejected: '格式不符',
+  parsing: '擷取文字中',
+  chunking: '切分段落中',
+  indexing: '建立索引中',
+  ready: '可供教練引用',
+  failed: '處理失敗',
+  superseded: '已被新版取代',
+  retired: '已下架',
+};
+
+export const DOCUMENT_STATUS_BADGE: Record<DocumentStatus, string> = {
+  uploaded: 'badge-grace',
+  scanning: 'badge-grace',
+  rejected: 'badge-blocked',
+  parsing: 'badge-grace',
+  chunking: 'badge-grace',
+  indexing: 'badge-grace',
+  ready: 'badge-active',
+  failed: 'badge-blocked',
+  superseded: '',
+  retired: '',
+};
+
+/** 教材處理失敗的原因 */
+export function DOCUMENT_FAILURE_TEXT(reason: string): string {
+  if (reason.startsWith('parse_failed')) return '檔案無法解析（可能已損毀或加密），請確認檔案可以正常開啟後重新上傳';
+  return (
+    {
+      unsupported_type: '檔案內容與格式不符',
+      no_text: '檔案裡沒有可擷取的文字（掃描成圖片的 PDF 需要文字辨識，目前尚未支援）',
+      too_many_pages: '超過 2000 頁',
+      too_much_text: '文字量過大',
+    }[reason] ?? reason
+  );
+}
+
+/** 檔案大小 */
+export function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
 
 export const CERTIFICATE_STATUS_LABELS: Record<CertificateStatus, string> = {
   pending: '產生中',

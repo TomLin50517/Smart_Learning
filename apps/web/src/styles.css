@@ -272,6 +272,22 @@ details.bulk > summary {
   }
 }
 
+/* ---- 教材（SD §6.17） ------------------------------------------------------- */
+.doc-preview {
+  max-height: 50vh;
+  margin: 8px 0;
+  padding: 12px 14px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-sans);
+  font-size: 0.9rem;
+  line-height: 1.7;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
 /* ---- 組織品牌（SD §6.16） --------------------------------------------------- */
 [data-brand] {
   --brand: var(--org-brand, #1d4ed8);

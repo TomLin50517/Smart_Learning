@@ -63,6 +63,13 @@ const schema = z.object({
   /** 寄件者，例如 "Learning Platform <no-reply@example.com>" */
   SMTP_FROM: z.string().optional().default(''),
 
+  // --- 物件儲存（SD §5）：未設定 S3_ENDPOINT 時教材上傳與預覽回 503，其餘功能正常 --------
+  S3_ENDPOINT: z.string().optional().default(''),
+  S3_REGION: z.string().default('us-east-1'),
+  S3_BUCKET: z.string().min(3).default('iac-data'),
+  S3_ACCESS_KEY: z.string().optional().default(''),
+  S3_SECRET_KEY: z.string().optional().default(''),
+
   ELASTICSEARCH_URL: z.string().optional().default(''),
   AI_PROVIDER: z.enum(['none', 'openai', 'azure_openai', 'internal']).default('none'),
   AI_DAILY_TOKEN_BUDGET_DEFAULT: z.coerce.number().int().positive().default(200_000),
