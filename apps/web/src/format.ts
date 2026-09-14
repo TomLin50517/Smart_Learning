@@ -234,6 +234,8 @@ export function DOCUMENT_FAILURE_TEXT(reason: string): string {
       no_text: '檔案裡沒有可擷取的文字（掃描成圖片的 PDF 需要文字辨識，目前尚未支援）',
       too_many_pages: '超過 2000 頁',
       too_much_text: '文字量過大',
+      search_unavailable: '搜尋服務尚未啟用（Elasticsearch），啟用後請按「重試」',
+      index_failed: '建立索引失敗，請稍後按「重試」',
     }[reason] ?? reason
   );
 }

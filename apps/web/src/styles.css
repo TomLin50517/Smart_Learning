@@ -288,6 +288,19 @@ details.bulk > summary {
   border-radius: var(--radius);
 }
 
+.search-hits {
+  margin: 8px 0 0;
+  padding-left: 1.4em;
+}
+.search-hits li + li {
+  margin-top: 10px;
+}
+.search-snippet {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  color: var(--text-muted, inherit);
+}
+
 /* ---- 組織品牌（SD §6.16） --------------------------------------------------- */
 [data-brand] {
   --brand: var(--org-brand, #1d4ed8);
