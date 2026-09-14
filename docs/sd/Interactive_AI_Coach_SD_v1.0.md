@@ -2476,6 +2476,22 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 前端 | 課程頁「素材庫」卡片：上傳、縮圖、預覽（圖片／影片）、使用中的版本、改名、刪除（使用中停用）。版本編輯器：新增「圖片」「影片」區塊，以素材選擇器挑選並可直接上傳；圖片需替代文字（儲存前檢查）。影片活動的「影片來源」：素材庫／網址／在別處觀看。學習頁顯示真正的圖片（lazy）與影片 |
 | 未做 | 影片轉檔與縮圖、串流格式（HLS）、素材的組織層級共用、儲存用量上限 |
 
+## 6.24 選課碼、課程目錄、審核與學員名單匯出（v1.34）
+
+實作：`migrations/0023_enrollment_codes.sql`、`modules/enrollment/{domain/policy.ts,application/self-enrollment.service.ts,application/learner-export.service.ts,api/self-enrollment.controller.ts}`、`common/csv.ts`（自稽核模組移出共用）、`apps/web/src/pages/{enrollment-policy-card.tsx,learners-panel.tsx,MyCoursesPage.tsx}`。對應 SA UC-ENR-002（課程目錄）、UC-ENR-003（選課碼）、UC-ENR-004（審核）。
+
+| 項目 | 實作 |
+|---|---|
+| 政策 | `courses.enrollment_policy`（jsonb）：`joinBy`（assign 只由管理者指派，預設／code 選課碼／catalog 課程目錄）、`requireApproval`（assign 時固定 false）、`code`、`opensAt`／`closesAt`、`maxSeats`。`GET／PUT /courses/{id}/enrollment-policy`（enrollment.assign；寫入另需 configurationWriteAllowed，稽核 `course.enrollment_policy.updated`）。回應附 `seatsUsed`（未退選、未被拒的選課）與 `pending` |
+| 選課碼 | 伺服器產生 8 碼，字元集排除易混淆的 0／O、1／I（`ABCDEFGHJKLMNPQRSTUVWXYZ23456789`，`crypto.randomInt`）；DB 以 CHECK 固定格式、以 `(organization_id, code)` 部分唯一索引保證同組織不重複（T93～T94），衝突時在 SAVEPOINT 內換碼重試。`regenerateCode` 換新碼、改成其他加入方式時清除舊碼——舊碼立即失效。碼不是機密（要發給學員），照常記在稽核 |
+| 加入 | `POST /me/enrollments/join {code}`（輸入會去空白與連字號、轉大寫；只在目前所在組織內找）與 `POST /courses/{id}/join`（課程目錄）。權限 enrollment.self_enroll（self）＋授權 `maxActiveLearners`＋每人每分鐘 10 次，稽核 `enrollment.joined`。在交易中鎖課程列：找不到、加入方式不符 → `code_not_found`（選課碼；不透露課程存在）／404（目錄）；已封存、未發布、成員停用 → 422；已在課程中 → 200 `alreadyEnrolled`；期間外 `enrollment_closed`、額滿 `course_full`。綁定當下的已發布版本；`assigned_by` 為 NULL |
+| 名額 | 只限制學員自行加入與申請（包含待審核）；管理者指派、整班加入、批次匯入不受限（管理者自己決定）。授權的學員人數上限一律適用 |
+| 審核 | 需審核時建立 `pending`（`enroll_method = approval`、不寫學習事件、學員看得到「等待老師審核」）。`POST /enrollments/{id}/approve`（enrollment.approve：組織管理員、課程管理員）：鎖序先課程後選課，改綁「核准當下」的已發布版本、`enrolled_at = now()`、寫 `course.enrolled`（method approval）。`POST /enrollments/{id}/reject {reason?}` → `rejected`（原因只記稽核）；被拒後可再申請（唯一索引不含 rejected） |
+| 課程目錄 | `GET /me/catalog`：目前組織中 `joinBy = catalog`、已發布、未封存的課程，附本人的選課與 `availability`（open／not_yet／closed／full） |
+| 匯出 | `GET /courses/{id}/learners/export`（learning.result.read_all，稽核 `course.learners.exported` 含列數與篩選）：篩選同名單；欄位為學號、姓名、Email、班級（選課時）、狀態、加入方式、加入時間、版本、必修完成／總數、完成率、目前總分、最後學習、完成時間、期限，加上目前已發布版本各活動的最佳結果（分數，沒有分數時顯示結果）。台灣時間；UTF-8 BOM（Excel 直接開啟）；儲存格防公式注入；檔名只用 ASCII。超過 10,000 列 → 422 `export_too_many_rows`，不靜默截斷 |
+| 前端 | 課程頁「選課設定」卡片（加入方式、需審核、開放期間、名額、選課碼的複製與重新產生、待審核數）；學員名單的「核准／拒絕」與「匯出 CSV」（依目前篩選）；「我的課程」的選課碼輸入、可加入的課程清單、待審核的課程卡片 |
+| 未做 | 加入或審核結果的通知信（排在通知批次）、選課碼的 QR code、候補名單 |
+
 ---
 
 # 7. Frontend 設計
@@ -4484,3 +4500,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.31 | 2026-09-14 | 新增 §6.21：結果觸發教練（`/coach/from-result`、系統產生的問題、current_result 不含作答內容）、課程匿名統計（門檻 `derived.min_threshold`、各活動也受門檻）、逐字稿清單與閱讀（政策 × 戳印、hiddenCount、稽核帶 learner_id 且必須成功）、課程頁「AI 教練」卡片；無 migration | Software Designer |
 | v1.32 | 2026-09-14 | 新增 §6.22：組織 AI 金鑰與 LiteLLM gateway（`AI_PROVIDER=litellm`、AES-256-GCM 加密存放與 AAD、只有 app_api 可讀、只能寫入不能讀出、平台管理員設定、依金鑰更新時間快取供應商、用量標籤、預算用完→休息中、測試連線、學員畫面依原因隱藏或休息中）；新增 ADR-034；migration 0021 | Software Designer |
 | v1.33 | 2026-09-15 | 新增 §6.23 課程素材：`media_assets`（kind／MIME 相符、不存 SVG）、串流上傳與共用上傳模組、MP4／WebM 檔頭判斷、引用與 `usedBy`、使用中不可刪、發布檢查 C1_ASSET_MISSING 與影片活動 C5、內容端點的存取檢查與 Range／ETag／CSP、影片活動可用素材庫影片、前端素材庫與編輯器；migration 0022 | Software Designer |
+| v1.34 | 2026-09-15 | 新增 §6.24：選課政策（指派／選課碼／課程目錄、需審核、開放期間、名額）、8 碼選課碼（排除易混淆字元、同組織唯一、換碼即失效）、學員自行加入與申請、核准改綁當下版本、拒絕後可再申請、課程目錄、學員名單 CSV 匯出（各活動最佳結果、BOM、防公式注入、上限 10,000 列）；`common/csv.ts` 共用；migration 0023 | Software Designer |

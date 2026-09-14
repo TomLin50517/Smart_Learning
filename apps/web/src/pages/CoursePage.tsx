@@ -19,6 +19,7 @@ import { COURSE_STATUS_LABELS, formatDateTime, NAVIGATION_MODE_LABELS, ROLE_LABE
 import { useApi, useTitle } from '../hooks';
 import { CertificatesPanel } from './certificates-panel';
 import { CoachInsightsPanel } from './coach-insights-panel';
+import { EnrollmentPolicyCard } from './enrollment-policy-card';
 import { MediaLibraryCard } from './media-library';
 import { LearnersPanel } from './learners-panel';
 
@@ -169,6 +170,7 @@ export function CoursePage() {
 
       {can(me, 'course.version.read') && <MediaLibraryCard courseId={c.id} />}
       {can(me, 'course.staff.assign') && <StaffPanel courseId={c.id} />}
+      {can(me, 'enrollment.assign') && <EnrollmentPolicyCard course={c} />}
       {can(me, 'learning.result.read_all') && <LearnersPanel course={c} />}
       {can(me, 'certificate.read_all') && <CertificatesPanel course={c} />}
       {(can(me, 'coach.usage_stats.read') || can(me, 'coach.conversation.read_course')) && <CoachInsightsPanel course={c} />}

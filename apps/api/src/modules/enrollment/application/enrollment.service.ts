@@ -82,7 +82,7 @@ export class EnrollmentService {
     }
   }
 
-  private async get(id: string, q: Q = this.db): Promise<EnrollmentDto> {
+  async get(id: string, q: Q = this.db): Promise<EnrollmentDto> {
     const r = await q.query<EnrollmentRow>(`SELECT ${BASE_COLUMNS} FROM enrollments e JOIN course_versions cv ON cv.id = e.course_version_id WHERE e.id = $1`, [id]);
     if (!r.rows[0]) throw new DomainError('NOT_FOUND');
     return toEnrollment(r.rows[0]);
@@ -119,8 +119,9 @@ export class EnrollmentService {
   }
 
   /**
-   * 在呼叫端的交易內建立選課（單筆指派與批次匯入共用）。呼叫端須已鎖定課程列並確認已發布、未封存。
+   * 在呼叫端的交易內建立選課（單筆指派、批次匯入、學員自行加入共用）。呼叫端須已鎖定課程列並確認已發布、未封存。
    * 已有未退課的選課 → created: false；尚無學員角色者自動補上。
+   * 待審核（pending）的選課不寫學習事件——核准時才是學習歷程的起點。
    */
   async enrollInTx(
     c: pg.PoolClient,
@@ -128,8 +129,10 @@ export class EnrollmentService {
     userId: string,
     actorId: string,
     dueDate: string | null = null,
-    method: 'assign' | 'bulk_import' = 'assign',
+    method: 'assign' | 'bulk_import' | 'code' | 'catalog' = 'assign',
+    opts: { status?: 'active' | 'pending'; enrollMethod?: EnrollMethod; assignedBy?: string | null } = {},
   ): Promise<{ enrollmentId: string; created: boolean; learnerRoleGranted: boolean }> {
+    const status = opts.status ?? 'active';
     const dup = await c.query<{ id: string }>(`SELECT id FROM enrollments WHERE course_id = $1 AND user_id = $2 AND status NOT IN ('withdrawn', 'rejected')`, [
       course.id,
       userId,
@@ -144,15 +147,15 @@ export class EnrollmentService {
     const e = await c.query<{ id: string }>(
       // cohort_label：選課當下所在的使用中班級（快照，SD §6.15）
       `INSERT INTO enrollments (organization_id, course_id, course_version_id, user_id, status, enroll_method, assigned_by, due_date, cohort_label)
-       VALUES ($1, $2, $3, $4, 'active', 'assign', $5, $6,
+       VALUES ($1, $2, $3, $4, $7::enrollment_status, $8, $5, $6,
                (SELECT string_agg(co.name, '、' ORDER BY co.name) FROM cohort_members cm JOIN cohorts co ON co.id = cm.cohort_id
                  WHERE cm.organization_id = $1 AND cm.user_id = $4 AND co.status = 'active'))
        RETURNING id`,
-      [course.organizationId, course.id, course.publishedVersionId, userId, actorId, dueDate],
+      [course.organizationId, course.id, course.publishedVersionId, userId, opts.assignedBy === undefined ? actorId : opts.assignedBy, dueDate, status, opts.enrollMethod ?? 'assign'],
     );
     const enrollmentId = e.rows[0]!.id;
     // 學習歷程的起點（SA §10.2）；同一交易——批次匯入的預覽復原時一起復原
-    await this.events.recordTx(c, enrollmentId, [{ eventType: 'course.enrolled', payload: { method, assigned_by: actorId } }]);
+    if (status === 'active') await this.events.recordTx(c, enrollmentId, [{ eventType: 'course.enrolled', payload: { method, assigned_by: opts.assignedBy === undefined ? actorId : opts.assignedBy } }]);
     return { enrollmentId, created: true, learnerRoleGranted: (grant.rowCount ?? 0) > 0 };
   }
 

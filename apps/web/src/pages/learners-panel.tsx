@@ -1,7 +1,7 @@
 import { ENROLLMENT_STATUSES, type CohortDto, type CourseDetailDto, type CourseLearnerDto, type EnrollmentStatus, type ImportReportDto } from '@iac/contracts';
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
-import { api } from '../api/client';
+import { api, apiDownload, saveBlob } from '../api/client';
 import { can } from '../auth/permissions';
 import { useMe } from '../auth/session';
 import { ErrorAlert, Field, Notice } from '../components/ui';
@@ -42,6 +42,7 @@ export function LearnersPanel({ course }: { course: CourseDetailDto }) {
   const canAssign = can(me, 'enrollment.assign');
   const canSuspend = can(me, 'enrollment.suspend');
   const canWithdraw = can(me, 'enrollment.withdraw');
+  const canApprove = can(me, 'enrollment.approve');
   const assignable = !!course.publishedVersion && course.status !== 'archived';
   const filtered = statusFilter !== '' || cohortFilter !== '' || search !== '';
 
@@ -67,8 +68,23 @@ export function LearnersPanel({ course }: { course: CourseDetailDto }) {
     }
   }
 
-  async function change(l: CourseLearnerDto, action: 'suspend' | 'resume' | 'withdraw') {
+  async function exportCsv() {
+    setError(null);
+    try {
+      const f = new URLSearchParams();
+      if (statusFilter) f.set('status', statusFilter);
+      if (cohortFilter) f.set('cohort', cohortFilter);
+      if (search) f.set('q', search);
+      const { blob, filename } = await apiDownload('GET', `/api/courses/${course.id}/learners/export?${f.toString()}`);
+      saveBlob(blob, filename);
+    } catch (err) {
+      setError(err);
+    }
+  }
+
+  async function change(l: CourseLearnerDto, action: 'suspend' | 'resume' | 'withdraw' | 'approve' | 'reject') {
     if (action === 'withdraw' && !window.confirm(`確定讓「${l.displayName}」退課？學習紀錄會保留，之後可以重新指派。`)) return;
+    if (action === 'reject' && !window.confirm(`拒絕「${l.displayName}」的加入申請？學員之後可以再申請。`)) return;
     setError(null);
     setNotice(null);
     try {
@@ -137,6 +153,9 @@ export function LearnersPanel({ course }: { course: CourseDetailDto }) {
             </option>
           ))}
         </select>
+        <button type="button" className="btn btn-small" onClick={() => void exportCsv()} title="依目前的篩選條件匯出（Excel 可直接開啟）">
+          匯出 CSV
+        </button>
       </div>
       <div className="table-wrap">
         <table className="table">
@@ -184,6 +203,16 @@ export function LearnersPanel({ course }: { course: CourseDetailDto }) {
                 <td>{formatDate(l.dueDate)}</td>
                 <td className="actions">
                   <div className="row-actions">
+                    {canApprove && l.status === 'pending' && (
+                      <>
+                        <button type="button" className="btn btn-small btn-primary" onClick={() => void change(l, 'approve')}>
+                          核准
+                        </button>
+                        <button type="button" className="btn btn-small" onClick={() => void change(l, 'reject')}>
+                          拒絕
+                        </button>
+                      </>
+                    )}
                     {canSuspend && (l.status === 'active' || l.status === 'reopened') && (
                       <button type="button" className="btn btn-small" onClick={() => void change(l, 'suspend')}>
                         暫停
