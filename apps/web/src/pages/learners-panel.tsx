@@ -43,6 +43,7 @@ export function LearnersPanel({ course }: { course: CourseDetailDto }) {
   const canSuspend = can(me, 'enrollment.suspend');
   const canWithdraw = can(me, 'enrollment.withdraw');
   const canApprove = can(me, 'enrollment.approve');
+  const canReopen = can(me, 'enrollment.reopen');
   const assignable = !!course.publishedVersion && course.status !== 'archived';
   const filtered = statusFilter !== '' || cohortFilter !== '' || search !== '';
 
@@ -82,9 +83,14 @@ export function LearnersPanel({ course }: { course: CourseDetailDto }) {
     }
   }
 
-  async function change(l: CourseLearnerDto, action: 'suspend' | 'resume' | 'withdraw' | 'approve' | 'reject') {
+  async function change(l: CourseLearnerDto, action: 'suspend' | 'resume' | 'withdraw' | 'approve' | 'reject' | 'reopen') {
     if (action === 'withdraw' && !window.confirm(`確定讓「${l.displayName}」退課？學習紀錄會保留，之後可以重新指派。`)) return;
     if (action === 'reject' && !window.confirm(`拒絕「${l.displayName}」的加入申請？學員之後可以再申請。`)) return;
+    if (
+      action === 'reopen' &&
+      !window.confirm(`重新開啟「${l.displayName}」的課程？成績照舊，學員可以繼續練習；要指定重修範圍請到學員的學習狀況頁。`)
+    )
+      return;
     setError(null);
     setNotice(null);
     try {
@@ -221,6 +227,11 @@ export function LearnersPanel({ course }: { course: CourseDetailDto }) {
                     {canSuspend && l.status === 'suspended' && (
                       <button type="button" className="btn btn-small" onClick={() => void change(l, 'resume')}>
                         恢復
+                      </button>
+                    )}
+                    {canReopen && l.status === 'completed' && (
+                      <button type="button" className="btn btn-small" onClick={() => void change(l, 'reopen')}>
+                        重新開啟
                       </button>
                     )}
                     {canWithdraw && ['pending', 'active', 'suspended', 'reopened'].includes(l.status) && (

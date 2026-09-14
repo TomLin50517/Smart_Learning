@@ -88,6 +88,8 @@ describe('learning events (learner side)', () => {
     expect(timelineText(item('course.enrolled', { method: 'bulk_import' }, null))).toBe('加入課程（批次匯入）');
     expect(timelineText(item('completion.approved', { approverRoles: 'instructor,org_admin' }, null))).toBe('完成條件已由講師、組織管理員核可');
     expect(timelineText(item('certificate.issued', {}, null))).toBe('📜 取得結業證書');
+    expect(timelineText(item('course.reopened', { via: 'relearning', reason: '再練習一次' }, null))).toBe('老師指派重修：再練習一次');
+    expect(timelineText(item('course.reopened', { via: 'reopen' }, null))).toBe('課程重新開啟，可以繼續練習');
     expect(timelineText(item('something.new'))).toBe('something.new');
     expect([0, 0.4, 59.9, 120, 125].map(formatMinutes)).toEqual(['0 分鐘', '不到 1 分鐘', '59 分鐘', '2 小時', '2 小時 5 分鐘']);
   });

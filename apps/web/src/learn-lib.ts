@@ -167,7 +167,18 @@ export function timelineText(x: TimelineItemDto): string {
       return '📜 取得結業證書';
     case 'certificate.revoked':
       return '證書已被撤銷';
+    case 'course.reopened':
+      if (d['via'] === 'reopen') return '課程重新開啟，可以繼續練習';
+      return `老師指派重修${d['reason'] ? `：${String(d['reason'])}` : ''}`;
     default:
       return x.eventType;
   }
+}
+
+const RELEARNING_SCOPE_LABELS: Record<string, string> = { module: '單元', lesson: '課節', activity: '活動' };
+
+/** 重修範圍的說明（SD §6.25）：整門課／單元「…」／課節「…」／活動「…」 */
+export function relearningScopeText(r: { scopeType: string; scopeTitle: string | null }): string {
+  if (r.scopeType === 'course') return '整門課';
+  return `${RELEARNING_SCOPE_LABELS[r.scopeType] ?? r.scopeType}「${r.scopeTitle ?? '已不在此版本'}」`;
 }
