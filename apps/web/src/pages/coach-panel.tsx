@@ -1,4 +1,4 @@
-import { COACH_QUESTION_MAX, COACH_TEXT, type CoachAnswerDto, type CoachAvailabilityDto, type CoachConversationDto, type CoachStreamEvent, type CoachUnavailableReason } from '@iac/contracts';
+import { COACH_HIDDEN_REASONS, COACH_QUESTION_MAX, COACH_TEXT, type CoachAnswerDto, type CoachAvailabilityDto, type CoachConversationDto, type CoachStreamEvent, type CoachUnavailableReason } from '@iac/contracts';
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { api } from '../api/client';
 import { can } from '../auth/permissions';
@@ -14,6 +14,8 @@ const REASON_TEXT: Record<CoachUnavailableReason, string> = {
   disabled_by_organization: '你的組織已停用 AI 教練。',
   not_licensed: '目前的授權不包含 AI 教練。',
   enrollment_inactive: '目前的選課狀態無法使用 AI 教練。',
+  organization_key_missing: '組織尚未設定 AI 金鑰。',
+  quota_exceeded: '今日的 AI 使用額度已用完，明天會自動恢復。',
 };
 
 const STAGE_TEXT = { retrieving: '正在查找教材…', composing: '正在撰寫回答…', validating: '正在檢查回答與出處…' } as const;
@@ -194,7 +196,7 @@ function CoachDrawer(props: { enrollmentId: string; activityId: string | undefin
         <ErrorAlert error={av.error} />
         {av.data && !available && (
           <div className="alert alert-info">
-            <strong>{COACH_TEXT.unavailable}</strong>
+            <strong>{!licensed || (av.data.reason && COACH_HIDDEN_REASONS.includes(av.data.reason)) ? COACH_TEXT.unavailable : COACH_TEXT.resting}</strong>
             <div>{!licensed ? REASON_TEXT.not_licensed : av.data.reason ? REASON_TEXT[av.data.reason] : ''}</div>
             <div className="small">課程學習不受影響。</div>
           </div>

@@ -1,4 +1,4 @@
-import type { LearnerOutlineDto, LearningTimeDto, LessonBlock, OutlineActivityDto, ProgressDto } from '@iac/contracts';
+import { COACH_HIDDEN_REASONS, type CoachAvailabilityDto, type LearnerOutlineDto, type LearningTimeDto, type LessonBlock, type OutlineActivityDto, type ProgressDto } from '@iac/contracts';
 import { useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { can } from '../auth/permissions';
@@ -18,6 +18,10 @@ export function LearnPage() {
   const me = useMe();
   const allowed = can(me, 'learning.result.read_self');
   const outline = useApi<LearnerOutlineDto>(allowed ? `/api/enrollments/${enrollmentId}/outline` : null);
+  // AI 教練：設定面無法使用（沒金鑰、組織停用、授權不含…）時學員畫面直接隱藏；暫時性的保留並顯示「休息中」（SD §6.22）
+  const coachAv = useApi<CoachAvailabilityDto>(
+    can(me, 'coach.conversation.read_self') && me.licenseCapabilities.aiCoachAllowed ? `/api/enrollments/${enrollmentId}/coach` : null,
+  );
   const [params, setParams] = useSearchParams();
   // 結果旁「請 AI 教練看看」：交給右側教練對話處理（nonce 讓同一個作答可再按一次）
   const [coachResult, setCoachResult] = useState<{ attemptId: string; nonce: number } | null>(null);
@@ -27,8 +31,10 @@ export function LearnPage() {
   if (!outline.data) return outline.loading ? <Spinner /> : <ErrorAlert error={outline.error} />;
   const o = outline.data;
 
+  const coachReason = coachAv.data?.reason ?? null;
+  const coachShown = !!coachAv.data && !(coachReason && COACH_HIDDEN_REASONS.includes(coachReason));
   const askCoach =
-    can(me, 'coach.interact_self') && me.licenseCapabilities.aiCoachAllowed ? (attemptId: string) => setCoachResult({ attemptId, nonce: Date.now() }) : undefined;
+    coachShown && coachAv.data?.available && can(me, 'coach.interact_self') ? (attemptId: string) => setCoachResult({ attemptId, nonce: Date.now() }) : undefined;
   const lessons = o.modules.flatMap((m) => m.lessons);
   const allActivities = lessons.flatMap((l) => l.activities);
   const titleOf = (id: string) => allActivities.find((a) => a.id === id)?.title;
@@ -101,7 +107,7 @@ export function LearnPage() {
           )}
         </div>
       </div>
-      <CoachPanel enrollmentId={enrollmentId} activityId={current?.activities[0]?.id} contextTitle={current?.title ?? null} resultRequest={coachResult} />
+      {coachShown && <CoachPanel enrollmentId={enrollmentId} activityId={current?.activities[0]?.id} contextTitle={current?.title ?? null} resultRequest={coachResult} />}
     </>
   );
 }

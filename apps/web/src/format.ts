@@ -303,6 +303,8 @@ const ACTION_LABELS: Record<string, string> = {
   'coach.transcript.read': '檢視 AI 教練對話紀錄',
   'coach.transcript_policy.updated': '變更對話可見性政策',
   'org.coach_settings.updated': '更新組織 AI 教練設定',
+  'org.ai_credential.updated': '設定組織 AI 金鑰',
+  'org.ai_credential.removed': '移除組織 AI 金鑰',
   'knowledge.document.uploaded': '上傳教材',
   'knowledge.document.version_added': '上傳教材新版',
   'knowledge.document.deleted': '刪除教材',

@@ -4,6 +4,7 @@ import { api } from '../api/client';
 import { can } from '../auth/permissions';
 import { useMe } from '../auth/session';
 import { ErrorAlert, Forbidden, Notice, PageHeader, Spinner } from '../components/ui';
+import { formatDateTime } from '../format';
 import { useApi, useTitle } from '../hooks';
 
 /**
@@ -58,8 +59,24 @@ export function CoachSettingsPage() {
         <ul className="plain-list">
           <li>
             AI 服務：{d.providerConfigured ? <span className="badge badge-active">已設定</span> : <span className="badge badge-grace">尚未設定</span>}
-            {!d.providerConfigured && <div className="muted small">由平台管理員在伺服器的環境設定中設定（AI_PROVIDER 與金鑰）；設定前學員會看到「AI 教練暫時無法使用」，其他功能不受影響。</div>}
+            {!d.providerConfigured && <div className="muted small">由平台管理員設定；設定前學員看不到 AI 教練，其他功能不受影響。</div>}
           </li>
+          {d.aiKey.mode === 'organization' && (
+            <li>
+              AI 金鑰：
+              {d.aiKey.configured ? (
+                <>
+                  <span className="badge badge-active">已設定</span>{' '}
+                  <span className="small">
+                    代號 {d.aiKey.alias}・更新於 {formatDateTime(d.aiKey.updatedAt)}
+                  </span>
+                </>
+              ) : (
+                <span className="badge badge-grace">尚未設定</span>
+              )}
+              {!d.aiKey.configured && <div className="muted small">金鑰由平台管理員設定；設定前學員看不到 AI 教練，其他功能不受影響。</div>}
+            </li>
+          )}
           <li>
             授權：{me.licenseCapabilities.aiCoachAllowed ? <span className="badge badge-active">包含 AI 教練</span> : <span className="badge badge-grace">不包含 AI 教練</span>}
           </li>
