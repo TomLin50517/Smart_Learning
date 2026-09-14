@@ -279,7 +279,8 @@ export class LearningService {
       if (!evaluator) throw rejected('activity_not_supported');
 
       let effective = input;
-      if (activity.activity_type === 'video' && typeof activity.config['video_url'] === 'string' && activity.config['video_url']) {
+      const source = activity.config['video_url'] || activity.config['video_asset_id'];
+      if (activity.activity_type === 'video' && typeof source === 'string' && source) {
         const before = await this.engine.progress(a.enrollment_id, c);
         effective = { watchedRatio: before.ctx.videoWatchRatios[a.activity_id] ?? 0 };
       }

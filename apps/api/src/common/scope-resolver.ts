@@ -19,7 +19,7 @@ const MISSING: ResolvedResource = { exists: false, organizationId: null, courseI
 export class ScopeResolver {
   constructor(@Inject(DB_API) private readonly db: pg.Pool) {}
 
-  async resolve(resource: 'organization' | 'course' | 'course_version' | 'enrollment' | 'certificate' | 'document', id: string | undefined): Promise<ResolvedResource> {
+  async resolve(resource: 'organization' | 'course' | 'course_version' | 'enrollment' | 'certificate' | 'document' | 'asset', id: string | undefined): Promise<ResolvedResource> {
     if (!id || !UUID.test(id)) return MISSING;
 
     switch (resource) {
@@ -45,6 +45,10 @@ export class ScopeResolver {
       case 'document': {
         // 教材屬於課程；course_id 為 NULL（組織共用）時只有組織層級的授權能涵蓋
         const r = await this.db.query<{ organization_id: string; course_id: string | null }>(`SELECT organization_id, course_id FROM source_documents WHERE id = $1`, [id]);
+        return r.rows[0] ? { exists: true, organizationId: r.rows[0].organization_id, courseId: r.rows[0].course_id } : MISSING;
+      }
+      case 'asset': {
+        const r = await this.db.query<{ organization_id: string; course_id: string }>(`SELECT organization_id, course_id FROM media_assets WHERE id = $1`, [id]);
         return r.rows[0] ? { exists: true, organizationId: r.rows[0].organization_id, courseId: r.rows[0].course_id } : MISSING;
       }
       case 'certificate': {

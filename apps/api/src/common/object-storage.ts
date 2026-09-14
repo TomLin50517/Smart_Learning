@@ -1,4 +1,4 @@
-import type { Readable } from 'node:stream';
+import { Readable } from 'node:stream';
 import {
   CopyObjectCommand,
   CreateBucketCommand,
@@ -20,6 +20,8 @@ import { DomainError } from './domain-error.js';
 export interface ObjectStorage {
   put(key: string, body: Buffer | Readable, opts: { contentType: string; contentLength?: number }): Promise<void>;
   get(key: string): Promise<Buffer>;
+  /** 讀取 [start, end]（含兩端）的串流——影片的 Range 請求 */
+  openRange(key: string, start: number, end: number): Promise<Readable>;
   copy(from: string, to: string): Promise<void>;
   delete(key: string): Promise<void>;
   deletePrefix(prefix: string): Promise<void>;
@@ -63,6 +65,12 @@ export class S3ObjectStorage implements ObjectStorage {
     return Buffer.from(await r.Body!.transformToByteArray());
   }
 
+  async openRange(key: string, start: number, end: number): Promise<Readable> {
+    const r = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key, Range: `bytes=${start}-${end}` }));
+    // Node 環境下 Body 是 Readable
+    return r.Body as Readable;
+  }
+
   async copy(from: string, to: string): Promise<void> {
     await this.client.send(new CopyObjectCommand({ Bucket: this.bucket, Key: to, CopySource: `${this.bucket}/${from}` }));
   }
@@ -91,6 +99,9 @@ export class UnavailableObjectStorage implements ObjectStorage {
     this.fail();
   }
   get(): Promise<Buffer> {
+    this.fail();
+  }
+  openRange(): Promise<Readable> {
     this.fail();
   }
   copy(): Promise<void> {
@@ -123,6 +134,10 @@ export class MemoryObjectStorage implements ObjectStorage {
     const o = this.objects.get(key);
     if (!o) throw new Error(`NoSuchKey: ${key}`);
     return o.body;
+  }
+
+  async openRange(key: string, start: number, end: number): Promise<Readable> {
+    return Readable.from([(await this.get(key)).subarray(start, end + 1)]);
   }
 
   async copy(from: string, to: string): Promise<void> {

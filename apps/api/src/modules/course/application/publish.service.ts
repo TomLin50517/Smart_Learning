@@ -139,8 +139,30 @@ export class CoursePublishService {
       errors.push({ check: 'C4', code: 'C4_POLICY_INVALID', path: 'coachPolicy', message: 'AI 教練設定有不在允許範圍內的值，請重新儲存教練設定' });
     }
 
+    // C1 素材引用（SD §6.23）：圖片／影片區塊（含影片封面）與影片活動引用的素材必須是本課程的素材，且類型相符
+    const assets = await q.query<{ id: string; kind: string }>(`SELECT id, kind FROM media_assets WHERE course_id = $1`, [v.courseId]);
+    const assetKind = new Map(assets.rows.map((x) => [x.id, x.kind]));
+    v.modules.forEach((m, mi) =>
+      m.lessons.forEach((l, li) =>
+        l.contentBlocks.forEach((b, bi) => {
+          const refs: [string, 'image' | 'video'][] =
+            b.type === 'image' ? [[b.assetId, 'image']] : b.type === 'video' ? [[b.assetId, 'video'], ...(b.poster ? [[b.poster, 'image'] as [string, 'image']] : [])] : [];
+          for (const [id, kind] of refs) {
+            if (assetKind.get(id) !== kind) {
+              errors.push({
+                check: 'C1',
+                code: 'C1_ASSET_MISSING',
+                path: `modules.${mi}.lessons.${li}.contentBlocks.${bi}`,
+                message: `課節「${l.title}」的${kind === 'image' ? '圖片' : '影片'}不存在，或不是本課程的素材`,
+              });
+            }
+          }
+        }),
+      ),
+    );
+
     // C5 互動活動的設定是否符合元件 schema
-    const defIds = [...new Set(v.modules.flatMap((m) => m.lessons.flatMap((l) => l.activities.map((a) => a.interactiveDefinitionId))).filter((x): x is string => !!x))];
+    const defIds =[...new Set(v.modules.flatMap((m) => m.lessons.flatMap((l) => l.activities.map((a) => a.interactiveDefinitionId))).filter((x): x is string => !!x))];
     const defs = await q.query<{ id: string; display_name: string; is_enabled: boolean; config_schema: unknown; answer_key_schema: unknown }>(
       `SELECT id, display_name, is_enabled, config_schema, answer_key_schema FROM interactive_definitions WHERE id = ANY($1::uuid[])`,
       [defIds],
@@ -159,9 +181,17 @@ export class CoursePublishService {
           schemas = { name: '選擇題', defId: null, config: CHOICE_QUIZ_CONFIG_SCHEMA, answerKey: CHOICE_QUIZ_ANSWER_KEY_SCHEMA };
         } else if (a.activityType === 'video') {
           // 網址會直接放進學員的播放器：只接受 http(s)。json-schema-lite 不支援 pattern，在此以固定規則檢查
-          const url = (a.config as Record<string, unknown> | null)?.['video_url'];
+          const cfg = (a.config as Record<string, unknown> | null) ?? {};
+          const url = cfg['video_url'];
+          const assetId = cfg['video_asset_id'];
           if (typeof url === 'string' && !/^https?:\/\/\S+$/i.test(url)) {
             errors.push({ check: 'C5', code: 'C5_CONFIG_INVALID', path: `${base}.config`, message: `影片「${a.title}」的影片網址必須以 http:// 或 https:// 開頭`, targetId: a.id });
+          }
+          if (url && assetId) {
+            errors.push({ check: 'C5', code: 'C5_CONFIG_INVALID', path: `${base}.config`, message: `影片「${a.title}」的影片網址與素材庫影片只能擇一`, targetId: a.id });
+          }
+          if (typeof assetId === 'string' && assetKind.get(assetId) !== 'video') {
+            errors.push({ check: 'C5', code: 'C5_CONFIG_INVALID', path: `${base}.config`, message: `影片「${a.title}」選擇的影片不存在，或不是本課程的素材`, targetId: a.id });
           }
           schemas = { name: '影片', defId: null, config: VIDEO_CONFIG_SCHEMA, answerKey: null };
         } else return;
