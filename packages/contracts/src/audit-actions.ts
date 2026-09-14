@@ -61,6 +61,8 @@ export const AUDIT_ACTIONS = [
   'coach.transcript.read',
   'coach.transcript_policy.updated',
   'org.coach_settings.updated',
+  'org.ai_credential.updated',
+  'org.ai_credential.removed',
   'certificate.issued',
   'certificate.revoked',
   'license.activated',

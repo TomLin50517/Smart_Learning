@@ -11,6 +11,7 @@ export const COACH_TEXT = {
   insufficientEvidence: '教材中沒有足夠的資料回答這個問題。可以換個方式描述，或詢問教師。',
   outOfScope: '這個問題超出本課程的範圍，建議詢問教師。',
   unavailable: 'AI 教練暫時無法使用',
+  resting: 'AI 教練休息中，請稍後再試。',
 } as const;
 
 export const COACH_QUESTION_MAX = 2000;
@@ -60,7 +61,47 @@ export interface CoachAnswerDto {
 }
 
 /** 教練目前能不能用；不能用時前端顯示「AI 教練暫時無法使用」，其他功能照常 */
-export type CoachUnavailableReason = 'provider_unavailable' | 'search_unavailable' | 'disabled_by_organization' | 'not_licensed' | 'enrollment_inactive';
+export type CoachUnavailableReason =
+  | 'provider_unavailable'
+  | 'search_unavailable'
+  | 'disabled_by_organization'
+  | 'not_licensed'
+  | 'enrollment_inactive'
+  | 'organization_key_missing'
+  | 'quota_exceeded';
+
+/**
+ * 設定面的原因：學員畫面直接隱藏教練功能（學員無能為力，顯示只會造成疑問）；
+ * 其餘（今日額度用完等）是暫時性的，保留按鈕並顯示「AI 教練休息中」。老師與管理員一律看得到原因。
+ */
+export const COACH_HIDDEN_REASONS: readonly CoachUnavailableReason[] = [
+  'provider_unavailable',
+  'search_unavailable',
+  'disabled_by_organization',
+  'not_licensed',
+  'enrollment_inactive',
+  'organization_key_missing',
+];
+
+/** 組織 AI 金鑰的狀態（金鑰本身永遠不回傳） */
+export interface OrgAiCredentialDto {
+  /** organization：每個組織用自己的 gateway 金鑰（AI_PROVIDER=litellm）；platform：平台共用設定 */
+  mode: 'platform' | 'organization';
+  configured: boolean;
+  /** 金鑰代號（例如 LiteLLM 的 key alias） */
+  alias: string | null;
+  updatedAt: string | null;
+  updatedBy: string | null;
+  /** 伺服器已設定加密主金鑰（AI_KEY_ENCRYPTION_KEY）；未設定時無法儲存金鑰 */
+  encryptionReady: boolean;
+}
+
+/** POST …/ai-credential/test：驗證 gateway、金鑰與模型（不產生回答、不耗用 token） */
+export interface AiConnectionTestDto {
+  ok: boolean;
+  reason: 'ok' | 'unauthorized' | 'model_not_available' | 'unreachable' | 'quota' | 'error' | 'provider_unavailable' | 'organization_key_missing';
+  latencyMs: number | null;
+}
 
 export interface CoachAvailabilityDto {
   available: boolean;
@@ -143,8 +184,10 @@ export interface CoachSettingsDto {
   enabled: boolean;
   /** 課程人員能否讀學員的對話逐字稿；只影響之後建立的對話（ADR-028） */
   transcriptVisibility: 'aggregate_only' | 'course_staff';
-  /** 平台是否已設定 AI 服務（唯讀） */
+  /** 這個組織目前可以呼叫 AI 服務（平台已設定，且組織金鑰模式下已有金鑰） */
   providerConfigured: boolean;
+  /** 組織 AI 金鑰（只有代號與更新時間） */
+  aiKey: Pick<OrgAiCredentialDto, 'mode' | 'configured' | 'alias' | 'updatedAt'>;
   /** 今日已用 token／每日上限 */
   tokensUsedToday: number;
   dailyTokenBudget: number;
