@@ -2444,6 +2444,22 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 稽核 | 清單與逐字稿都寫 `coach.transcript.read`（AUDIT_MUST_SUCCEED：寫不進去請求就失敗，ADR-028 條件 3）；逐字稿的 metadata 帶 `learner_id`，學員在自己的「帳號活動」看得到誰讀了他的對話 |
 | 前端（課程人員） | 課程頁「AI 教練」卡片：使用情形（統計數字、狀態分布、教材不足比例 ≥ 20% 時提示補充教材、常引用教材、各活動表）；「學員對話紀錄」按了才載入（避免每次開課程頁都留稽核），提醒會留紀錄；可開啟逐字稿（對話框） |
 
+## 6.22 組織 AI 金鑰與 LiteLLM gateway（v1.32）
+
+實作：`migrations/0021_org_ai_credentials.sql`、`common/secret-box.ts`、`modules/ai-coach/{application/ai-credentials.service.ts,infrastructure/provider-resolver.ts,api/ai-credential.controller.ts}`、`apps/web/src/pages/OrgAiKeyPage.tsx`。需求：AI 服務經客戶的 LiteLLM gateway，每個組織一把虛擬金鑰（金鑰由客戶另一套系統發放，模型備援也由它負責）。
+
+| 項目 | 實作 |
+|---|---|
+| 模式 | `AI_PROVIDER=litellm`：經 LiteLLM 的 OpenAI 相容介面（`AI_BASE_URL` 含 `/v1`、`AI_MODEL` 為 LiteLLM 上的模型名稱），**沒有平台金鑰**，每個組織用自己的金鑰；沒有金鑰的組織不能用教練（不借用他人金鑰，帳才分得清楚）。其他模式（anthropic／openai…）維持平台層級設定 |
+| 金鑰存放（ADR-034） | `organization_ai_credentials`：AES-256-GCM 密文＋IV＋驗證碼，主金鑰只在環境變數 `AI_KEY_ENCRYPTION_KEY`（32 bytes base64，litellm 模式在正式環境為必填）；AAD＝組織 id，密文搬到別的組織解不開。`key_alias` 為金鑰代號，`key_version` 供主金鑰輪替。資料庫層：只有 app_api 能讀寫，app_coach／app_worker／app_readonly 一律 REVOKE（DB 不變條件 T86～T88） |
+| 權限 | 讀狀態：org.read（組織管理員看得到「已設定、代號、更新時間、更新者」）；設定、更換、移除、測試連線：`platform.ai_provider.write`（平台管理員）。**任何回應與稽核都不含金鑰**（稽核 `org.ai_credential.updated`／`.removed` 只記代號與是否設定） |
+| 呼叫 | `LlmProviderResolver.forOrganization`：依金鑰的更新時間快取已解密的供應商，更換金鑰立即生效；解不開（主金鑰被換）→ 視為平台設定問題並記錯誤。虛擬金鑰放 `Authorization: Bearer`；請求附 `metadata.tags = [course:<id>, purpose:coach_answer]` 供 gateway 報表拆分，**不含學員資訊**；不送任何備援參數（LiteLLM 的 `fallbacks` 語意不同，備援由 gateway 負責）。直連 Anthropic 時才啟用 Anthropic 的伺服器端備援 |
+| 額度 | gateway 回 429，或 400 且訊息含 budget（LiteLLM `budget_exceeded`）→ 錯誤類別 `quota`：回答改為「AI 教練休息中，請稍後再試。」，用量記錄 `status = error, error_code = quota`。平台每日 token 上限仍保留 |
+| 測試連線 | `POST /organizations/{id}/ai-credential/test`：OpenAI 相容呼叫 `GET /models`（確認金鑰有效、可使用 `AI_MODEL`），Claude 呼叫 Models API——不產生回答、不耗用 token |
+| 顯示規則 | 教練可用狀態分兩類（`COACH_HIDDEN_REASONS`）：設定面（平台未設定、組織沒有金鑰、組織停用、授權不含、搜尋未啟用、選課狀態）→ **學員畫面直接隱藏**「問教練」與「請 AI 教練看看」；暫時性（今日額度用完）→ 保留按鈕、顯示「AI 教練休息中」。學習頁一載入就查可用狀態。老師（教練測試卡片的錯誤訊息）與管理員（「AI 教練設定」頁的金鑰狀態）一律看得到原因 |
+| 前端 | 平台管理員：組織管理 → 「AI 金鑰」頁（狀態、代號、測試連線、設定／更換（密碼欄、儲存後無法再檢視）、移除）；組織管理員：「AI 教練設定」頁顯示金鑰狀態與代號 |
+| 未做 | 由客戶的金鑰管理系統自動送入金鑰（機器對機器介面）；主金鑰輪替工具 |
+
 ---
 
 # 7. Frontend 設計
@@ -4391,6 +4407,13 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 - **決策**：新增 `POST /organizations/{id}/admin-recovery`，沿用 `platform.organization.create`（與建立組織時指定首位管理員為同等權力，因此不新增權限碼）。**只在組織沒有任何啟用中的 org_admin 時可用**；稽核記在該組織之下並標註 `admin_recovery`。
 - **後果**：平台管理員的日常權限不變——只要組織還有一位可用的管理員，這個端點就無法使用，不構成繞過組織分權的後門。復原後的第一件事應由新管理員檢視稽核紀錄。
 
+### ADR-034：各組織的 AI gateway 金鑰加密存於資料庫（ADR-031 的例外）
+
+- **狀態**：Accepted（v1.32）
+- **脈絡**：需求方的 AI 服務經 LiteLLM gateway，每個組織一把虛擬金鑰（由客戶另一套系統發放，模型備援也由它負責）。組織數量會增加、金鑰會更換，放環境變數需要每次改設定並重啟，也無法讓平台管理員在系統內管理。ADR-031 已預告：UI 化的機密須先有加密儲存機制，且不授權給 app_coach／app_readonly。
+- **決策**：新增 `organization_ai_credentials`，金鑰以 AES-256-GCM 加密（主金鑰 `AI_KEY_ENCRYPTION_KEY` 只在環境變數，AAD＝組織 id，保留 `key_version` 供輪替）；只有 app_api 能讀寫，其他三個資料庫角色一律 REVOKE。金鑰只能寫入：API 回應、畫面、稽核、log 都不含金鑰；只由平台管理員（`platform.ai_provider.write`）設定，組織管理員只看得到代號。沒有金鑰的組織不能使用教練，不借用平台金鑰。
+- **後果**：資料庫備份外流時金鑰仍受主金鑰保護——主金鑰必須與備份分開保管；主金鑰遺失或更換，已存的金鑰全部解不開，須重新設定（尚無輪替工具，列為後續）。API 行程在記憶體中持有已解密的金鑰（依更新時間快取），與原本持有環境變數金鑰的風險相同。其他平台機密（SMTP、資料庫密碼、`SESSION_SECRET`）仍依 ADR-031 放環境變數。
+
 ---
 
 # 16. 實作順序建議（對應 ARCH §30 Phase）
@@ -4443,3 +4466,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.29 | 2026-09-14 | Phase 3-3 AI 教練問答：新增 §6.19（Claude／OpenAI 相容供應商與伺服器端備援、prepare／answer 流程、去識別化、提示詞防偽造、V0～V9 驗證與修正／拒絕、SSE B+、保存與用量、對話與引用原文、教師測試、組織設定、限流）；無 migration | Software Designer |
 | v1.30 | 2026-09-14 | Phase 3-4 AI 教練介面：新增 §6.20（fetch 讀 SSE、學習頁「問教練」對話、引用標記與原文檢視、無法使用的原因說明、教師測試卡片、組織 AI 教練設定頁） | Software Designer |
 | v1.31 | 2026-09-14 | 新增 §6.21：結果觸發教練（`/coach/from-result`、系統產生的問題、current_result 不含作答內容）、課程匿名統計（門檻 `derived.min_threshold`、各活動也受門檻）、逐字稿清單與閱讀（政策 × 戳印、hiddenCount、稽核帶 learner_id 且必須成功）、課程頁「AI 教練」卡片；無 migration | Software Designer |
+| v1.32 | 2026-09-14 | 新增 §6.22：組織 AI 金鑰與 LiteLLM gateway（`AI_PROVIDER=litellm`、AES-256-GCM 加密存放與 AAD、只有 app_api 可讀、只能寫入不能讀出、平台管理員設定、依金鑰更新時間快取供應商、用量標籤、預算用完→休息中、測試連線、學員畫面依原因隱藏或休息中）；新增 ADR-034；migration 0021 | Software Designer |
