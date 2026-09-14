@@ -1,11 +1,12 @@
 import { Body, Controller, Delete, Get, HttpCode, Param, Post, Query, Req } from '@nestjs/common';
-import type { CourseKnowledgeDto, DocumentVersionDto, DocumentViewDto } from '@iac/contracts';
+import type { CourseKnowledgeDto, DocumentVersionDto, DocumentViewDto, KnowledgeSearchResultDto } from '@iac/contracts';
 import type { FastifyRequest } from 'fastify';
 import { Readable } from 'node:stream';
 import { z } from 'zod';
 import type { AuthUser } from '../../../common/context.js';
 import { Audit, CurrentUser, RequireCapability, RequirePermission } from '../../../common/decorators.js';
 import { DomainError } from '../../../common/domain-error.js';
+import { RateLimit } from '../../../common/rate-limit.js';
 import { parseInput } from '../../../common/validation.js';
 import { KnowledgeService } from '../application/knowledge.service.js';
 
@@ -16,6 +17,7 @@ const UploadQuery = z.object({
 const VersionQuery = z.object({ filename: z.string().trim().min(1).max(255) });
 const ViewQuery = z.object({ page: z.coerce.number().int().min(1).max(100_000).optional() });
 const Bind = z.strictObject({ documentVersionId: z.guid() });
+const Search = z.strictObject({ query: z.string().trim().min(1).max(500) });
 
 /** 檔案以 application/octet-stream 傳送原始內容（bootstrap 註冊的串流 parser） */
 function fileBody(req: FastifyRequest): Readable {
@@ -33,6 +35,15 @@ export class KnowledgeController {
   @RequirePermission('knowledge.document.read', { scope: 'course', resource: 'course_version' })
   list(@Param('id') id: string): Promise<CourseKnowledgeDto> {
     return this.knowledge.list(id);
+  }
+
+  /** openapi: searchCourseKnowledge——課程人員測試檢索（與 AI 教練同一個檢索器與範圍） */
+  @Post('course-versions/:id/knowledge/search')
+  @RequirePermission('knowledge.document.read', { scope: 'course', resource: 'course_version' })
+  @RateLimit([{ name: 'knowledgesearch', by: 'user', limit: 60, windowSec: 60 }])
+  @HttpCode(200)
+  search(@Param('id') id: string, @Body() body: unknown): Promise<KnowledgeSearchResultDto> {
+    return this.knowledge.search(id, parseInput(Search, body).query);
   }
 
   /** openapi: uploadKnowledgeDocument——只限草稿版本；解析與索引為背景工作 */

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
+import { DOCUMENT_SYNC_JOB } from '@iac/contracts';
 import { validateRule, type RuleStructure } from '@iac/domain';
 import {
   COURSE_LIMITS,
@@ -27,6 +28,7 @@ import { z } from 'zod';
 import type { GrantScopes } from '../../../common/authz.js';
 import { DB_API } from '../../../common/database.module.js';
 import { DomainError } from '../../../common/domain-error.js';
+import { enqueueJobTx } from '../../../common/job-queue.js';
 import { remapIds } from '../domain/remap-ids.js';
 import type { DraftPatchT, ModuleInputT } from './course-inputs.js';
 
@@ -458,11 +460,22 @@ export class CourseService {
            FROM coach_policies WHERE course_version_id = $1`,
         [sourceId, id],
       );
-      await c.query(
+      const bound = await c.query<{ document_version_id: string; organization_id: string }>(
         `INSERT INTO knowledge_bindings (course_version_id, document_version_id, binding_type, priority)
-         SELECT $2, document_version_id, binding_type, priority FROM knowledge_bindings WHERE course_version_id = $1`,
+         SELECT $2, document_version_id, binding_type, priority FROM knowledge_bindings WHERE course_version_id = $1
+         RETURNING document_version_id, (SELECT organization_id FROM course_versions WHERE id = $2) AS organization_id`,
         [sourceId, id],
       );
+      // 新版本也要能檢索到這些教材：讓索引的 course_version_ids 加上新版本（SD §4.5、§6.18）
+      if (bound.rowCount) {
+        await enqueueJobTx(c, {
+          jobType: DOCUMENT_SYNC_JOB.type,
+          queue: DOCUMENT_SYNC_JOB.queue,
+          maxAttempts: DOCUMENT_SYNC_JOB.maxAttempts,
+          payload: { documentVersionIds: bound.rows.map((b) => b.document_version_id) },
+          organizationId: bound.rows[0]!.organization_id,
+        });
+      }
       return id;
     });
     return this.getVersion(newId);
