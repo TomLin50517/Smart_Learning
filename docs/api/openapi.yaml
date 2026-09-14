@@ -2141,22 +2141,28 @@ paths:
       x-required-permission: enrollment.relearning.assign
       x-audit: enrollment.relearning.assigned
       description: |
-        歷史 attempt/result 完整保留，以新 attempt 疊加（INV-6、AC-LRN-004）。
+        指派重修（UC-ENR-007、SD §6.25）。歷史 attempt/result 完整保留，以新 attempt 疊加（INV-6、AC-LRN-004）：
+        範圍內的活動只採計指派之後的結果與影片觀看；`reset_counter`（預設）時作答次數從這次重修重新計算。
+        選課須為 active／reopened／completed（否則 422 `invalid_transition`）；已完成者轉為 reopened——此時會重新計入授權的學員數
+        （已達上限 → 403 `LICENSE_LIMIT_EXCEEDED`，同一人另有進行中的課程時不會多算）。範圍須在學員綁定的版本中且含活動
+        （否則 422 `scope_not_in_version`）；`course` 不可帶 `scopeId`。範圍內進行中的作答作廢；有 `dueDate` 時更新選課期限。
+        寫入 `course.reopened` 學習事件（含原因，學員看得到）並更新進度快照；是否再次完成等學員送出作答時判定。
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [scopeType, reason]
               properties:
                 scopeType: { type: string, enum: [course, module, lesson, activity] }
-                scopeId:   { type: string, format: uuid }
-                reason:    { type: string }
-                dueDate:   { type: string, format: date-time }
-                newAttemptPolicy: { type: string, enum: [append, reset_counter] }
+                scopeId:   { type: [string, 'null'], format: uuid }
+                reason:    { type: string, minLength: 1, maxLength: 500 }
+                dueDate:   { type: [string, 'null'], format: date-time }
+                newAttemptPolicy: { type: string, enum: [reset_counter, append], default: reset_counter }
       responses:
-        '201': { description: 已指派 }
+        '201': { description: RelearningResultDto }
 
   /enrollments/{id}/reopen:
     parameters: [{ $ref: '#/components/parameters/ResourceId' }]
@@ -2165,8 +2171,20 @@ paths:
       tags: [Enrollment]
       x-required-permission: enrollment.reopen
       x-audit: enrollment.reopened
+      description: |
+        重新開啟已完成的課程（UC-ENR-009）：completed → reopened，成績照舊，學員可以繼續練習；再次符合完成條件時回到
+        completed（證書不重發）。會重新計入授權的學員數（已達上限 → 403 `LICENSE_LIMIT_EXCEEDED`）。不是已完成 → 422
+        `invalid_transition`。選填 `reason` 記在稽核與學習歷程。
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                reason: { type: string, maxLength: 500 }
       responses:
-        '200': { description: OK }
+        '200': { description: EnrollmentDto }
 
   /enrollments/{id}/timeline:
     parameters: [{ $ref: '#/components/parameters/ResourceId' }]
