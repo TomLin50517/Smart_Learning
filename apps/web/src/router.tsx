@@ -12,6 +12,7 @@ import { JobsPage } from './pages/JobsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { LicensePage } from './pages/LicensePage';
 import { MyCertificatePage, MyCertificatesPage } from './pages/CertificatesPage';
+import { CoachSettingsPage } from './pages/CoachSettingsPage';
 import { CohortsPage } from './pages/CohortsPage';
 import { LearnerDetailPage } from './pages/LearnerDetailPage';
 import { VerifyPage } from './pages/VerifyPage';
@@ -59,6 +60,7 @@ export const router = createBrowserRouter([
       { path: 'org/users', element: <OrgMembersPage /> },
       { path: 'org/cohorts', element: <CohortsPage /> },
       { path: 'org/branding', element: <BrandingPage /> },
+      { path: 'org/coach', element: <CoachSettingsPage /> },
       // Platform Admin
       { path: 'platform/organizations', element: <OrganizationsPage /> },
       { path: 'platform/organizations/:orgId/users', element: <OrgMembersPage /> },

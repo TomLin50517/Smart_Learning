@@ -7,6 +7,7 @@ import { ACTIVITY_STATE_ICONS, ENROLLMENT_STATUS_LABELS, formatDateTime, formatM
 import { useApi, useTitle } from '../hooks';
 import { blockingReasonText, parseMarkdownLite } from '../learn-lib';
 import { ActivityPanel } from './activity-panel';
+import { CoachPanel } from './coach-panel';
 
 type Lesson = LearnerOutlineDto['modules'][number]['lessons'][number];
 
@@ -95,6 +96,7 @@ export function LearnPage() {
           )}
         </div>
       </div>
+      <CoachPanel enrollmentId={enrollmentId} activityId={current?.activities[0]?.id} contextTitle={current?.title ?? null} />
     </>
   );
 }

@@ -298,7 +298,167 @@ details.bulk > summary {
 .search-snippet {
   margin: 4px 0 0;
   white-space: pre-wrap;
-  color: var(--text-muted, inherit);
+  color: var(--muted);
+}
+
+/* ---- AI 教練（SD §6.20） ---------------------------------------------------- */
+.coach-fab {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 30;
+  padding: 10px 18px;
+  border-radius: var(--radius-pill);
+  background: var(--brand);
+  color: var(--brand-contrast);
+  border-color: var(--brand);
+  box-shadow: var(--shadow);
+}
+.coach-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  width: min(440px, 100vw);
+  background: var(--surface);
+  color: var(--text);
+  border-left: 1px solid var(--border);
+  box-shadow: -4px 0 16px rgb(16 24 40 / 12%);
+}
+.coach-head,
+.modal-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.coach-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 16px;
+  overflow-y: auto;
+}
+.coach-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+}
+.coach-foot textarea {
+  width: 100%;
+  min-height: 60px;
+  resize: vertical;
+}
+.chat-user {
+  align-self: flex-end;
+  max-width: 85%;
+  margin: 6px 0;
+  padding: 8px 12px;
+  margin-left: auto;
+  white-space: pre-wrap;
+  background: var(--info-bg);
+  border-radius: var(--radius-lg);
+}
+.chat-assistant {
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border-radius: var(--radius-lg);
+}
+.chat-notice {
+  background: var(--warn-bg);
+}
+.coach-answer {
+  margin: 0 0 6px;
+}
+.coach-stage {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.cite-chip {
+  display: inline-block;
+  min-width: 1.4em;
+  margin: 0 2px;
+  padding: 0 5px;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  vertical-align: super;
+  color: var(--brand);
+  background: transparent;
+  border: 1px solid var(--brand);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+.coach-sources {
+  margin: 6px 0;
+  padding-left: 1.3em;
+  font-size: 0.85rem;
+}
+.link-button {
+  padding: 0;
+  font: inherit;
+  color: var(--brand);
+  text-align: left;
+  text-decoration: underline;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.follow-ups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 6px;
+}
+.coach-test-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgb(0 0 0 / 40%);
+}
+.modal {
+  display: flex;
+  flex-direction: column;
+  width: min(720px, 100%);
+  max-height: 85vh;
+  color: var(--text);
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+}
+.modal-body {
+  padding: 12px 16px;
+  overflow: auto;
+}
+.source-text mark {
+  padding: 1px 0;
+  color: inherit;
+  background: var(--warn-bg);
+  border-bottom: 2px solid var(--warn);
+}
+.plain-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.plain-list li + li {
+  margin-top: 10px;
 }
 
 /* ---- 組織品牌（SD §6.16） --------------------------------------------------- */

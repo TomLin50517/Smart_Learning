@@ -18,6 +18,7 @@ import { useMe } from '../auth/session';
 import { ErrorAlert, Field, Forbidden, Notice, PageHeader, Spinner } from '../components/ui';
 import { ACTIVITY_TYPE_LABELS, NAVIGATION_MODE_LABELS, VERSION_STATUS_LABELS } from '../format';
 import { useApi, useTitle } from '../hooks';
+import { CoachTestCard } from './coach-test-card';
 import { KnowledgePanel } from './knowledge-panel';
 import { PublishPanel } from './publish-panel';
 import { CoachPolicyCard, CompletionRulesCard } from './version-settings';
@@ -287,6 +288,7 @@ export function VersionEditorPage() {
       {can(me, 'knowledge.document.read') && (
         <KnowledgePanel versionId={v.id} editable={v.editable && can(me, 'knowledge.document.write') && me.licenseCapabilities.authoringAllowed} />
       )}
+      {can(me, 'coach.interact_test') && <CoachTestCard versionId={v.id} />}
 
       {(v.status === 'draft' || v.status === 'review') && can(me, 'course.version.validate') && (
         <PublishPanel
