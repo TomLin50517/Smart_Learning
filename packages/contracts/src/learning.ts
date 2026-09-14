@@ -2,7 +2,7 @@
 
 import type { ApproverRole, BlockingReason, RuleTraceEntry, Tri } from './completion.js';
 import type { ActivityType, LessonBlock, NavigationMode } from './course.js';
-import type { EnrollmentStatus } from './enrollment.js';
+import type { EnrollmentDto, EnrollmentStatus } from './enrollment.js';
 
 export const RESULT_STATUSES = ['passed', 'completed', 'needs_improvement', 'failed'] as const;
 export type ResultStatus = (typeof RESULT_STATUSES)[number];
@@ -127,6 +127,38 @@ export interface OutlineActivityDto {
   maxAttempts: number | null;
   /** 影片活動的觀看比例（0～1）；非影片為 null */
   watchedRatio: number | null;
+  /** 在目前的重修範圍內、且重修之後尚未完成（SD §6.25） */
+  inRelearning: boolean;
+}
+
+// ---- 重修（SA UC-ENR-007、SD §6.25） ------------------------------------------------------
+
+export const RELEARNING_SCOPES = ['course', 'module', 'lesson', 'activity'] as const;
+export type RelearningScope = (typeof RELEARNING_SCOPES)[number];
+/** reset_counter：作答次數從這次重修重新計算（預設）；append：沿用已用的次數 */
+export const NEW_ATTEMPT_POLICIES = ['reset_counter', 'append'] as const;
+export type NewAttemptPolicy = (typeof NEW_ATTEMPT_POLICIES)[number];
+
+/** 重修指派：範圍內的活動只採計指派之後的結果；歷史作答與結果完整保留（INV-6） */
+export interface RelearningDto {
+  id: string;
+  enrollmentId: string;
+  scopeType: RelearningScope;
+  /** course 為 null */
+  scopeId: string | null;
+  /** 單元／課節／活動名稱；course 為 null */
+  scopeTitle: string | null;
+  reason: string;
+  dueDate: string | null;
+  newAttemptPolicy: NewAttemptPolicy;
+  assignedAt: string;
+  assignedByName: string;
+}
+
+/** POST /enrollments/{id}/relearning */
+export interface RelearningResultDto {
+  relearning: RelearningDto;
+  enrollment: EnrollmentDto;
 }
 
 /** 有效學習時間（SD §6.12）：相鄰學習事件的間隔加總，離開超過 5 分鐘的間隔不計 */
@@ -149,11 +181,15 @@ export interface LearnerOutlineDto {
   }[];
   progress: ProgressDto;
   time: LearningTimeDto;
+  /** 進行中的重修（最新一筆指派，且範圍內還有未完成的活動）；沒有則為 null */
+  relearning: RelearningDto | null;
 }
 
 /** GET /enrollments/{id}/progress：課程人員檢視單一學員（大綱＋學員資料） */
 export interface LearnerProgressDto extends LearnerOutlineDto {
   learner: { id: string; displayName: string; email: string; memberNo: string | null; cohortLabel: string | null };
+  /** 所有重修指派（新到舊） */
+  relearnings: RelearningDto[];
   /** 人工核可（SD §6.14）：完成條件要求的核可者角色與已有的核可 */
   approval: {
     required: ApproverRole[];

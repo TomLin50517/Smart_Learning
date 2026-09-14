@@ -113,12 +113,14 @@ export class LearningService {
     const given = await this.db.query<{ approver_role: string; approved_at: Date; note: string | null; display_name: string }>(
       `SELECT ca.approver_role, ca.approved_at, ca.note, u.display_name
          FROM completion_approvals ca JOIN users u ON u.id = ca.approved_by
-        WHERE ca.enrollment_id = $1 ORDER BY ca.approved_at`,
-      [enrollmentId],
+        WHERE ca.enrollment_id = $1 AND ($2::timestamptz IS NULL OR ca.approved_at >= $2::timestamptz) ORDER BY ca.approved_at`,
+      // 整門課重修之前的核可不再計入（與完成判定一致）
+      [enrollmentId, p.relearning.courseCutoffAt],
     );
     return {
       ...this.buildOutline(p, x.title, x.version_no),
       learner: { id: x.user_id, displayName: x.display_name, email: x.email, memberNo: x.member_no, cohortLabel: x.cohort_label },
+      relearnings: p.relearning.assignments,
       approval: {
         required: manualApprovalRoles(p.rule?.rule),
         given: given.rows.map((g) => ({ approverRole: g.approver_role, approverName: g.display_name, approvedAt: g.approved_at.toISOString(), note: g.note })),
@@ -129,6 +131,7 @@ export class LearningService {
   private buildOutline(p: EnrollmentProgress, courseTitle: string, versionNo: number): LearnerOutlineDto {
     const ev = this.engine.evaluate(p);
     const av = this.availability(p);
+    const learnable = LEARNABLE_STATUSES.includes(p.enrollment.status);
     const stateOf = (id: string): OutlineActivityState => {
       const best = p.ctx.bestResults[id];
       if (best && DONE.has(best.status)) return 'completed';
@@ -136,6 +139,10 @@ export class LearningService {
       if (p.attempts[id]?.inProgressId) return 'in_progress';
       return best ? 'attempted' : 'available';
     };
+    // 進行中的重修（SD §6.25）：最新一筆指派，且它涵蓋的活動還有未完成的
+    const latest = p.relearning.assignments[0];
+    const relearning =
+      learnable && latest && Object.entries(p.relearning.byActivity).some(([aid, rid]) => rid === latest.id && stateOf(aid) !== 'completed') ? latest : null;
     return {
       enrollment: {
         id: p.enrollment.id,
@@ -171,6 +178,7 @@ export class LearningService {
               attempts: p.attempts[a.id]?.used ?? 0,
               maxAttempts: a.maxAttempts,
               watchedRatio: a.activityType === 'video' ? p.ctx.videoWatchRatios[a.id] ?? 0 : null,
+              inRelearning: learnable && !!p.relearning.byActivity[a.id] && state !== 'completed',
             };
           }),
         })),
@@ -184,6 +192,7 @@ export class LearningService {
         blockingReasons: ev.blockingReasons,
       },
       time: toLearningTime(p),
+      relearning,
     };
   }
 
@@ -235,12 +244,13 @@ export class LearningService {
         [enrollmentId, activityId],
       );
       const r = await c.query<{ id: string; attempt_no: number }>(
-        `INSERT INTO learning_attempts (organization_id, enrollment_id, activity_id, attempt_no)
+        // relearning_assignment_id：此活動目前生效的重修（reset_counter 以此計算重修後的作答次數，SD §6.25）
+        `INSERT INTO learning_attempts (organization_id, enrollment_id, activity_id, attempt_no, relearning_assignment_id)
          SELECT e.organization_id, e.id, $2,
-                COALESCE((SELECT max(attempt_no) FROM learning_attempts WHERE enrollment_id = e.id AND activity_id = $2), 0) + 1
+                COALESCE((SELECT max(attempt_no) FROM learning_attempts WHERE enrollment_id = e.id AND activity_id = $2), 0) + 1, $3
            FROM enrollments e WHERE e.id = $1
          RETURNING id, attempt_no`,
-        [enrollmentId, activityId],
+        [enrollmentId, activityId, progress.relearning.byActivity[activityId] ?? null],
       );
       await c.query(`UPDATE enrollments SET started_at = COALESCE(started_at, now()) WHERE id = $1`, [enrollmentId]);
       const { id, attempt_no: attemptNo } = r.rows[0]!;
@@ -278,10 +288,11 @@ export class LearningService {
       const evaluator = resolveEvaluator(activity.activity_type, activity.server_evaluator);
       if (!evaluator) throw rejected('activity_not_supported');
 
+      // 送出前的進度：影片觀看比例的佐證、是否已完成過（重修後只看重修之後的結果）
+      const before = await this.engine.progress(a.enrollment_id, c);
       let effective = input;
       const source = activity.config['video_url'] || activity.config['video_asset_id'];
       if (activity.activity_type === 'video' && typeof source === 'string' && source) {
-        const before = await this.engine.progress(a.enrollment_id, c);
         effective = { watchedRatio: before.ctx.videoWatchRatios[a.activity_id] ?? 0 };
       }
       const problems = evaluator.validateInput(effective, activity.config);
@@ -295,10 +306,7 @@ export class LearningService {
       const maxScore = Number(activity.max_score);
       const out = evaluator.evaluate(effective, { config: activity.config, answerKey: activity.answer_key, maxScore });
 
-      const wasDone = await c.query(`SELECT 1 FROM learning_results WHERE enrollment_id = $1 AND activity_id = $2 AND status IN ('passed', 'completed') LIMIT 1`, [
-        a.enrollment_id,
-        a.activity_id,
-      ]);
+      const wasDone = DONE.has(before.ctx.bestResults[a.activity_id]?.status ?? '');
       const lr = await c.query<{ evaluated_at: Date }>(
         `INSERT INTO learning_results (organization_id, attempt_id, enrollment_id, activity_id, status, score, max_score, issues, feedback_data, evaluator)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10) RETURNING evaluated_at`,
@@ -311,7 +319,7 @@ export class LearningService {
         { eventType: 'activity.submitted', ...ids, payload: { input_hash: createHash('sha256').update(canonicalJson(input ?? null)).digest('hex') } },
         { eventType: 'activity.result_ready', ...ids, payload: { status: out.status, score: out.score, max_score: maxScore } },
       ];
-      if (DONE.has(out.status) && !wasDone.rowCount) events.push({ eventType: 'activity.completed', ...ids });
+      if (DONE.has(out.status) && !wasDone) events.push({ eventType: 'activity.completed', ...ids });
       const completionChanged = await this.settle(c, a.enrollment_id, events);
 
       return {

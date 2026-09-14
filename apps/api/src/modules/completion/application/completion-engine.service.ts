@@ -1,10 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
-import type { CompletionEvaluationDto, EnrollmentStatus, LessonBlock, NavigationMode, ResultStatus, RuleNode } from '@iac/contracts';
+import type { CompletionEvaluationDto, EnrollmentStatus, LessonBlock, NavigationMode, NewAttemptPolicy, RelearningDto, RelearningScope, ResultStatus, RuleNode } from '@iac/contracts';
 import { evaluateRule, learningSeconds, videoWatchRatio, type CompletionContext, type Range, type VideoEvidence } from '@iac/domain';
 import pg from 'pg';
 import { DB_API } from '../../../common/database.module.js';
 import { DomainError } from '../../../common/domain-error.js';
 import type { CompletionEngine, EnrollmentProgress, ProgressActivity } from '../completion.contracts.js';
+import { courseCutoff, coveringRelearning, type RelearningCover } from '../domain/relearning.js';
 
 type Q = pg.Pool | pg.PoolClient;
 
@@ -19,6 +20,7 @@ const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : u
 /**
  * 完成判定引擎（UC-ENR-008、SA SEQ-03、SD §3、§6.9、§6.12）。deterministic、零 LLM（INV-4）：
  * 讀課程結構、作答結果與學習事件建構 CompletionContext（唯一碰 DB 的步驟），評估交給 @iac/domain 的純函式。
+ * 重修（SD §6.25）：範圍內的活動只採計指派之後的結果與影片事件；歷史不刪不改（INV-6），只是不再計入。
  */
 @Injectable()
 export class CompletionEngineService implements CompletionEngine {
@@ -77,19 +79,31 @@ export class CompletionEngineService implements CompletionEngine {
       [v],
     );
     const rule = await q.query<{ grammar_version: string; rule_json: RuleNode }>(`SELECT grammar_version, rule_json FROM completion_rule_sets WHERE course_version_id = $1`, [v]);
-    const results = await q.query<{ activity_id: string; status: ResultStatus; score: string | null; feedback_data: Record<string, unknown> }>(
-      `SELECT activity_id, status, score, feedback_data FROM learning_results WHERE enrollment_id = $1`,
+    const results = await q.query<{ activity_id: string; status: ResultStatus; score: string | null; feedback_data: Record<string, unknown>; evaluated_at: Date }>(
+      `SELECT activity_id, status, score, feedback_data, evaluated_at FROM learning_results WHERE enrollment_id = $1`,
       [enrollmentId],
     );
-    const attempts = await q.query<{ activity_id: string; used: number; in_progress: string | null }>(
-      `SELECT activity_id,
-              count(*) FILTER (WHERE status IN ('submitted', 'scored'))::int AS used,
-              (array_agg(id) FILTER (WHERE status = 'in_progress'))[1] AS in_progress
-         FROM learning_attempts WHERE enrollment_id = $1 GROUP BY activity_id`,
+    const attempts = await q.query<{ id: string; activity_id: string; status: string; relearning_assignment_id: string | null }>(
+      `SELECT id, activity_id, status, relearning_assignment_id FROM learning_attempts WHERE enrollment_id = $1 ORDER BY attempt_no`,
       [enrollmentId],
     );
     const approvals = await q.query<{ approver_role: string; approved_at: Date }>(
       `SELECT approver_role, approved_at FROM completion_approvals WHERE enrollment_id = $1 ORDER BY approved_at`,
+      [enrollmentId],
+    );
+    const rel = await q.query<{
+      id: string;
+      scope_type: RelearningScope;
+      scope_id: string | null;
+      reason: string;
+      due_date: Date | null;
+      new_attempt_policy: NewAttemptPolicy;
+      created_at: Date;
+      assigned_by_name: string;
+    }>(
+      `SELECT ra.id, ra.scope_type, ra.scope_id, ra.reason, ra.due_date, ra.new_attempt_policy, ra.created_at, u.display_name AS assigned_by_name
+         FROM relearning_assignments ra JOIN users u ON u.id = ra.assigned_by
+        WHERE ra.enrollment_id = $1 ORDER BY ra.created_at DESC, ra.id DESC`,
       [enrollmentId],
     );
     // 學習事件：時間點算學習時間；影片事件的 payload 算觀看比例（SD §6.12）
@@ -103,6 +117,16 @@ export class CompletionEngineService implements CompletionEngine {
     const lessonMod = new Map(lessons.rows.map((l) => [l.id, l.module_id]));
     const lessonReq = new Map(lessons.rows.map((l) => [l.id, l.is_required]));
     const actsByLesson = new Map<string, ProgressActivity[]>();
+
+    // 重修：每個活動目前生效的指派（SD §6.25）
+    const covers: RelearningCover[] = rel.rows.map((r) => ({ id: r.id, scopeType: r.scope_type, scopeId: r.scope_id, at: r.created_at.getTime(), policy: r.new_attempt_policy }));
+    const cover = coveringRelearning(
+      covers,
+      acts.rows.map((a) => ({ id: a.id, lessonId: a.lesson_id, moduleId: lessonMod.get(a.lesson_id)! })),
+    );
+    const cutoffOf = (activityId: string | null) => (activityId ? cover[activityId]?.at ?? null : null);
+    const courseAt = courseCutoff(covers);
+
     const ctx: CompletionContext = {
       requiredActivityIds: [],
       activities: {},
@@ -110,8 +134,10 @@ export class CompletionEngineService implements CompletionEngine {
       attemptCounts: {},
       videoWatchRatios: {},
       timeSpentMinutes: { course: 0, byModule: {} },
-      // 人工核可（SD §6.14）
-      manualApprovals: approvals.rows.map((a) => ({ approverRole: a.approver_role, approvedAt: a.approved_at.toISOString() })),
+      // 人工核可（SD §6.14）；整門課重修之前的核可不再計入
+      manualApprovals: approvals.rows
+        .filter((a) => courseAt === null || a.approved_at.getTime() >= courseAt)
+        .map((a) => ({ approverRole: a.approver_role, approvedAt: a.approved_at.toISOString() })),
     };
     const requiredIds: string[] = [];
     for (const a of acts.rows) {
@@ -139,6 +165,8 @@ export class CompletionEngineService implements CompletionEngine {
     ctx.requiredActivityIds = requiredIds;
 
     for (const r of results.rows) {
+      const cut = cutoffOf(r.activity_id);
+      if (cut !== null && r.evaluated_at.getTime() < cut) continue; // 重修前的結果：保留在歷史，不計入
       const cur = ctx.bestResults[r.activity_id];
       const score = r.score === null ? null : Number(r.score);
       if (!cur || RANK[r.status] > RANK[cur.status as ResultStatus] || (RANK[r.status] === RANK[cur.status as ResultStatus] && (score ?? -1) > (cur.score ?? -1))) {
@@ -149,11 +177,16 @@ export class CompletionEngineService implements CompletionEngine {
     }
     const attemptInfo: EnrollmentProgress['attempts'] = {};
     for (const a of attempts.rows) {
-      ctx.attemptCounts[a.activity_id] = a.used;
-      attemptInfo[a.activity_id] = { used: a.used, inProgressId: a.in_progress };
+      const info = (attemptInfo[a.activity_id] ??= { used: 0, inProgressId: null });
+      if (a.status === 'in_progress') info.inProgressId ??= a.id;
+      if (a.status !== 'submitted' && a.status !== 'scored') continue;
+      const c = cover[a.activity_id];
+      // reset_counter：只算這次重修之後開始的作答（作答建立時即記下所屬的重修）
+      if (!c || c.policy === 'append' || a.relearning_assignment_id === c.id) info.used++;
     }
+    for (const [aid, info] of Object.entries(attemptInfo)) ctx.attemptCounts[aid] = info.used;
 
-    // 學習時間：相鄰事件的間隔（離開超過 5 分鐘不計），歸到活動所屬單元
+    // 學習時間：相鄰事件的間隔（離開超過 5 分鐘不計），歸到活動所屬單元。重修不重算學習時間
     const time = learningSeconds(events.rows.map((x) => ({ at: x.at.getTime(), activityId: x.activity_id })));
     const byModuleSec: Record<string, number> = {};
     for (const [aid, sec] of Object.entries(time.byActivity)) {
@@ -162,10 +195,12 @@ export class CompletionEngineService implements CompletionEngine {
     }
     ctx.timeSpentMinutes = { course: toMinutes(time.total), byModule: Object.fromEntries(Object.entries(byModuleSec).map(([m, s]) => [m, toMinutes(s)])) };
 
-    // 設有影片網址的影片活動：觀看比例以事件佐證（不採信學員端回報）
+    // 設有影片網址的影片活動：觀看比例以事件佐證（不採信學員端回報）；重修前的觀看不計
     const videoEvidence = new Map<string, VideoEvidence[]>();
     for (const x of events.rows) {
       if (!x.activity_id || !x.payload) continue;
+      const cut = cutoffOf(x.activity_id);
+      if (cut !== null && x.at.getTime() < cut) continue;
       const list = videoEvidence.get(x.activity_id) ?? [];
       list.push({
         at: x.at.getTime(),
@@ -180,6 +215,21 @@ export class CompletionEngineService implements CompletionEngine {
       ctx.videoWatchRatios[a.id] = Math.max(ctx.videoWatchRatios[a.id] ?? 0, fromEvents);
     }
     const last = events.rows[events.rows.length - 1];
+
+    const titleOf = (t: RelearningScope, id: string | null): string | null =>
+      t === 'module' ? modIndex.get(id!)?.title ?? null : t === 'lesson' ? lessons.rows.find((l) => l.id === id)?.title ?? null : t === 'activity' ? acts.rows.find((a) => a.id === id)?.title ?? null : null;
+    const assignments: RelearningDto[] = rel.rows.map((r) => ({
+      id: r.id,
+      enrollmentId,
+      scopeType: r.scope_type,
+      scopeId: r.scope_id,
+      scopeTitle: titleOf(r.scope_type, r.scope_id),
+      reason: r.reason,
+      dueDate: r.due_date?.toISOString() ?? null,
+      newAttemptPolicy: r.new_attempt_policy,
+      assignedAt: r.created_at.toISOString(),
+      assignedByName: r.assigned_by_name,
+    }));
 
     return {
       enrollment: { id: enr.id, userId: enr.user_id, organizationId: enr.organization_id, courseId: enr.course_id, courseVersionId: v, status: enr.status },
@@ -197,6 +247,11 @@ export class CompletionEngineService implements CompletionEngine {
       ctx,
       attempts: attemptInfo,
       time: { totalSec: time.total, byModuleSec, lastActivityAt: last ? last.at.toISOString() : null },
+      relearning: {
+        assignments,
+        byActivity: Object.fromEntries(Object.entries(cover).map(([aid, c]) => [aid, c.id])),
+        courseCutoffAt: courseAt === null ? null : new Date(courseAt).toISOString(),
+      },
     };
   }
 
@@ -231,8 +286,7 @@ export class CompletionEngineService implements CompletionEngine {
     }
   }
 
-  /** 寫入進度快照；完成條件成立且選課為 active／reopened 時轉為 completed。回傳是否因此完成 */
-  async persist(p: EnrollmentProgress, ev: CompletionEvaluationDto, c: pg.PoolClient): Promise<boolean> {
+  async snapshot(p: EnrollmentProgress, ev: CompletionEvaluationDto, c: pg.PoolClient): Promise<void> {
     await c.query(
       `INSERT INTO progress_snapshots (organization_id, enrollment_id, computed_at, required_total, required_completed, weighted_score, completion_evaluation)
        VALUES ($1, $2, now(), $3, $4, $5, $6::jsonb)
@@ -241,6 +295,11 @@ export class CompletionEngineService implements CompletionEngine {
          completion_evaluation = EXCLUDED.completion_evaluation`,
       [p.enrollment.organizationId, p.enrollment.id, ev.requiredTotal, ev.requiredCompleted, ev.weightedScore, JSON.stringify(ev)],
     );
+  }
+
+  /** 寫入進度快照；完成條件成立且選課為 active／reopened 時轉為 completed。回傳是否因此完成 */
+  async persist(p: EnrollmentProgress, ev: CompletionEvaluationDto, c: pg.PoolClient): Promise<boolean> {
+    await this.snapshot(p, ev, c);
     if (!ev.result) return false;
     const r = await c.query(
       `UPDATE enrollments SET status = 'completed', completed_at = now(), updated_at = now() WHERE id = $1 AND status IN ('active', 'reopened')`,
