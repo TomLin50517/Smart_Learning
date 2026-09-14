@@ -13,6 +13,8 @@ export const DOCUMENT_ACCEPT = '.pdf,.docx,.md,.markdown,.txt';
 /** 背景工作（SD §11.1） */
 export const DOCUMENT_PARSE_JOB = { type: 'document.parse', queue: 'ingest', maxAttempts: 3 } as const;
 export const DOCUMENT_INDEX_JOB = { type: 'document.embed_index', queue: 'ingest', maxAttempts: 5 } as const;
+/** 綁定改變後讓索引的 course_version_ids 反映資料庫（SD §6.18） */
+export const DOCUMENT_SYNC_JOB = { type: 'document.sync_bindings', queue: 'ingest', maxAttempts: 5 } as const;
 
 /** 物件儲存的 key（SD §5.1）：不含原始檔名或任何使用者可控字串 */
 export function documentObjectKeys(p: { prefix: string; organizationId: string; documentId: string; versionId: string }) {
@@ -62,6 +64,26 @@ export interface CourseKnowledgeDto {
   bound: BoundDocumentDto[];
   /** 本課程其他版本用過、但沒有綁在這個版本的教材 */
   available: { documentId: string; title: string; latestVersion: DocumentVersionDto }[];
+}
+
+/** POST /course-versions/{id}/knowledge/search：課程人員測試檢索（與 AI 教練用同一個檢索器與範圍） */
+export interface KnowledgeSearchHitDto {
+  chunkId: string;
+  documentId: string;
+  documentVersionId: string;
+  title: string;
+  pageNo: number | null;
+  sectionPath: string | null;
+  content: string;
+  /** 加權後的分數（只用來比較同一次搜尋的結果） */
+  score: number;
+}
+
+export interface KnowledgeSearchResultDto {
+  hits: KnowledgeSearchHitDto[];
+  /** 此版本綁定、已可檢索的教材數；尚在處理中的教材不會出現在結果中 */
+  searchableDocuments: number;
+  pendingDocuments: number;
 }
 
 /** GET /knowledge/documents/{id}/versions/{versionId}/view：課程人員預覽擷取出的文字 */
