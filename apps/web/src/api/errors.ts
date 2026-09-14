@@ -168,6 +168,13 @@ const ISSUE_MESSAGES: Record<string, string> = {
   color_contrast_too_low: '顏色太淺，與白字的對比度只有 {ratio}（需達 4.5）',
   image_too_large: '圖片超過 512 KB',
   unsupported_image_type: '只接受 PNG、JPG 或 WebP（不接受 SVG）',
+  document_in_use: '已發布的課程版本仍在使用這份教材，無法刪除；可以在草稿版本中移出',
+  document_not_in_course: '只能加入本課程的教材',
+  document_already_bound: '這份教材已經在此版本中',
+  document_not_usable: '這份教材格式不符或已下架，無法加入',
+  not_processed: '教材尚未處理完成',
+  not_failed: '只有處理失敗的教材可以重試',
+  empty: '檔案是空的',
   // 完成條件驗證（SD §3.6）：伺服器於 params.message 附上具體說明
   RULE_SCHEMA_INVALID: '{message}',
   RULE_DEPTH_EXCEEDED: '{message}',

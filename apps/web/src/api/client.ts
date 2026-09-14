@@ -81,6 +81,26 @@ export async function api<T>(method: Method, path: string, body?: unknown, opts:
   return (text ? parseJson(text) : undefined) as T;
 }
 
+/**
+ * 上傳檔案（教材，SD §6.17）：以 application/octet-stream 傳送原始內容，不經 JSON；
+ * 檔名等資訊放在呼叫端的查詢參數。回傳 JSON。
+ */
+export async function apiUpload<T>(path: string, file: Blob, opts: RequestOptions = {}): Promise<T> {
+  const headers: Record<string, string> = { Accept: 'application/json', 'Content-Type': 'application/octet-stream' };
+  const csrf = readCookie(document.cookie, CSRF_COOKIE);
+  if (csrf) headers['X-CSRF-Token'] = csrf;
+  let res: Response;
+  try {
+    res = await fetch(path, { method: 'POST', headers, credentials: 'same-origin', body: file, ...(opts.signal && { signal: opts.signal }) });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') throw e;
+    throw new ApiError(0, 'NETWORK_ERROR', 'network error', null);
+  }
+  if (!res.ok) throw await failure(res, opts);
+  const text = await res.text();
+  return (text ? parseJson(text) : undefined) as T;
+}
+
 /** 下載檔案（例：稽核 CSV）。檔名取自 Content-Disposition */
 export async function apiDownload(method: Method, path: string, body?: unknown, opts: RequestOptions = {}): Promise<{ blob: Blob; filename: string }> {
   const res = await send(method, path, body, opts, '*/*');
