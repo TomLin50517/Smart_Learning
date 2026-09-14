@@ -19,6 +19,7 @@ import { COURSE_STATUS_LABELS, formatDateTime, NAVIGATION_MODE_LABELS, ROLE_LABE
 import { useApi, useTitle } from '../hooks';
 import { CertificatesPanel } from './certificates-panel';
 import { CoachInsightsPanel } from './coach-insights-panel';
+import { MediaLibraryCard } from './media-library';
 import { LearnersPanel } from './learners-panel';
 
 /** /app/courses/:courseId：課程總覽、版本清單、課程人員 */
@@ -166,6 +167,7 @@ export function CoursePage() {
         {canCreateVersion && c.versions.length === 0 && <CreateVersion course={c} />}
       </section>
 
+      {can(me, 'course.version.read') && <MediaLibraryCard courseId={c.id} />}
       {can(me, 'course.staff.assign') && <StaffPanel courseId={c.id} />}
       {can(me, 'learning.result.read_all') && <LearnersPanel course={c} />}
       {can(me, 'certificate.read_all') && <CertificatesPanel course={c} />}

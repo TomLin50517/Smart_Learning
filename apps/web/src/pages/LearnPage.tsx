@@ -1,4 +1,4 @@
-import { COACH_HIDDEN_REASONS, type CoachAvailabilityDto, type LearnerOutlineDto, type LearningTimeDto, type LessonBlock, type OutlineActivityDto, type ProgressDto } from '@iac/contracts';
+import { assetUrl, COACH_HIDDEN_REASONS, type CoachAvailabilityDto, type LearnerOutlineDto, type LearningTimeDto, type LessonBlock, type OutlineActivityDto, type ProgressDto } from '@iac/contracts';
 import { useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { can } from '../auth/permissions';
@@ -203,8 +203,19 @@ function Block(props: { block: LessonBlock; activity: OutlineActivityDto | undef
       return <Notice kind={b.variant === 'warning' ? 'warn' : b.variant === 'success' ? 'ok' : 'info'}>{b.body}</Notice>;
     case 'activity':
       return props.activity ? <ActivityPanel activity={props.activity} canLearn={props.canLearn} onChanged={props.onChanged} onAskCoach={props.onAskCoach} /> : null;
+    // 素材網址每次都由伺服器檢查權限（課程人員或這門課的學員）；課節中的影片只供觀看、不追蹤進度
     case 'image':
+      return (
+        <figure className="lesson-figure">
+          <img src={assetUrl(b.assetId)} alt={b.alt} loading="lazy" />
+          {b.caption && <figcaption className="muted small">{b.caption}</figcaption>}
+        </figure>
+      );
     case 'video':
-      return <p className="muted small">（{b.type === 'image' ? '圖片' : '影片'}素材將於素材管理上線後顯示）</p>;
+      return (
+        <figure className="lesson-figure">
+          <video src={assetUrl(b.assetId)} controls preload="metadata" {...(b.poster && { poster: assetUrl(b.poster) })} />
+        </figure>
+      );
   }
 }
