@@ -2492,6 +2492,20 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 前端 | 課程頁「選課設定」卡片（加入方式、需審核、開放期間、名額、選課碼的複製與重新產生、待審核數）；學員名單的「核准／拒絕」與「匯出 CSV」（依目前篩選）；「我的課程」的選課碼輸入、可加入的課程清單、待審核的課程卡片 |
 | 未做 | 加入或審核結果的通知信（排在通知批次）、選課碼的 QR code、候補名單 |
 
+## 6.25 重新開啟與重修（v1.35）
+
+實作：`modules/enrollment/{application/relearning.service.ts,api/relearning.controller.ts}`、`modules/completion/{domain/relearning.ts,application/completion-engine.service.ts}`、`learning-record/application/learning.service.ts`（作答記下所屬重修、大綱的重修資訊）、`apps/web/src/pages/{LearnerDetailPage.tsx,learners-panel.tsx,LearnPage.tsx}`。沿用 migration 0006 的 `relearning_assignments`（`preserve_old_result` 以 CHECK 鎖死為 true）與 `learning_attempts.relearning_assignment_id`；無新 migration。對應 SA UC-ENR-007（退回重修）、UC-ENR-009（重新開啟）、§7.2、INV-6、AC-LRN-004。
+
+| 項目 | 實作 |
+|---|---|
+| 重新開啟 | `POST /enrollments/{id}/reopen {reason?}`（enrollment.reopen：組織管理員、課程管理員；稽核 `enrollment.reopened`）：completed → reopened、`completed_at` 清空，成績照舊，學員可以繼續練習。再次符合完成條件時回到 completed；證書每筆選課只有一張（`uq_cert_enr_valid`＋發證 job 的 NOT EXISTS），不重發 |
+| 重修 | `POST /enrollments/{id}/relearning {scopeType, scopeId, reason, dueDate?, newAttemptPolicy}`（enrollment.relearning.assign；稽核 `enrollment.relearning.assigned`）。範圍 course／module／lesson／activity，須在學員綁定的版本中且含活動（`scope_not_in_version`）。選課須為 active／reopened／completed；completed 轉 reopened。範圍內進行中的作答作廢；有 `dueDate` 時更新選課期限；寫 `course.reopened`（via、scope、reason——學員的學習歷程看得到原因）；更新進度快照但不改狀態 |
+| 完成判定 | 每個活動目前生效的重修＝涵蓋它的最新一筆指派（`coveringRelearning`，純函式）。該活動在指派時間之前的結果與影片觀看事件**不計入**最佳成績、觀看比例與完成判定；歷史不刪不改。作答次數：`reset_counter`（預設）只算帶有該重修 id 的作答（建立作答時記下 `relearning_assignment_id`），`append` 沿用全部。整門課重修之前的人工核可不再計入（教師頁的核可清單同樣過濾）。學習時間不重算 |
+| 授權 | 已完成 → 重新開啟會重新計入 `maxActiveLearners`，在服務層交易內檢查（同一人另有進行中的課程時不多算）；已在學習中的學員指派重修不受上限影響——因此不用路由層的 limit 守門 |
+| 學員畫面 | 大綱附 `relearning`（最新一筆指派，且範圍內還有未完成的活動）與各活動 `inRelearning`；學習頁顯示重修原因、範圍與期限，課節旁標 🔁；重新開啟（無重修）時提示可以繼續練習。學習歷程顯示「老師指派重修：原因」 |
+| 教師畫面 | 學員名單：已完成者有「重新開啟」。學員學習狀況頁「重修與重新開啟」卡片：歷次重修、指派表單（範圍依大綱選單元／課節／活動、原因、新期限、是否沿用作答次數）、只重新開啟；各活動標示重修中 |
+| 未做 | 重修開始時 AI 教練的回顧（UC-COA-004）、重修通知信（排在通知批次）、批次指派重修 |
+
 ---
 
 # 7. Frontend 設計
@@ -4501,3 +4515,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.32 | 2026-09-14 | 新增 §6.22：組織 AI 金鑰與 LiteLLM gateway（`AI_PROVIDER=litellm`、AES-256-GCM 加密存放與 AAD、只有 app_api 可讀、只能寫入不能讀出、平台管理員設定、依金鑰更新時間快取供應商、用量標籤、預算用完→休息中、測試連線、學員畫面依原因隱藏或休息中）；新增 ADR-034；migration 0021 | Software Designer |
 | v1.33 | 2026-09-15 | 新增 §6.23 課程素材：`media_assets`（kind／MIME 相符、不存 SVG）、串流上傳與共用上傳模組、MP4／WebM 檔頭判斷、引用與 `usedBy`、使用中不可刪、發布檢查 C1_ASSET_MISSING 與影片活動 C5、內容端點的存取檢查與 Range／ETag／CSP、影片活動可用素材庫影片、前端素材庫與編輯器；migration 0022 | Software Designer |
 | v1.34 | 2026-09-15 | 新增 §6.24：選課政策（指派／選課碼／課程目錄、需審核、開放期間、名額）、8 碼選課碼（排除易混淆字元、同組織唯一、換碼即失效）、學員自行加入與申請、核准改綁當下版本、拒絕後可再申請、課程目錄、學員名單 CSV 匯出（各活動最佳結果、BOM、防公式注入、上限 10,000 列）；`common/csv.ts` 共用；migration 0023 | Software Designer |
+| v1.35 | 2026-09-15 | 新增 §6.25：重新開啟（completed → reopened，成績照舊、證書不重發）、重修（四種範圍、範圍內只採計指派之後的結果與觀看、reset_counter／append、作答記下所屬重修、整門課重修後核可需重新取得、進行中作答作廢、course.reopened 事件）、授權學員數在服務層檢查、學員與教師畫面；沿用 migration 0006，無新 migration | Software Designer |
