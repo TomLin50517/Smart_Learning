@@ -139,7 +139,7 @@ describe('system endpoints are public', () => {
   it('ready → 200, all migrations present', async () => {
     const res = await get('/api/system/ready');
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ ready: true, components: { database: 'ok', migrations: 20 } });
+    expect(res.json()).toMatchObject({ ready: true, components: { database: 'ok', migrations: 21 } });
   });
 
   it('echoes a safe incoming X-Request-Id', async () => {

@@ -268,8 +268,8 @@ SELECT pg_temp.t('T58 4 monthly partitions per table', NULL,
      OR (SELECT count(*) FROM pg_inherits i JOIN pg_class c ON c.oid=i.inhrelid
           WHERE i.inhparent='audit_logs'::regclass AND c.relname ~ '_\d{4}_\d{2}$') <> 4
      THEN RAISE EXCEPTION 'PARTITIONS'; END IF; END $d$ $$, 'OK');
-SELECT pg_temp.t('T59 20 migrations recorded', NULL,
- $$DO $d$ BEGIN IF (SELECT count(*) FROM schema_migrations) <> 20 THEN RAISE EXCEPTION 'COUNT'; END IF; END $d$ $$, 'OK');
+SELECT pg_temp.t('T59 21 migrations recorded', NULL,
+ $$DO $d$ BEGIN IF (SELECT count(*) FROM schema_migrations) <> 21 THEN RAISE EXCEPTION 'COUNT'; END IF; END $d$ $$, 'OK');
 
 -- ============================================================ 0015 auth tables
 SELECT pg_temp.t('T60 app_coach cannot read password_reset_tokens', 'app_coach',
@@ -366,6 +366,17 @@ SELECT pg_temp.t('T85 platform_admin can set organization branding', NULL,
  $$DO $d$ BEGIN IF NOT EXISTS (SELECT 1 FROM role_permissions rp JOIN roles r ON r.id = rp.role_id
       JOIN permissions p ON p.id = rp.permission_id WHERE r.code = 'platform_admin' AND p.code = 'org.settings.write')
    THEN RAISE EXCEPTION 'MISSING'; END IF; END $d$ $$, 'OK');
+
+-- ============================================================ 0021 organization AI keys (ADR-034)
+SELECT pg_temp.t('T86 app_worker cannot read organization AI keys', 'app_worker',
+ $$SELECT count(*) FROM organization_ai_credentials$$, '42501');
+SELECT pg_temp.t('T87 app_readonly cannot read organization AI keys', 'app_readonly',
+ $$SELECT count(*) FROM organization_ai_credentials$$, '42501');
+SELECT pg_temp.t('T88 app_coach cannot read organization AI keys', 'app_coach',
+ $$SELECT count(*) FROM organization_ai_credentials$$, '42501');
+SELECT pg_temp.t('T89 AI key IV must be 12 bytes (AES-GCM)', 'app_api',
+ $$INSERT INTO organization_ai_credentials (organization_id, key_alias, ciphertext, iv, auth_tag)
+   VALUES ('11111111-0000-0000-0000-000000000001', 'k', '\x01', '\x0102', '\x00000000000000000000000000000000')$$, '23514');
 
 -- ------------------------------------------------------------------ report
 \pset border 1
