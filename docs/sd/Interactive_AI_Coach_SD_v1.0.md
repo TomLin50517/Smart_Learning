@@ -2460,6 +2460,22 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 前端 | 平台管理員：組織管理 → 「AI 金鑰」頁（狀態、代號、測試連線、設定／更換（密碼欄、儲存後無法再檢視）、移除）；組織管理員：「AI 教練設定」頁顯示金鑰狀態與代號 |
 | 未做 | 由客戶的金鑰管理系統自動送入金鑰（機器對機器介面）；主金鑰輪替工具 |
 
+## 6.23 課程素材（圖片、影片；v1.33）
+
+實作：`migrations/0022_media_assets.sql`、`common/{upload.ts,media-sniff.ts,http-range.ts}`、`modules/content/{application/media.service.ts,api/media.controller.ts}`、`apps/web/src/pages/media-library.tsx`。課節的圖片／影片區塊自 §7.5 起就以 `assetId` 引用（不接受外部網址），本節補上素材本身。
+
+| 項目 | 實作 |
+|---|---|
+| 資料 | `media_assets`：屬於課程（各版本共用）；kind（image／video）與 MIME 必須相符（CHECK），只允許 PNG／JPEG／WebP／MP4／WebM——**SVG 永遠不存**（DB 不變條件 T90～T91）。素材不可變：更換＝上傳新素材再改引用；只能改顯示名稱 |
+| 上傳 | `POST /courses/{id}/assets?filename=&title=`（course.version.write＋authoringAllowed），本體為 `application/octet-stream` 串流（與教材共用 `common/upload.ts`：暫存檔、SHA-256、超過上限讀完丟棄回 413）。格式以檔頭判斷：圖片沿用 `sniffImage`（≤ 20 MB）；MP4 須為 ISO BMFF 且主要品牌在白名單（不收 QuickTime）；WebM 須為 EBML 且 DocType 為 webm（一般 Matroska 不收）；影片上限依平台設定 `upload.max_size`。物件 key：`{prefix}/media/{org}/{course}/{asset}/original.bin`（不含檔名）。封存的課程不能上傳 |
+| 引用 | 圖片區塊 `assetId`（＋必填替代文字、選填說明）、影片區塊 `assetId`（＋選填封面 `poster`，須為圖片）、影片活動 `config.video_asset_id`（與 `video_url` 擇一）。列表以 `jsonb_array_elements` 找出引用的課程版本（`usedBy`） |
+| 刪除 | 被**任何**課程版本（含草稿）引用 → 422 `asset_in_use`（params.versions）；已發布的內容不能失效，草稿則請先移除區塊。刪除時一併移除物件 |
+| 發布檢查 | C1 `C1_ASSET_MISSING`：區塊引用的素材不存在、不是本課程的素材，或類型不符（圖片區塊引用影片、封面不是圖片）。C5：影片活動網址與素材只能擇一、選的影片須為本課程的影片 |
+| 內容 | `GET /assets/{id}/content`：`<img>`／`<video>` 直接使用，每次存取都檢查——同組織，且持有此課程的 course.read（課程人員、組織管理員）或本人在這門課有未退選的選課，否則 404（不透露存在）。支援單一 Range（206／416；多區間回完整內容），型別取自上傳時的判斷，`nosniff`＋`CSP: default-src 'none'; sandbox`＋`Content-Disposition: inline`，ETag＝SHA-256（304），`Cache-Control: private`。nginx 對此路徑關閉緩衝、串流直送。權限宣告為 `course.read` 或 `learning.result.read_self`（任一），實際判斷在服務層 |
+| 影片活動 | 選素材庫影片時，播放器與網址影片相同：只算連續播放、觀看比例由伺服器依學習事件佐證（完成引擎與送出流程把 `video_asset_id` 視同有播放器） |
+| 前端 | 課程頁「素材庫」卡片：上傳、縮圖、預覽（圖片／影片）、使用中的版本、改名、刪除（使用中停用）。版本編輯器：新增「圖片」「影片」區塊，以素材選擇器挑選並可直接上傳；圖片需替代文字（儲存前檢查）。影片活動的「影片來源」：素材庫／網址／在別處觀看。學習頁顯示真正的圖片（lazy）與影片 |
+| 未做 | 影片轉檔與縮圖、串流格式（HLS）、素材的組織層級共用、儲存用量上限 |
+
 ---
 
 # 7. Frontend 設計
@@ -4467,3 +4483,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.30 | 2026-09-14 | Phase 3-4 AI 教練介面：新增 §6.20（fetch 讀 SSE、學習頁「問教練」對話、引用標記與原文檢視、無法使用的原因說明、教師測試卡片、組織 AI 教練設定頁） | Software Designer |
 | v1.31 | 2026-09-14 | 新增 §6.21：結果觸發教練（`/coach/from-result`、系統產生的問題、current_result 不含作答內容）、課程匿名統計（門檻 `derived.min_threshold`、各活動也受門檻）、逐字稿清單與閱讀（政策 × 戳印、hiddenCount、稽核帶 learner_id 且必須成功）、課程頁「AI 教練」卡片；無 migration | Software Designer |
 | v1.32 | 2026-09-14 | 新增 §6.22：組織 AI 金鑰與 LiteLLM gateway（`AI_PROVIDER=litellm`、AES-256-GCM 加密存放與 AAD、只有 app_api 可讀、只能寫入不能讀出、平台管理員設定、依金鑰更新時間快取供應商、用量標籤、預算用完→休息中、測試連線、學員畫面依原因隱藏或休息中）；新增 ADR-034；migration 0021 | Software Designer |
+| v1.33 | 2026-09-15 | 新增 §6.23 課程素材：`media_assets`（kind／MIME 相符、不存 SVG）、串流上傳與共用上傳模組、MP4／WebM 檔頭判斷、引用與 `usedBy`、使用中不可刪、發布檢查 C1_ASSET_MISSING 與影片活動 C5、內容端點的存取檢查與 Range／ETag／CSP、影片活動可用素材庫影片、前端素材庫與編輯器；migration 0022 | Software Designer |
