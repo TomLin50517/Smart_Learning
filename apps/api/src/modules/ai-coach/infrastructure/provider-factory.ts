@@ -13,6 +13,8 @@ export const DEFAULT_CLAUDE_MODEL = 'claude-opus-5';
 export function createLlmProvider(env: Env): LlmProvider {
   switch (env.AI_PROVIDER) {
     case 'none':
+    // litellm：沒有平台金鑰，每個組織用自己的虛擬金鑰（LlmProviderResolver）
+    case 'litellm':
       return NONE_PROVIDER;
     case 'anthropic': {
       const apiKey = env.AI_API_KEY || env.ANTHROPIC_API_KEY;

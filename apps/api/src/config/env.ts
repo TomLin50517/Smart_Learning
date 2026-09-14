@@ -79,7 +79,14 @@ const schema = z.object({
 
   // --- AI 教練（SD §10.5）：預設 none——資料出境須為刻意選擇（SA §22.1）。未設定時教練顯示暫時無法使用 ---
   // anthropic：Claude（@anthropic-ai/sdk）；openai／azure_openai／internal：OpenAI 相容的 /chat/completions
-  AI_PROVIDER: z.enum(['none', 'anthropic', 'openai', 'azure_openai', 'internal']).default('none'),
+  // litellm：經 LiteLLM gateway（OpenAI 相容），每個組織用自己的虛擬金鑰（平台管理員在系統內設定，加密存放）
+  AI_PROVIDER: z.enum(['none', 'anthropic', 'openai', 'azure_openai', 'internal', 'litellm']).default('none'),
+  /** 組織金鑰的加密主金鑰（32 bytes 的 base64）；AI_PROVIDER=litellm 時需要（ADR-034） */
+  AI_KEY_ENCRYPTION_KEY: z
+    .string()
+    .optional()
+    .default('')
+    .refine((v) => !v || Buffer.from(v, 'base64').length === 32, { message: 'must be 32 random bytes, base64-encoded' }),
   /** 金鑰只放 .env；anthropic 也可改用 ANTHROPIC_API_KEY */
   AI_API_KEY: z.string().optional().default(''),
   ANTHROPIC_API_KEY: z.string().optional().default(''),
@@ -112,6 +119,9 @@ const schema = z.object({
   }
   if (v.LICENSE_ACTIVATION_URL && !v.LICENSE_ACTIVATION_URL.startsWith('https://')) {
     ctx.addIssue({ code: 'custom', path: ['LICENSE_ACTIVATION_URL'], message: 'must use https in production' });
+  }
+  if (v.AI_PROVIDER === 'litellm' && !v.AI_KEY_ENCRYPTION_KEY) {
+    ctx.addIssue({ code: 'custom', path: ['AI_KEY_ENCRYPTION_KEY'], message: 'required when AI_PROVIDER=litellm (organization keys are stored encrypted)' });
   }
   if (!v.COOKIE_SECURE) {
     ctx.addIssue({ code: 'custom', path: ['COOKIE_SECURE'], message: 'must be true in production' });
