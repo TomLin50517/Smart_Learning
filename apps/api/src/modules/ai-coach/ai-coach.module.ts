@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
 import { ENV, type Env } from '../../config/env.js';
 import { KnowledgeModule } from '../knowledge/knowledge.module.js';
+import { CoachInsightsController } from './api/coach-insights.controller.js';
 import { CoachSettingsController } from './api/coach-settings.controller.js';
+import { CoachInsightsService } from './application/coach-insights.service.js';
 import { CoachTestController } from './api/coach-test.controller.js';
 import { CoachController } from './api/coach.controller.js';
 import { CoachSettingsService } from './application/coach-settings.service.js';
@@ -18,7 +20,7 @@ import { createLlmProvider } from './infrastructure/provider-factory.js';
  */
 @Module({
   imports: [KnowledgeModule],
-  controllers: [CoachController, CoachTestController, CoachSettingsController],
-  providers: [CoachService, CoachSettingsService, { provide: LLM_PROVIDER, useFactory: (env: Env) => createLlmProvider(env), inject: [ENV] }],
+  controllers: [CoachController, CoachTestController, CoachSettingsController, CoachInsightsController],
+  providers: [CoachService, CoachSettingsService, CoachInsightsService,{ provide: LLM_PROVIDER, useFactory: (env: Env) => createLlmProvider(env), inject: [ENV] }],
 })
 export class AiCoachModule {}

@@ -51,9 +51,18 @@ function fromConversation(c: CoachConversationDto): Item[] {
  * 學習頁的「問教練」（SD §6.20）：右下角按鈕開啟側邊對話。依目前課節的活動建立對話（每個活動一段），
  * 先顯示找到的教材，驗證通過後才逐字出現回答；出處可點開原文。無法使用時說明原因，課程學習不受影響。
  */
-export function CoachPanel({ enrollmentId, activityId, contextTitle }: { enrollmentId: string; activityId: string | undefined; contextTitle: string | null }) {
+interface ResultRequest {
+  attemptId: string;
+  nonce: number;
+}
+
+export function CoachPanel(props: { enrollmentId: string; activityId: string | undefined; contextTitle: string | null; resultRequest?: ResultRequest | null }) {
   const me = useMe();
   const [open, setOpen] = useState(false);
+  // 結果旁按「請 AI 教練看看」→ 打開對話
+  useEffect(() => {
+    if (props.resultRequest) setOpen(true);
+  }, [props.resultRequest]);
   if (!can(me, 'coach.conversation.read_self')) return null;
   return (
     <>
@@ -62,12 +71,21 @@ export function CoachPanel({ enrollmentId, activityId, contextTitle }: { enrollm
           問教練
         </button>
       )}
-      {open && <CoachDrawer key={activityId ?? 'course'} enrollmentId={enrollmentId} activityId={activityId} contextTitle={contextTitle} onClose={() => setOpen(false)} />}
+      {open && (
+        <CoachDrawer
+          key={props.activityId ?? 'course'}
+          enrollmentId={props.enrollmentId}
+          activityId={props.activityId}
+          contextTitle={props.contextTitle}
+          resultRequest={props.resultRequest ?? null}
+          onClose={() => setOpen(false)}
+        />
+      )}
     </>
   );
 }
 
-function CoachDrawer(props: { enrollmentId: string; activityId: string | undefined; contextTitle: string | null; onClose(): void }) {
+function CoachDrawer(props: { enrollmentId: string; activityId: string | undefined; contextTitle: string | null; resultRequest: ResultRequest | null; onClose(): void }) {
   const me = useMe();
   const licensed = me.licenseCapabilities.aiCoachAllowed;
   const av = useApi<CoachAvailabilityDto>(`/api/enrollments/${props.enrollmentId}/coach`);
@@ -93,6 +111,29 @@ function CoachDrawer(props: { enrollmentId: string; activityId: string | undefin
   }, [conv.data]);
   useEffect(() => bottom.current?.scrollIntoView({ block: 'end' }), [items, pending]);
   useEffect(() => () => abort.current?.abort(), []);
+
+  // 結果觸發：同一個請求只處理一次（StrictMode 下 effect 會跑兩次）
+  const handledResult = useRef<number | null>(null);
+  useEffect(() => {
+    const req = props.resultRequest;
+    if (!req || handledResult.current === req.nonce) return;
+    handledResult.current = req.nonce;
+    void (async () => {
+      setError(null);
+      setItems([]);
+      loadedFor.current = null;
+      setPending({ stage: 'retrieving', sources: [], text: '' });
+      try {
+        const a = await api<CoachAnswerDto>('POST', '/api/coach/from-result', { attemptId: req.attemptId });
+        // 載入這段新對話（系統產生的問題與教練的回答）
+        setCreated(a.conversationId);
+      } catch (e) {
+        setError(e);
+      } finally {
+        setPending(null);
+      }
+    })();
+  }, [props.resultRequest]);
 
   const available = licensed && av.data?.available === true;
   const busy = pending !== null;

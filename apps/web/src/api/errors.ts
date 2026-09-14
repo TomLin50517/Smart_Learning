@@ -180,6 +180,9 @@ const ISSUE_MESSAGES: Record<string, string> = {
   disabled_by_organization: '組織已停用 AI 教練',
   enrollment_inactive: '目前的選課狀態無法使用 AI 教練',
   not_in_course_version: '這個活動不屬於此課程版本',
+  no_result: '這次作答還沒有結果',
+  organization_policy: '組織目前不開放課程人員查看對話紀錄',
+  conversation_stamp: '這段對話開始時設定為不公開，無法查看',
   // 完成條件驗證（SD §3.6）：伺服器於 params.message 附上具體說明
   RULE_SCHEMA_INVALID: '{message}',
   RULE_DEPTH_EXCEEDED: '{message}',

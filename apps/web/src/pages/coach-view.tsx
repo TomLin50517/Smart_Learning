@@ -13,27 +13,30 @@ export interface AnswerLike {
 
 const citeLabel = (c: CoachCitationDto) => [c.title, c.pageNo !== null ? `第 ${c.pageNo} 頁` : null, c.sectionPath].filter(Boolean).join('・');
 
-/** 回答文字中的 [c1] 換成可點的引用標記 */
-function AnswerText({ text, citations, onOpen }: { text: string; citations: CoachCitationDto[]; onOpen(c: CoachCitationDto): void }) {
+/** 回答文字中的 [c1] 換成引用標記；沒有 onOpen（課程人員讀逐字稿）時只顯示、不可開啟 */
+function AnswerText({ text, citations, onOpen }: { text: string; citations: CoachCitationDto[]; onOpen: ((c: CoachCitationDto) => void) | undefined }) {
   const byRef = new Map(citations.map((c) => [c.citationId, c]));
   return (
     <p className="coach-answer pre-line">
       {text.split(/(\[c\d{1,2}\])/g).map((part, i) => {
         const ref = /^\[(c\d{1,2})\]$/.exec(part)?.[1];
         const c = ref ? byRef.get(ref) : undefined;
-        return c ? (
+        if (!c) return <span key={i}>{part}</span>;
+        return onOpen ? (
           <button key={i} type="button" className="cite-chip" title={citeLabel(c)} aria-label={`出處 ${ref!.slice(1)}：${citeLabel(c)}`} onClick={() => onOpen(c)}>
             {ref!.slice(1)}
           </button>
         ) : (
-          <span key={i}>{part}</span>
+          <sup key={i} className="cite-chip" title={citeLabel(c)}>
+            {ref!.slice(1)}
+          </sup>
         );
       })}
     </p>
   );
 }
 
-export function AnswerView({ a, onOpen, onFollowUp, busy }: { a: AnswerLike; onOpen(c: CoachCitationDto): void; onFollowUp?(q: string): void; busy?: boolean }) {
+export function AnswerView({ a, onOpen, onFollowUp, busy }: { a: AnswerLike; onOpen?: (c: CoachCitationDto) => void; onFollowUp?: ((q: string) => void) | undefined; busy?: boolean }) {
   const notice = a.status === 'fallback' || a.status === 'insufficient_evidence' || a.status === 'out_of_scope';
   return (
     <div className={`chat-assistant${notice ? ' chat-notice' : ''}`}>
@@ -42,9 +45,13 @@ export function AnswerView({ a, onOpen, onFollowUp, busy }: { a: AnswerLike; onO
         <ol className="coach-sources" aria-label="出處">
           {a.citations.map((c) => (
             <li key={c.id}>
-              <button type="button" className="link-button" onClick={() => onOpen(c)}>
-                {citeLabel(c)}
-              </button>
+              {onOpen ? (
+                <button type="button" className="link-button" onClick={() => onOpen(c)}>
+                  {citeLabel(c)}
+                </button>
+              ) : (
+                citeLabel(c)
+              )}
               {c.quote && <div className="muted small">「{c.quote}」</div>}
             </li>
           ))}

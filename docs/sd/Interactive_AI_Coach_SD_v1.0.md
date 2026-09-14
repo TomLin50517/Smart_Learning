@@ -2430,6 +2430,20 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 教師測試 | 課程版本編輯頁「AI 教練測試」卡片（coach.interact_test）：以學員角度提問，顯示回答與出處（可開原文）、可追問、可重新開始；使用已儲存的設定與已處理完成的教材 |
 | 組織設定 | 側欄「AI 教練設定」（`/app/org/coach`，coach.transcript_policy.write）：目前狀態（AI 服務是否設定、授權、今日用量進度條）、啟用／停用、逐字稿可見性（說明只影響之後的對話） |
 
+## 6.21 結果觸發教練、匿名統計與逐字稿（v1.31）
+
+實作：`modules/ai-coach/{application/coach-insights.service.ts,application/messages.ts,api/coach-insights.controller.ts}`、`coach.service.ts#fromResult`、`apps/web/src/pages/coach-insights-panel.tsx`。無 migration。
+
+| 項目 | 實作 |
+|---|---|
+| 結果觸發 | `POST /coach/from-result {attemptId}`（coach.interact_self＋aiCoachAllowed；UC-CCH-002）：只能用自己的作答（否則 404），尚無結果 → 409 `RESULT_NOT_READY`；先確認組織啟用、供應商與檢索可用、選課狀態，再建立 `trigger_type = result_trigger` 的對話（戳印可見性）。系統產生的問題（「我剛完成『X』，結果是『需要再加強』（72／100 分）。系統指出的問題：… 請根據教材幫我了解可以怎麼改進。」）存為學員訊息，學員看得到送出了什麼；檢索以活動名稱＋問題代碼查詢；CONTEXT 帶 `current_result`（狀態、分數、問題代碼，**不含作答內容**）。驗證、替代、保存與一般問答相同；回 JSON |
+| 前端（學員） | 作答結果下方「請 AI 教練看看這次結果」（有 coach.interact_self 與 aiCoachAllowed 時）：打開右側教練對話、顯示處理中，完成後載入這段新對話，可接著追問 |
+| 匿名統計 | `GET /courses/{id}/coach/usage`（coach.usage_stats.read）：最近 30 天、不含教師測試與空對話——使用學員、對話、提問、結果觸發數、回答狀態分布、最常引用的教材（前 5）、各活動提問量。**使用學員數未達平台設定 `derived.min_threshold`（預設 5）時什麼數字都不給**；各活動也只列出達門檻者，避免「只有一人問」而回推。不含任何提問內容 |
+| 逐字稿清單 | `GET /courses/{id}/coach/conversations`（coach.conversation.read_course）：組織目前政策為 aggregate_only → 空清單＋對話總數；course_staff → 只列出戳印也是 course_staff 的對話（學員、活動、類型、訊息數、最後時間，最近 100 則），其餘只給 `hiddenCount`（不列出身分） |
+| 逐字稿 | `GET /courses/{id}/coach/conversations/{convId}`：政策與戳印任一不是 course_staff → 403 `COACH_TRANSCRIPT_NOT_VISIBLE`（details：organization_policy／conversation_stamp）；教師測試或他課的對話 → 404。訊息與引用同學員畫面（引用只顯示、不能開原文——原文檢視是學員本人的權限） |
+| 稽核 | 清單與逐字稿都寫 `coach.transcript.read`（AUDIT_MUST_SUCCEED：寫不進去請求就失敗，ADR-028 條件 3）；逐字稿的 metadata 帶 `learner_id`，學員在自己的「帳號活動」看得到誰讀了他的對話 |
+| 前端（課程人員） | 課程頁「AI 教練」卡片：使用情形（統計數字、狀態分布、教材不足比例 ≥ 20% 時提示補充教材、常引用教材、各活動表）；「學員對話紀錄」按了才載入（避免每次開課程頁都留稽核），提醒會留紀錄；可開啟逐字稿（對話框） |
+
 ---
 
 # 7. Frontend 設計
@@ -4428,3 +4442,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.28 | 2026-09-14 | Phase 3-2 教材檢索：新增 §6.18（lexical_only＋cjk_bigram、index 建立、document.embed_index 索引與 superseded、document.sync_bindings 綁定同步、KnowledgeRetriever 與四個凍結的範圍 filter、課程人員測試搜尋、C3 接受 superseded）；Compose 預設啟動 Elasticsearch；無 migration | Software Designer |
 | v1.29 | 2026-09-14 | Phase 3-3 AI 教練問答：新增 §6.19（Claude／OpenAI 相容供應商與伺服器端備援、prepare／answer 流程、去識別化、提示詞防偽造、V0～V9 驗證與修正／拒絕、SSE B+、保存與用量、對話與引用原文、教師測試、組織設定、限流）；無 migration | Software Designer |
 | v1.30 | 2026-09-14 | Phase 3-4 AI 教練介面：新增 §6.20（fetch 讀 SSE、學習頁「問教練」對話、引用標記與原文檢視、無法使用的原因說明、教師測試卡片、組織 AI 教練設定頁） | Software Designer |
+| v1.31 | 2026-09-14 | 新增 §6.21：結果觸發教練（`/coach/from-result`、系統產生的問題、current_result 不含作答內容）、課程匿名統計（門檻 `derived.min_threshold`、各活動也受門檻）、逐字稿清單與閱讀（政策 × 戳印、hiddenCount、稽核帶 learner_id 且必須成功）、課程頁「AI 教練」卡片；無 migration | Software Designer |

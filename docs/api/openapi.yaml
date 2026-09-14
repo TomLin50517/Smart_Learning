@@ -2413,12 +2413,18 @@ paths:
         AI 不重新評分、不改變 pass/fail（INV-3）。ResponseValidator 的 V7
         會攔截任何宣稱改分的回答，且 `app_coach` 資料庫角色對
         `learning_results` 只有 SELECT（ADR-026）。
+
+        實作（SD §6.21）：只能用自己的作答（否則 404）；尚無結果 → 409 `RESULT_NOT_READY`。
+        建立 `trigger_type = result_trigger` 的對話，系統依結果產生問題（活動、結果、分數、問題代碼）存為學員訊息，
+        檢索以活動名稱與問題代碼查詢，提示詞 CONTEXT 帶 `current_result`（不含作答內容）。
+        驗證與替代規則同一般問答；回 JSON，之後可在對話中延續。每人每分鐘 10 次、每日 200 次（與問答共用）。
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [attemptId]
               properties:
                 attemptId: { type: string, format: uuid }
@@ -2428,7 +2434,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CoachAnswer' }
-        '409': { $ref: '#/components/responses/Conflict' }
+        '409': { description: '`RESULT_NOT_READY`' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
   /coach/citations/{id}/source:
@@ -2450,9 +2456,12 @@ paths:
       operationId: getCourseCoachUsage
       tags: [Coach]
       x-required-permission: coach.usage_stats.read
-      description: 僅匿名彙整，須達匿名門檻（ARCH §14.5）
+      description: |
+        僅匿名彙整，須達匿名門檻（ARCH §14.5）。最近 30 天、不含教師測試：使用學員數、對話數、提問數、
+        結果觸發數、回答狀態分布、最常引用的教材（前 5）、各活動的提問量。使用學員數未達平台設定
+        `derived.min_threshold`（預設 5）時 `belowThreshold = true`，其餘欄位為 null／空；各活動也只列出達門檻者（SD §6.21）。
       responses:
-        '200': { description: OK }
+        '200': { description: CoachUsageDto }
 
   /courses/{id}/coach/conversations:
     parameters: [{ $ref: '#/components/parameters/CourseId' }]
@@ -2462,22 +2471,11 @@ paths:
       x-required-permission: coach.conversation.read_course
       x-audit: coach.transcript.read
       description: |
-        `readable=false` 的對話不提供逐字稿連結，且回應不含訊息內容。
-      parameters:
-        - $ref: '#/components/parameters/Cursor'
-        - $ref: '#/components/parameters/Limit'
+        實作（SD §6.21）：只列出**可讀**的對話（組織目前政策與對話戳印都是 `course_staff`），最近 100 則；
+        不可讀的對話不列出學員身分，只回 `hiddenCount`。組織政策為 `aggregate_only` 時 `data` 為空。
+        不含教師測試與沒有訊息的對話。每次讀取都寫 `coach.transcript.read`（寫不進去則請求失敗）。
       responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  data:
-                    type: array
-                    items: { $ref: '#/components/schemas/CoachConversationSummary' }
-                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '200': { description: 'CoachTranscriptListDto：policy、data（id、learnerId、learnerDisplayName、activityTitle、triggerType、messageCount、startedAt、lastMessageAt）、hiddenCount' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
   /courses/{id}/coach/conversations/{convId}:
@@ -2503,9 +2501,11 @@ paths:
         本端點與其列表版本是**唯二寫 Audit 的讀取型 API**。留痕是這項
         權限得以開放的前提（ADR-028 條件 3），因此 audit 寫入失敗時
         本請求必須失敗——與一般 audit 的「不回滾業務交易」原則相反，
-        屬刻意例外。該筆紀錄同時出現在學員自己的 `audit.read_self` 摘要中。
+        屬刻意例外。該筆紀錄同時出現在學員自己的 `audit.read_self` 摘要中（稽核 metadata 帶 `learner_id`）。
+        不可讀 → 403 `COACH_TRANSCRIPT_NOT_VISIBLE`（details.issue：organization_policy／conversation_stamp）；
+        對話不屬於此課程或為教師測試 → 404。
       responses:
-        '200': { description: OK }
+        '200': { description: CoachTranscriptDto（摘要＋messages） }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 

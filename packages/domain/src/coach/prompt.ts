@@ -28,6 +28,8 @@ export interface PromptContext {
   completedActivities: number;
   /** 每次對話產生的不透明代號，不是真實 id */
   learnerRef: string;
+  /** 結果觸發時：這次作答的結果（只有狀態、分數與問題代碼，不含作答內容） */
+  currentResult?: { status: string; score: number | null; maxScore: number; issues: { code: string; category: string; severity: string }[] } | null;
 }
 
 export interface PromptChunk {
@@ -121,6 +123,14 @@ export function buildCoachPrompt(input: {
     course: { title: input.context.courseTitle, version: input.context.versionNo },
     lesson: input.context.lessonTitle ? { title: input.context.lessonTitle } : null,
     activity: input.context.activityTitle ? { title: input.context.activityTitle, type: input.context.activityType } : null,
+    ...(input.context.currentResult && {
+      current_result: {
+        status: input.context.currentResult.status,
+        score: input.context.currentResult.score,
+        max_score: input.context.currentResult.maxScore,
+        issues: input.context.currentResult.issues,
+      },
+    }),
     recent_learning_summary: { completed_activities: input.context.completedActivities, attempts_on_this_activity: input.context.attemptCount },
     learner_ref: input.context.learnerRef,
   };
