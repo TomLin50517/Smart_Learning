@@ -175,6 +175,11 @@ const ISSUE_MESSAGES: Record<string, string> = {
   not_processed: '教材尚未處理完成',
   not_failed: '只有處理失敗的教材可以重試',
   empty: '檔案是空的',
+  provider_unavailable: '平台尚未設定 AI 服務',
+  search_unavailable: '教材搜尋服務尚未啟用',
+  disabled_by_organization: '組織已停用 AI 教練',
+  enrollment_inactive: '目前的選課狀態無法使用 AI 教練',
+  not_in_course_version: '這個活動不屬於此課程版本',
   // 完成條件驗證（SD §3.6）：伺服器於 params.message 附上具體說明
   RULE_SCHEMA_INVALID: '{message}',
   RULE_DEPTH_EXCEEDED: '{message}',

@@ -2416,6 +2416,20 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 限流 | 學員每人每分鐘 10 次、每日 200 次；教師測試每分鐘 20 次 |
 | 未做 | 結果觸發的教練（`/coach/from-result`）、課程人員讀逐字稿與匿名統計、語意檢索、提示詞版本表（`prompt_versions`）管理 |
 
+## 6.20 AI 教練介面（Phase 3-4，v1.30）
+
+實作：`apps/web/src/{coach-stream.ts,pages/coach-panel.tsx,pages/coach-view.tsx,pages/coach-test-card.tsx,pages/CoachSettingsPage.tsx}`。無後端變更。
+
+| 項目 | 實作 |
+|---|---|
+| 串流 | EventSource 只能 GET，因此以 fetch 讀 SSE（`askCoach`）；`parseSse` 為純函式（單元測試：跨讀取邊界的事件、ping 註解、壞事件）。開始串流前的錯誤（無法使用、額度、限流）以一般錯誤訊息顯示；串流中斷而沒有 `done` 視為連線中斷 |
+| 問教練 | 學習頁右下角「問教練」開啟右側對話（寬 440px，手機全寬）。每個課節的第一個活動一段對話（沿用既有對話）；第一次提問才建立對話。顯示階段文字（查找教材→撰寫→檢查）與**先找到的教材**，驗證通過後回答才逐字出現。Enter 送出、Shift+Enter 換行（輸入法組字中不送出）；提醒「請勿輸入個人資料」 |
+| 回答 | `[c1]` 標記換成可點的引用標記，下方列出處（標題・頁碼・章節與引文）；後續問題可一鍵追問；資料不足、超出範圍、安全替代以提示色顯示；每則附「此為 AI 教練的學習建議，不影響成績」 |
+| 原文檢視 | 點出處開啟對話框（Esc 關閉），伺服器每次重新檢查權限，顯示引用段落前後文並以標示呈現 |
+| 無法使用 | 顯示「AI 教練暫時無法使用」與原因（平台尚未設定 AI 服務、搜尋服務未啟用、組織已停用、授權不含、選課狀態），並註明課程學習不受影響；未授權時以 `licenseCapabilities.aiCoachAllowed` 判斷 |
+| 教師測試 | 課程版本編輯頁「AI 教練測試」卡片（coach.interact_test）：以學員角度提問，顯示回答與出處（可開原文）、可追問、可重新開始；使用已儲存的設定與已處理完成的教材 |
+| 組織設定 | 側欄「AI 教練設定」（`/app/org/coach`，coach.transcript_policy.write）：目前狀態（AI 服務是否設定、授權、今日用量進度條）、啟用／停用、逐字稿可見性（說明只影響之後的對話） |
+
 ---
 
 # 7. Frontend 設計
@@ -4413,3 +4427,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.27 | 2026-09-14 | Phase 3-1 教材上傳與解析：新增 §6.17（串流上傳與 application/octet-stream、檔頭判斷格式、quarantine 與物件 key、document.parse 流程與失敗原因、切段規則、chunk manifest、綁定／新版／刪除規則、課程人員預覽）；Compose 預設啟動 MinIO；無 migration | Software Designer |
 | v1.28 | 2026-09-14 | Phase 3-2 教材檢索：新增 §6.18（lexical_only＋cjk_bigram、index 建立、document.embed_index 索引與 superseded、document.sync_bindings 綁定同步、KnowledgeRetriever 與四個凍結的範圍 filter、課程人員測試搜尋、C3 接受 superseded）；Compose 預設啟動 Elasticsearch；無 migration | Software Designer |
 | v1.29 | 2026-09-14 | Phase 3-3 AI 教練問答：新增 §6.19（Claude／OpenAI 相容供應商與伺服器端備援、prepare／answer 流程、去識別化、提示詞防偽造、V0～V9 驗證與修正／拒絕、SSE B+、保存與用量、對話與引用原文、教師測試、組織設定、限流）；無 migration | Software Designer |
+| v1.30 | 2026-09-14 | Phase 3-4 AI 教練介面：新增 §6.20（fetch 讀 SSE、學習頁「問教練」對話、引用標記與原文檢視、無法使用的原因說明、教師測試卡片、組織 AI 教練設定頁） | Software Designer |
