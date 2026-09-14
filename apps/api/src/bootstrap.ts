@@ -18,7 +18,11 @@ export function createAdapter(trustProxy: TrustProxySetting = false): FastifyAda
 }
 
 export async function configureApp(app: NestFastifyApplication): Promise<void> {
-  registerRequestContext(app.getHttpAdapter().getInstance());
+  const fastify = app.getHttpAdapter().getInstance();
+  registerRequestContext(fastify);
+  // 檔案上傳（教材，SD §6.17）：以 application/octet-stream 傳送原始內容，不經 JSON 的 1 MB 上限。
+  // 本體以串流交給 handler，由 handler 邊寫入暫存檔邊計算大小（上限依平台設定 upload.max_size）
+  fastify.addContentTypeParser('application/octet-stream', (_req, payload, done) => done(null, payload));
   await app.register(fastifyCookie);
   app.enableShutdownHooks();
 }
