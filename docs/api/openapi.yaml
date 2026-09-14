@@ -626,21 +626,25 @@ components:
     # ---------------------------------------------------------------- Knowledge
     DocumentVersion:
       type: object
-      required: [id, sourceDocumentId, versionNo, status, originalFilename, sizeBytes]
+      required: [id, documentId, versionNo, status, originalFilename, mimeType, sizeBytes, pageCount, chunkCount, failureReason, uploadedAt, processedAt]
       properties:
         id:               { type: string, format: uuid }
-        sourceDocumentId: { type: string, format: uuid }
+        documentId:       { type: string, format: uuid }
         versionNo:        { type: integer }
         status:
           type: string
           enum: [uploaded, scanning, rejected, parsing, chunking, indexing,
                  ready, failed, superseded, retired]
         originalFilename: { type: string }
+        mimeType:         { type: string, description: 依檔頭判斷的格式，非上傳端宣稱 }
         sizeBytes:        { type: integer }
-        pageCount:        { type: integer }
-        chunkCount:       { type: integer }
-        failureReason:    { type: string }
-        processedAt:      { type: string, format: date-time }
+        pageCount:        { type: [integer, 'null'], description: PDF 頁數；其他格式為 null }
+        chunkCount:       { type: [integer, 'null'] }
+        failureReason:
+          type: [string, 'null']
+          description: unsupported_type、no_text（無文字層，例如掃描影像 PDF）、parse_failed:…、too_many_pages、too_much_text
+        uploadedAt:       { type: string, format: date-time }
+        processedAt:      { type: [string, 'null'], format: date-time }
 
     DerivedKnowledge:
       type: object
@@ -2420,11 +2424,17 @@ paths:
       operationId: listCourseKnowledge
       tags: [Knowledge]
       x-required-permission: knowledge.document.read
+      description: |
+        此版本綁定的教材（各附綁定的版本與最新上傳的版本、處理狀態）與本課程其他版本用過、
+        尚未綁在此版本的教材（`available`）。`editable` = 版本為草稿（SD §6.17）。
       responses:
         '200': { description: OK }
 
   /course-versions/{id}/knowledge/documents:
-    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      - { name: filename, in: query, required: true, schema: { type: string, maxLength: 255 }, description: 原始檔名（只作顯示；副檔名用來區分 .docx／.md／.txt） }
+      - { name: title, in: query, schema: { type: string, maxLength: 200 }, description: 顯示名稱，預設取檔名 }
     post:
       operationId: uploadKnowledgeDocument
       tags: [Knowledge]
@@ -2432,26 +2442,69 @@ paths:
       x-required-capability: authoringAllowed
       x-audit: knowledge.document.uploaded
       description: |
-        上傳先入 quarantine prefix，掃描通過才移至 accepted（ARCH §23.3）。
-        解析與索引為非同步；以 `status` 輪詢進度。
+        只限草稿版本（否則 409 `COURSE_VERSION_IMMUTABLE`）。本體為檔案原始內容（`application/octet-stream`，
+        不經 multipart），以串流寫入、邊計算大小與 SHA-256；上限為平台設定 `upload.max_size`（預設 512 MB）。
+        格式以檔頭判斷：PDF、Word（.docx）、Markdown、UTF-8 純文字，其他 415。
+        檔案先放入物件儲存的 quarantine（key 不含檔名，SD §5.1），建立 source_document／document_version（uploaded）、
+        綁定此版本並排入 `document.parse`（同一交易）。worker 移出 quarantine、擷取文字、切段後轉為 `indexing`；
+        以 `GET .../knowledge` 輪詢進度。惡意程式掃描 hook 尚未接上（SA SEQ-06 可插拔）。
+        未設定物件儲存時 503 `SOURCE_TEMPORARILY_UNAVAILABLE`。
       requestBody:
         required: true
         content:
-          multipart/form-data:
-            schema:
-              type: object
-              required: [file]
-              properties:
-                file:  { type: string, format: binary }
-                title: { type: string }
+          application/octet-stream:
+            schema: { type: string, format: binary }
       responses:
         '202':
           description: 已接收，處理中
           content:
             application/json:
               schema: { $ref: '#/components/schemas/DocumentVersion' }
+        '409': { description: '`COURSE_VERSION_IMMUTABLE`' }
         '413': { description: '`UPLOAD_TOO_LARGE`' }
         '415': { description: '`UNSUPPORTED_MEDIA_TYPE`' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /course-versions/{id}/knowledge/bindings:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    post:
+      operationId: bindKnowledgeDocument
+      tags: [Knowledge]
+      x-required-permission: knowledge.document.write
+      x-required-capability: authoringAllowed
+      x-audit: course.version.updated
+      description: |
+        把本課程的教材（指定版本）加入這個草稿版本。其他課程或其他組織的教材 → 422 `document_not_in_course`；
+        同一份教材已在此版本 → 422 `document_already_bound`；格式不符或已下架 → 422 `document_not_usable`。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [documentVersionId]
+              properties:
+                documentVersionId: { type: string, format: uuid }
+      responses:
+        '200': { description: 更新後的教材清單（同 listCourseKnowledge） }
+        '409': { description: '`COURSE_VERSION_IMMUTABLE`' }
+
+  /course-versions/{id}/knowledge/bindings/{documentVersionId}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      - { name: documentVersionId, in: path, required: true, schema: { type: string, format: uuid } }
+    delete:
+      operationId: unbindKnowledgeDocument
+      tags: [Knowledge]
+      x-required-permission: knowledge.document.write
+      x-required-capability: authoringAllowed
+      x-audit: course.version.updated
+      description: 從草稿版本移出（教材本身保留，之後可再加入）。
+      responses:
+        '200': { description: 更新後的教材清單 }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: '`COURSE_VERSION_IMMUTABLE`' }
 
   /course-versions/{id}/knowledge/faqs:
     parameters: [{ $ref: '#/components/parameters/ResourceId' }]
@@ -2491,7 +2544,9 @@ paths:
         '204': { description: 已刪除 }
 
   /knowledge/documents/{id}/versions:
-    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      - { name: filename, in: query, required: true, schema: { type: string, maxLength: 255 } }
     post:
       operationId: addDocumentVersion
       tags: [Knowledge]
@@ -2499,24 +2554,54 @@ paths:
       x-required-capability: authoringAllowed
       x-audit: knowledge.document.version_added
       description: |
-        舊版保留並轉 superseded。已發布的 course_version 其
-        knowledge_bindings 仍指向舊 document_version，因此舊學員的
-        citation 不會失效（ARCH §13.5）。
+        上傳方式與 uploadKnowledgeDocument 相同（`application/octet-stream`）。草稿課程版本中引用這份教材的綁定
+        改指向新版；已發布的 course_version 其 knowledge_bindings 仍指向舊 document_version，因此舊學員的
+        citation 不會失效（ARCH §13.5）。舊版於新版索引完成後轉 superseded（Phase 3-2）。
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
       responses:
-        '202': { description: 已接收 }
+        '202':
+          description: 已接收，處理中
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DocumentVersion' }
+        '413': { description: '`UPLOAD_TOO_LARGE`' }
+        '415': { description: '`UNSUPPORTED_MEDIA_TYPE`' }
+
+  /knowledge/documents/{id}/versions/{versionId}/retry:
+    parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      operationId: retryDocumentVersion
+      tags: [Knowledge]
+      x-required-permission: knowledge.document.write
+      x-required-capability: authoringAllowed
+      description: 處理失敗（failed）後重新排入解析（SA §7.4 Failed → Parsing）；其他狀態 → 422 `not_failed`。
+      responses:
+        '202':
+          description: 已重新排入
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DocumentVersion' }
 
   /knowledge/documents/{id}/versions/{versionId}/view:
     parameters:
       - $ref: '#/components/parameters/ResourceId'
       - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
-      - { name: page, in: query, schema: { type: integer } }
-      - { name: anchor, in: query, schema: { type: string } }
+      - { name: page, in: query, schema: { type: integer, minimum: 1 }, description: PDF 的頁碼；其他格式忽略（顯示全文） }
     get:
       operationId: viewDocumentSource
       tags: [Knowledge]
-      x-required-permission: knowledge.source.view
+      x-required-permission: knowledge.document.read
+      description: |
+        課程人員預覽系統擷取出的文字（依頁；上限 20 萬字元，超過時 `truncated`）。尚未擷取完成 → 422 `not_processed`。
+        學員不經此端點，而是經 AI 教練的引用開啟原文（`/coach/citations/{id}/source`，Phase 3-4）。
       responses:
-        '200': { description: Viewer payload }
+        '200': { description: 'DocumentViewDto：title、versionNo、status、pageCount、page、text、truncated' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
@@ -2528,6 +2613,9 @@ paths:
       x-required-permission: knowledge.document.write
       x-required-capability: authoringAllowed
       x-audit: knowledge.document.deleted
+      description: |
+        刪除整份教材（所有版本、草稿版本中的綁定、物件儲存中的檔案）。已發布或已被取代的課程版本仍引用時
+        不可刪 → 422 `document_in_use`（已發布的內容不可變，舊學員的引用不能失效）。
       responses:
         '204': { description: 已刪除 }
 

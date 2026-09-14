@@ -2359,6 +2359,26 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 設計變數 | styles.css 集中定義圓角（xs／sm／預設／md／lg／pill）與字體（sans／mono），全檔改用變數——之後的視覺設計只需調整變數值。主色以 `[data-brand]` 元素上的 `--org-brand`／`--org-brand-dark` 覆寫 |
 | 前端 | 側欄「品牌設定」（組織管理員）與組織管理的「品牌」連結（平台管理員）：登入網址（複製）、平台名稱、配色色票與自訂主色（即時顯示對比度）、預覽（頂端列、按鈕、徽章、連結）、Logo／小圖示上傳（淺色與深色背景預覽） |
 
+## 6.17 教材上傳與解析（Phase 3-1，v1.27）
+
+實作：`packages/domain/src/knowledge/{chunk,detect}.ts`（切段、格式判斷，純函式）、`packages/contracts/src/knowledge.ts`（DTO、物件 key、job 定義）、`apps/api/src/common/object-storage.ts`、`modules/knowledge/{application/knowledge.service.ts,api/knowledge.controller.ts}`、`apps/worker/src/{storage.ts,extract.ts,handlers/document-parse.ts}`、`apps/web/src/pages/knowledge-panel.tsx`。沿用 migration 0007 的資料表，無新 migration。
+
+| 項目 | 實作 |
+|---|---|
+| 上傳 | `POST /course-versions/{id}/knowledge/documents?filename=&title=`，本體為檔案原始內容（`application/octet-stream`，bootstrap 註冊串流 parser，不受 JSON 的 1 MB 上限）。邊寫暫存檔邊算大小與 SHA-256，超過平台設定 `upload.max_size` 立即中止（413）；空檔 422 `empty`。只限草稿版本（409）。不用 multipart：瀏覽器直接送 File，伺服器不需要額外的 multipart 套件，也不會把整個檔案讀進記憶體 |
+| 格式 | 以檔頭判斷，不採信副檔名或 Content-Type：`%PDF-` → PDF；zip 檔頭且副檔名 .docx → Word；.md／.txt 須為合法 UTF-8 且無 NUL。其他一律 415（含 .doc、圖片、zip）。判斷結果寫入 `mime_type`，worker 再確認一次（不符 → rejected `unsupported_type`） |
+| 物件儲存 | 單一 bucket（`S3_BUCKET`，預設 iac-data），key 依 §5.1：`{storage_prefix}/quarantine/{org}/{doc}/{ver}/original.bin` → 解析時移到 `documents/…/original.bin`，另存 `extracted.txt` 與 PDF 的 `pages/{n}.txt`。key 不含檔名。存取一律經伺服器。未設定 `S3_ENDPOINT` 時上傳與預覽回 503，其餘功能不受影響。Compose 預設啟動 MinIO（只在內部網路） |
+| 交易 | 檔案先放入 quarantine，再於一個交易內建立 source_document（course_id = 課程）、document_version（uploaded）、綁定草稿版本、排入 `document.parse`（key `parse:{dvId}`）。交易失敗則刪除已放入的物件 |
+| 解析（worker） | `document.parse`（ingest 佇列，最多 3 次，15 分鐘）：scanning → 檔頭確認 → 移出 quarantine → parsing（PDF：pdf.js 文字層，不載字型；Word：mammoth 純文字；文字檔：UTF-8）→ chunking → 寫 manifest → `indexing` 並排入 `document.embed_index`（3-2）。**惡意程式掃描 hook 尚未接上**（SA SEQ-06 可插拔）；不執行文件內任何巨集或程式碼 |
+| 失敗原因 | 內容問題不重試、直接標記並稽核 `knowledge.document.failed`：`unsupported_type`（rejected）、`no_text`（例如掃描成圖片的 PDF，OCR 尚未支援）、`parse_failed: …`（壞檔或加密）、`too_many_pages`（> 2000 頁）、`too_much_text`（> 2000 萬字元）。儲存或資料庫錯誤才依 §11 重試。課程人員可按「重試」（failed → uploaded，重新排入） |
+| 切段 | 目標 800 字元、上限 1200、相鄰段重疊約 100（切在空白或標點後）；不跨頁（引用才能標頁碼）；以段落累積，過長段落在句尾切開；Markdown 標題形成章節路徑（「麵包製作 > 發酵」），每個標題開新段。`chunk_id = {dvId}:{index}`（= 之後 Elasticsearch 的 `_id`）；manifest 只存位置（char_start／char_end 對應 extracted.txt）、頁碼、章節、雜湊，不存全文。重試時以 chunk_id 覆寫（worker 無 DELETE 權限） |
+| 綁定 | 草稿可「移出」（教材保留）與「加入本課程其他版本用過的教材」；同一份教材在一個版本只能出現一次。已發布版本的綁定由資料庫觸發器保證不可變 |
+| 新版 | `POST /knowledge/documents/{id}/versions?filename=`：版本號遞增，**草稿**課程版本中引用這份教材的綁定改指向新版；已發布版本仍引用舊版（舊學員的引用不失效，ARCH §13.5）。舊版轉 superseded 於新版索引完成時處理（3-2） |
+| 刪除 | 刪除整份教材（所有版本、草稿中的綁定、物件）；已發布或已被取代的課程版本仍引用 → 422 `document_in_use` |
+| 預覽 | `GET /knowledge/documents/{id}/versions/{versionId}/view?page=`：課程人員（knowledge.document.read）檢視擷取出的文字，PDF 分頁、其他格式顯示全文（上限 20 萬字元）。學員不經此端點——學員只經 AI 教練的引用開啟原文（3-4，knowledge.source.view） |
+| 權限 | 讀：knowledge.document.read（講師、課程管理員、組織管理員）；寫：knowledge.document.write＋authoringAllowed。ScopeResolver 新增 `document` 資源（依 source_documents 的組織與課程） |
+| 前端 | 課程版本編輯頁的「教材」卡片：上傳（檔名預設為名稱）、狀態徽章與失敗原因、處理中每 4 秒自動更新、頁數與段數、預覽文字（分頁）、重試、上傳新版、移出、刪除、加入其他版本用過的教材 |
+
 ---
 
 # 7. Frontend 設計
@@ -4353,3 +4373,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.24 | 2026-09-13 | Phase 2-4 人工核可與證書：新增 §6.14（核可人須擔任條件指定角色、完成後同交易排入發證、worker 發證與冪等、網頁版證書（伺服器端 PDF 延後）、查詢與撤銷、公開驗證、新版本提示） | Software Designer |
 | v1.25 | 2026-09-14 | Phase 2-5 班級與學號：新增 §6.15（member_profiles／cohorts／cohort_members、每年更新流程、批次匯入更新既有成員、整班加入、選課時的班級快照、老師的篩選與搜尋）；migration 0019 | Software Designer |
 | v1.26 | 2026-09-14 | Phase 2-6 組織品牌：新增 §6.16（組織登入網址 /o/{code}、平台名稱、八組預設配色與自訂主色的對比度檢查、Logo／小圖示的格式與安全、公開端點與限流、設計變數）；migration 0020 | Software Designer |
+| v1.27 | 2026-09-14 | Phase 3-1 教材上傳與解析：新增 §6.17（串流上傳與 application/octet-stream、檔頭判斷格式、quarantine 與物件 key、document.parse 流程與失敗原因、切段規則、chunk manifest、綁定／新版／刪除規則、課程人員預覽）；Compose 預設啟動 MinIO；無 migration | Software Designer |
