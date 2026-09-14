@@ -181,6 +181,7 @@ const ISSUE_MESSAGES: Record<string, string> = {
   enrollment_inactive: '目前的選課狀態無法使用 AI 教練',
   not_in_course_version: '這個活動不屬於此課程版本',
   no_result: '這次作答還沒有結果',
+  asset_in_use: '這個素材正被課程版本（{versions}）使用，無法刪除；請先從課程內容移除',
   organization_key_missing: '組織尚未設定 AI 金鑰，請聯絡平台管理員',
   quota_exceeded: '今日的 AI 使用額度已用完',
   encryption_key_missing: '伺服器尚未設定加密主金鑰（AI_KEY_ENCRYPTION_KEY），無法儲存金鑰',

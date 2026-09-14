@@ -20,6 +20,7 @@ import { ACTIVITY_TYPE_LABELS, NAVIGATION_MODE_LABELS, VERSION_STATUS_LABELS } f
 import { useApi, useTitle } from '../hooks';
 import { CoachTestCard } from './coach-test-card';
 import { KnowledgePanel } from './knowledge-panel';
+import { AssetPicker, MediaProvider } from './media-library';
 import { PublishPanel } from './publish-panel';
 import { CoachPolicyCard, CompletionRulesCard } from './version-settings';
 
@@ -149,6 +150,20 @@ export function VersionEditorPage() {
           a.answerKey = answerKey.value;
           a.prerequisite = prerequisite.value;
         }
+    // 圖片／影片區塊要先選好素材（圖片另需替代文字）才能儲存
+    for (const [mi, m] of modules.entries())
+      for (const [li, l] of m.lessons.entries())
+        for (const b of l.contentBlocks) {
+          const where = `第 ${mi + 1} 單元 › 第 ${li + 1} 課節「${l.title}」`;
+          if ((b.type === 'image' || b.type === 'video') && !b.assetId) {
+            setLocalError(`${where}：${b.type === 'image' ? '圖片' : '影片'}區塊尚未選擇素材。`);
+            return;
+          }
+          if (b.type === 'image' && !b.alt.trim()) {
+            setLocalError(`${where}：請填寫圖片的替代文字。`);
+            return;
+          }
+        }
     setBusy(true);
     try {
       const r = await api<CourseVersionDetailDto>('PATCH', `/api/course-versions/${v.id}`, {
@@ -171,7 +186,7 @@ export function VersionEditorPage() {
   }
 
   return (
-    <>
+    <MediaProvider courseId={courseId}>
       <PageHeader
         title={`v${v.versionNo}・${VERSION_STATUS_LABELS[v.status]}`}
         subtitle={state.title}
@@ -302,7 +317,7 @@ export function VersionEditorPage() {
           }}
         />
       )}
-    </>
+    </MediaProvider>
   );
 }
 
@@ -369,6 +384,12 @@ function LessonEditor(props: {
         </button>
         <button type="button" className="btn btn-small" onClick={() => update((x) => void x.contentBlocks.push({ type: 'callout', variant: 'info', body: '' }))}>
           提示框
+        </button>
+        <button type="button" className="btn btn-small" onClick={() => update((x) => void x.contentBlocks.push({ type: 'image', assetId: '', alt: '' }))}>
+          圖片
+        </button>
+        <button type="button" className="btn btn-small" onClick={() => update((x) => void x.contentBlocks.push({ type: 'video', assetId: '' }))}>
+          影片
         </button>
         <button
           type="button"
@@ -440,18 +461,52 @@ function BlockEditor({ block: b, activities, onChange }: { block: LessonBlock; a
         </Field>
       );
     case 'image':
-    case 'video':
-      // 素材上傳於 Phase 2 導入；既有區塊保留並可移除
       return (
-        <p className="muted small">
-          {b.type === 'image' ? '圖片' : '影片'}區塊（素材 {b.assetId}）——素材管理將於後續版本提供
-        </p>
+        <div className="form-grid grow">
+          <Field label="圖片">
+            <AssetPicker kind="image" value={b.assetId} onChange={(id) => onChange({ ...b, assetId: id })} />
+          </Field>
+          <Field label="替代文字" hint="必填；看不到圖片的學員（例如使用螢幕報讀）會聽到這段說明">
+            <input maxLength={300} value={b.alt} onChange={(e) => onChange({ ...b, alt: e.target.value })} />
+          </Field>
+          <Field label="說明（選填）">
+            <input
+              maxLength={500}
+              value={b.caption ?? ''}
+              onChange={(e) => {
+                const { caption: _drop, ...rest } = b;
+                onChange(e.target.value ? { ...rest, caption: e.target.value } : rest);
+              }}
+            />
+          </Field>
+        </div>
+      );
+    case 'video':
+      return (
+        <div className="form-grid grow">
+          <Field label="影片" hint="課節中的影片只供觀看、不追蹤進度；需要計算觀看比例請改用「影片」活動">
+            <AssetPicker kind="video" value={b.assetId} onChange={(id) => onChange({ ...b, assetId: id })} />
+          </Field>
+          <Field label="封面圖（選填）">
+            <AssetPicker
+              kind="image"
+              optional
+              value={b.poster ?? ''}
+              onChange={(id) => {
+                const { poster: _drop, ...rest } = b;
+                onChange(id ? { ...rest, poster: id } : rest);
+              }}
+            />
+          </Field>
+        </div>
       );
   }
 }
 
 /** 影片活動的設定欄位（SD §6.13）：直接改寫 config JSON 文字，與進階區的 JSON 同步 */
 function VideoConfigFields({ text, onChange }: { text: string; onChange(text: string): void }) {
+  // 使用者剛選的來源（尚未填網址或選影片時，設定裡還看不出來）
+  const [picked, setPicked] = useState<'asset' | 'url' | 'none' | null>(null);
   let cfg: Record<string, unknown> | null = {};
   if (text.trim()) {
     try {
@@ -471,11 +526,35 @@ function VideoConfigFields({ text, onChange }: { text: string; onChange(text: st
   };
   const numText = (v: unknown) => (typeof v === 'number' ? String(v) : '');
   const toNum = (s: string) => (s.trim() === '' ? null : Number(s));
+  const assetId = typeof current['video_asset_id'] === 'string' ? current['video_asset_id'] : '';
+  const source = assetId ? 'asset' : typeof current['video_url'] === 'string' && current['video_url'] ? 'url' : 'none';
+  const setSource = (s: 'asset' | 'url' | 'none') => {
+    const next = { ...current };
+    delete next['video_url'];
+    delete next['video_asset_id'];
+    onChange(Object.keys(next).length ? JSON.stringify(next, null, 2) : '');
+    setPicked(s);
+  };
+  const shown = picked ?? source;
   return (
     <div className="form-grid">
-      <Field label="影片網址" hint="瀏覽器可直接播放的 http(s) 網址（MP4、WebM）。留空：學員依老師指示在別處觀看，看完自行確認">
-        <input type="url" maxLength={2000} placeholder="https://" value={typeof current['video_url'] === 'string' ? current['video_url'] : ''} onChange={(e) => set('video_url', e.target.value.trim())} />
+      <Field label="影片來源" hint="素材庫或網址的影片會以播放器觀看並追蹤觀看比例；「在別處觀看」由學員看完自行確認">
+        <select value={shown} onChange={(e) => setSource(e.target.value as 'asset' | 'url' | 'none')}>
+          <option value="asset">素材庫的影片</option>
+          <option value="url">影片網址</option>
+          <option value="none">在別處觀看（不追蹤）</option>
+        </select>
       </Field>
+      {shown === 'asset' && (
+        <Field label="影片">
+          <AssetPicker kind="video" value={assetId} onChange={(id) => set('video_asset_id', id || null)} />
+        </Field>
+      )}
+      {shown === 'url' && (
+        <Field label="影片網址" hint="瀏覽器可直接播放的 http(s) 網址（MP4、WebM）">
+          <input type="url" maxLength={2000} placeholder="https://" value={typeof current['video_url'] === 'string' ? current['video_url'] : ''} onChange={(e) => set('video_url', e.target.value.trim())} />
+        </Field>
+      )}
       <Field label="影片長度（秒）" hint="選填；未填時以播放器讀到的長度為準">
         <input type="number" min={1} max={86400} value={numText(current['duration_sec'])} onChange={(e) => set('duration_sec', toNum(e.target.value))} />
       </Field>

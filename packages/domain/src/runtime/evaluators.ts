@@ -291,6 +291,8 @@ export const VIDEO_CONFIG_SCHEMA = {
   properties: {
     instructions: { type: 'string' },
     video_url: { type: 'string', minLength: 8, maxLength: 2000 },
+    /** 素材庫的影片（與 video_url 擇一；SD §6.23） */
+    video_asset_id: { type: 'string', minLength: 36, maxLength: 36 },
     duration_sec: { type: 'number', minimum: 1, maximum: 86400 },
     completion_ratio: { type: 'number', minimum: 0.1, maximum: 1 },
   },

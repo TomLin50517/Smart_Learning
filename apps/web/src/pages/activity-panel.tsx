@@ -4,7 +4,7 @@ import type {
   ChoiceQuizConfig,
   OutlineActivityDto,
 } from '@iac/contracts';
-import { VIDEO_SAMPLE_SEC } from '@iac/contracts';
+import { assetUrl, VIDEO_SAMPLE_SEC } from '@iac/contracts';
 import { useRef, useState } from 'react';
 import { api } from '../api/client';
 import { ErrorAlert, Notice } from '../components/ui';
@@ -207,7 +207,9 @@ const pct = (r: number) => `${Math.round(r * 100)}%`;
  */
 function VideoInput({ config, queue, busy, onSubmit }: { config: Obj; queue: EventQueue | null; busy: boolean; onSubmit(input: unknown): void }) {
   const raw = config['video_url'];
-  const url = typeof raw === 'string' && /^https?:\/\/\S+$/i.test(raw) ? raw : null;
+  const asset = config['video_asset_id'];
+  // 素材庫的影片優先（網址與素材只能擇一，發布前已檢查）
+  const url = typeof asset === 'string' && asset ? assetUrl(asset) : typeof raw === 'string' && /^https?:\/\/\S+$/i.test(raw) ? raw : null;
   const required = typeof config['completion_ratio'] === 'number' ? config['completion_ratio'] : 0.9;
   const tracker = useRef(new WatchTracker());
   const sent = useRef({ at: 0, ratio: 0, started: false });

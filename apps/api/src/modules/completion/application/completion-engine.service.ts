@@ -67,7 +67,8 @@ export class CompletionEngineService implements CompletionEngine {
     }>(
       `SELECT a.id, a.lesson_id, a.title, a.activity_type, a.is_required, a.interactive_definition_id, d.server_evaluator,
               a.max_attempts, a.weight, a.max_score, p.prerequisite_expression,
-              NULLIF(a.config->>'video_url', '') AS video_url,
+              -- 有播放器可追蹤（網址或素材庫影片）：觀看比例以學習事件佐證
+              COALESCE(NULLIF(a.config->>'video_url', ''), NULLIF(a.config->>'video_asset_id', '')) AS video_url,
               CASE WHEN jsonb_typeof(a.config->'duration_sec') = 'number' THEN (a.config->>'duration_sec')::float8 END AS video_duration_sec
          FROM activities a
          LEFT JOIN interactive_definitions d ON d.id = a.interactive_definition_id

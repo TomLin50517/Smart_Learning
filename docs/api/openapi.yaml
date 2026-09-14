@@ -2568,6 +2568,90 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  # ---------------------------------------------------------------- Content
+  /courses/{id}/assets:
+    parameters: [{ $ref: '#/components/parameters/CourseId' }]
+    get:
+      operationId: listCourseAssets
+      tags: [Content]
+      x-required-permission: course.version.read
+      description: 課程素材（圖片、影片），新到舊；`usedBy` 列出引用它的課程版本（SD §6.23）。
+      responses:
+        '200': { description: 'MediaAssetDto[]' }
+    post:
+      operationId: uploadCourseAsset
+      tags: [Content]
+      x-required-permission: course.version.write
+      x-required-capability: authoringAllowed
+      x-audit: course.asset.uploaded
+      description: |
+        本體為檔案原始內容（`application/octet-stream`，串流寫入）。格式以檔頭判斷：圖片 PNG／JPEG／WebP（≤ 20 MB，不收 SVG）、
+        影片 MP4（ISO BMFF，不收 QuickTime）／WebM（≤ 平台設定 `upload.max_size`）；其他 415。
+        物件 key：`{prefix}/media/{org}/{course}/{asset}/original.bin`（不含檔名）。封存的課程不能上傳（422 `course_archived`）。
+      parameters:
+        - { name: filename, in: query, required: true, schema: { type: string, maxLength: 255 } }
+        - { name: title, in: query, schema: { type: string, maxLength: 200 }, description: 顯示名稱，預設取檔名 }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        '201': { description: MediaAssetDto }
+        '413': { description: '`UPLOAD_TOO_LARGE`' }
+        '415': { description: '`UNSUPPORTED_MEDIA_TYPE`' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /assets/{id}:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    patch:
+      operationId: renameAsset
+      tags: [Content]
+      x-required-permission: course.version.write
+      x-required-capability: authoringAllowed
+      x-audit: course.asset.updated
+      description: 只能改顯示名稱；素材內容不可變（更換＝上傳新素材再改引用）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [title]
+              properties:
+                title: { type: string, minLength: 1, maxLength: 200 }
+      responses:
+        '200': { description: MediaAssetDto }
+    delete:
+      operationId: deleteAsset
+      tags: [Content]
+      x-required-permission: course.version.write
+      x-required-capability: authoringAllowed
+      x-audit: course.asset.deleted
+      description: 被任何課程版本（含草稿）引用時不可刪 → 422 `asset_in_use`（params.versions 列出版本）。刪除時一併移除物件。
+      responses:
+        '204': { description: 已刪除 }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /assets/{id}/content:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      operationId: getAssetContent
+      tags: [Content]
+      x-required-permission: [course.read, learning.result.read_self]
+      description: |
+        素材內容（圖片 `<img>`、影片 `<video>` 直接使用此網址）。每次存取都檢查：同組織，且持有此課程的 course.read
+        （課程人員、組織管理員）或本人在這門課有未退選的選課；否則 404。支援單一 Range（影片拖曳，206／416），
+        型別取自上傳時的檔頭判斷，`nosniff`、`CSP: default-src 'none'; sandbox`，ETag＝SHA-256（304）。
+        nginx 對此路徑關閉緩衝、串流直送。
+      responses:
+        '200': { description: 內容 }
+        '206': { description: 部分內容（Range） }
+        '304': { description: 未變更 }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '416': { description: Range 無法滿足 }
+
   # -------------------------------------------------------------- Knowledge
   /course-versions/{id}/knowledge:
     parameters: [{ $ref: '#/components/parameters/ResourceId' }]

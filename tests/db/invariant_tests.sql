@@ -268,8 +268,8 @@ SELECT pg_temp.t('T58 4 monthly partitions per table', NULL,
      OR (SELECT count(*) FROM pg_inherits i JOIN pg_class c ON c.oid=i.inhrelid
           WHERE i.inhparent='audit_logs'::regclass AND c.relname ~ '_\d{4}_\d{2}$') <> 4
      THEN RAISE EXCEPTION 'PARTITIONS'; END IF; END $d$ $$, 'OK');
-SELECT pg_temp.t('T59 21 migrations recorded', NULL,
- $$DO $d$ BEGIN IF (SELECT count(*) FROM schema_migrations) <> 21 THEN RAISE EXCEPTION 'COUNT'; END IF; END $d$ $$, 'OK');
+SELECT pg_temp.t('T59 22 migrations recorded', NULL,
+ $$DO $d$ BEGIN IF (SELECT count(*) FROM schema_migrations) <> 22 THEN RAISE EXCEPTION 'COUNT'; END IF; END $d$ $$, 'OK');
 
 -- ============================================================ 0015 auth tables
 SELECT pg_temp.t('T60 app_coach cannot read password_reset_tokens', 'app_coach',
@@ -377,6 +377,17 @@ SELECT pg_temp.t('T88 app_coach cannot read organization AI keys', 'app_coach',
 SELECT pg_temp.t('T89 AI key IV must be 12 bytes (AES-GCM)', 'app_api',
  $$INSERT INTO organization_ai_credentials (organization_id, key_alias, ciphertext, iv, auth_tag)
    VALUES ('11111111-0000-0000-0000-000000000001', 'k', '\x01', '\x0102', '\x00000000000000000000000000000000')$$, '23514');
+
+-- ============================================================ 0022 media assets
+SELECT pg_temp.t('T90 media: kind must match the MIME type', NULL,
+ $$INSERT INTO media_assets (organization_id, course_id, kind, mime_type, title, original_filename, size_bytes, sha256, object_key)
+   VALUES ('11111111-0000-0000-0000-000000000001', 'c0000000-0000-0000-0000-000000000001', 'image', 'video/mp4', 't', 'a.mp4', 1, repeat('a', 64), 'k')$$, '23514');
+SELECT pg_temp.t('T91 media: SVG is never stored', NULL,
+ $$INSERT INTO media_assets (organization_id, course_id, kind, mime_type, title, original_filename, size_bytes, sha256, object_key)
+   VALUES ('11111111-0000-0000-0000-000000000001', 'c0000000-0000-0000-0000-000000000001', 'image', 'image/svg+xml', 't', 'a.svg', 1, repeat('a', 64), 'k')$$, '23514');
+SELECT pg_temp.t('T92 app_coach cannot write media', 'app_coach',
+ $$INSERT INTO media_assets (organization_id, course_id, kind, mime_type, title, original_filename, size_bytes, sha256, object_key)
+   VALUES ('11111111-0000-0000-0000-000000000001', 'c0000000-0000-0000-0000-000000000001', 'image', 'image/png', 't', 'a.png', 1, repeat('a', 64), 'k')$$, '42501');
 
 -- ------------------------------------------------------------------ report
 \pset border 1
