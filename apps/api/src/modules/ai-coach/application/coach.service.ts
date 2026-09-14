@@ -39,7 +39,8 @@ import { logger } from '../../../common/logger.js';
 import { OBJECT_STORAGE, type ObjectStorage } from '../../../common/object-storage.js';
 import { ENV, type Env } from '../../../config/env.js';
 import { KNOWLEDGE_RETRIEVER, type KnowledgeRetriever } from '../../knowledge/knowledge.contracts.js';
-import { LLM_PROVIDER, ProviderError, type LlmProvider } from '../infrastructure/llm-provider.js';
+import { ProviderError, type LlmProvider } from '../infrastructure/llm-provider.js';
+import { LlmProviderResolver } from '../infrastructure/provider-resolver.js';
 import { CoachSettingsService } from './coach-settings.service.js';
 import { loadMessages } from './messages.js';
 
@@ -109,6 +110,8 @@ export interface PreparedQuestion {
   otherLearnerNames: string[];
   pii: string[];
   correlationId: string;
+  /** 這個組織的供應商（litellm 模式下用組織自己的金鑰） */
+  llm: LlmProvider;
 }
 
 const unavailable = (reason: CoachUnavailableReason) => new DomainError('COACH_PROVIDER_UNAVAILABLE', COACH_TEXT.unavailable, [{ issue: reason }]);
@@ -129,7 +132,7 @@ function pieces(text: string, size = 24): string[] {
 export class CoachService {
   constructor(
     @Inject(DB_COACH) private readonly db: pg.Pool,
-    @Inject(LLM_PROVIDER) private readonly llm: LlmProvider,
+    private readonly providers: LlmProviderResolver,
     @Inject(KNOWLEDGE_RETRIEVER) private readonly retriever: KnowledgeRetriever,
     @Inject(OBJECT_STORAGE) private readonly storage: ObjectStorage,
     @Inject(ENV) private readonly env: Env,
@@ -164,15 +167,18 @@ export class CoachService {
   async availability(enrollmentId: string, user: AuthUser): Promise<CoachAvailabilityDto> {
     const e = await this.ownEnrollment(enrollmentId, user);
     const s = await this.settings.get(e.organization_id);
+    const ps = await this.providers.status(e.organization_id);
     const reason: CoachUnavailableReason | null = !s.enabled
       ? 'disabled_by_organization'
-      : !this.llm.available
-        ? 'provider_unavailable'
+      : !ps.ok
+        ? (ps.reason ?? 'provider_unavailable')
         : !this.retriever.available
           ? 'search_unavailable'
           : !ACTIVE_ENROLLMENT.includes(e.status)
             ? 'enrollment_inactive'
-            : null;
+            : (await this.quotaReached(e.organization_id))
+              ? 'quota_exceeded'
+              : null;
     const convs = await this.db.query<{ id: string; activity_id: string | null; message_count: number; last_message_at: Date | null }>(
       `SELECT id, activity_id, message_count, last_message_at FROM coach_conversations
         WHERE enrollment_id = $1 AND learner_id = $2 AND anonymized_at IS NULL ORDER BY started_at DESC LIMIT 20`,
@@ -250,7 +256,8 @@ export class CoachService {
     // 建立對話前先確認可以回答，避免留下空對話
     const s = await this.settings.get(x.organization_id);
     if (!s.enabled) throw unavailable('disabled_by_organization');
-    if (!this.llm.available) throw unavailable('provider_unavailable');
+    const ps = await this.providers.status(x.organization_id);
+    if (!ps.ok) throw unavailable(ps.reason ?? 'provider_unavailable');
     if (!this.retriever.available) throw unavailable('search_unavailable');
     if (!ACTIVE_ENROLLMENT.includes(x.enrollment_status)) throw unavailable('enrollment_inactive');
 
@@ -325,12 +332,16 @@ export class CoachService {
   }
 
   /** 組織每日 token 上限（ADR-029：調校旋鈕，不是啟用閘門） */
-  private async checkQuota(organizationId: string): Promise<void> {
+  private async quotaReached(organizationId: string): Promise<boolean> {
     const r = await this.db.query<{ n: string }>(
       `SELECT COALESCE(sum(total_tokens), 0)::text AS n FROM ai_usage_records WHERE organization_id = $1 AND occurred_at >= date_trunc('day', now())`,
       [organizationId],
     );
-    if (Number(r.rows[0]!.n) >= this.env.AI_DAILY_TOKEN_BUDGET_DEFAULT) throw new DomainError('AI_QUOTA_EXCEEDED', 'Daily AI token budget reached');
+    return Number(r.rows[0]!.n) >= this.env.AI_DAILY_TOKEN_BUDGET_DEFAULT;
+  }
+
+  private async checkQuota(organizationId: string): Promise<void> {
+    if (await this.quotaReached(organizationId)) throw new DomainError('AI_QUOTA_EXCEEDED', 'Daily AI token budget reached');
   }
 
   /** V4：反查 chunk 仍屬於此組織、且綁在此課程版本 */
@@ -357,7 +368,8 @@ export class CoachService {
   ): Promise<PreparedQuestion> {
     const s = await this.settings.get(conv.organization_id);
     if (!s.enabled) throw unavailable('disabled_by_organization');
-    if (!this.llm.available) throw unavailable('provider_unavailable');
+    const resolved = await this.providers.forOrganization(conv.organization_id);
+    if (!resolved.ok) throw unavailable(resolved.reason);
     if (!this.retriever.available) throw unavailable('search_unavailable');
     if (conv.enrollment_id) {
       const e = await this.db.query<{ status: string }>(`SELECT status FROM enrollments WHERE id = $1`, [conv.enrollment_id]);
@@ -402,6 +414,7 @@ export class CoachService {
     ]);
     const w = where?.rows[0];
     return {
+      llm: resolved.provider,
       conv,
       policy,
       question,
@@ -465,11 +478,19 @@ export class CoachService {
     for (let round = 0; round < 2; round++) {
       let res;
       try {
-        res = await this.llm.complete({ system: prompt.system, messages: prompt.messages, responseSchema: COACH_RESPONSE_SCHEMA, maxTokens: MAX_OUTPUT_TOKENS, correlationId: p.correlationId });
+        res = await p.llm.complete({
+          system: prompt.system,
+          messages: prompt.messages,
+          responseSchema: COACH_RESPONSE_SCHEMA,
+          maxTokens: MAX_OUTPUT_TOKENS,
+          correlationId: p.correlationId,
+          // gateway 報表依課程拆分用量；不含學員資訊
+          tags: [`course:${p.conv.course_id}`, 'purpose:coach_answer'],
+        });
         calls.push({ model: res.model, promptTokens: res.promptTokens, completionTokens: res.completionTokens, latencyMs: res.latencyMs, status: 'success', errorCode: null });
       } catch (e) {
         if (!(e instanceof ProviderError)) throw e;
-        calls.push({ model: this.llm.model, promptTokens: 0, completionTokens: 0, latencyMs: e.latencyMs, status: e.kind === 'timeout' ? 'timeout' : 'error', errorCode: e.kind });
+        calls.push({ model: p.llm.model, promptTokens: 0, completionTokens: 0, latencyMs: e.latencyMs, status: e.kind === 'timeout' ? 'timeout' : 'error', errorCode: e.kind });
         logger.warn({ kind: e.kind, detail: e.message, correlation_id: p.correlationId }, 'coach provider call failed');
         return fallback(`PROVIDER_${e.kind.toUpperCase()}`);
       }
@@ -504,7 +525,8 @@ export class CoachService {
       case 'out_of_scope':
         return COACH_TEXT.outOfScope;
       case 'fallback':
-        return COACH_TEXT.fallback;
+        // gateway 金鑰預算用完或限流：暫時性，請學員稍後再試
+        return o.fallbackReason === 'PROVIDER_QUOTA' ? COACH_TEXT.resting : COACH_TEXT.fallback;
     }
   }
 
@@ -525,7 +547,7 @@ export class CoachService {
         `INSERT INTO coach_messages (organization_id, conversation_id, seq_no, role, content, correlation_id) VALUES ($1, $2, $3, 'user', $4, $5)`,
         [p.conv.organization_id, p.conv.id, seq - 1, p.question, p.correlationId],
       );
-      const snapshot = { ...p.policy, status: o.status, followUps, prompt: COACH_PROMPT_VERSION, provider: this.llm.name, piiFlags: p.pii, chunks: p.chunks.length };
+      const snapshot = { ...p.policy, status: o.status, followUps, prompt: COACH_PROMPT_VERSION, provider: p.llm.name, piiFlags: p.pii, chunks: p.chunks.length };
       const m = await c.query<{ id: string }>(
         `INSERT INTO coach_messages (organization_id, conversation_id, seq_no, role, content, policy_snapshot, validation_status, fallback_reason, citation_count, correlation_id)
          VALUES ($1, $2, $3, 'assistant', $4, $5::jsonb, $6, $7, $8, $9) RETURNING id`,
@@ -546,7 +568,7 @@ export class CoachService {
         await c.query(
           `INSERT INTO ai_usage_records (organization_id, course_id, message_id, purpose, provider, model, prompt_tokens, completion_tokens, latency_ms, status, error_code, correlation_id)
            VALUES ($1, $2, $3, 'coach_answer', $4, $5, $6, $7, $8, $9, $10, $11)`,
-          [p.conv.organization_id, p.conv.course_id, messageId, this.llm.name, call.model, call.promptTokens, call.completionTokens, call.latencyMs, call.status, call.errorCode, p.correlationId],
+          [p.conv.organization_id, p.conv.course_id, messageId, p.llm.name, call.model, call.promptTokens, call.completionTokens, call.latencyMs, call.status, call.errorCode, p.correlationId],
         );
       }
       await c.query('COMMIT');

@@ -1,5 +1,5 @@
 /**
- * LLM Provider Adapter（SD §10.5）。教練服務只依賴這個介面；供應商在 provider-factory.ts 依環境變數選定。
+ * LLM Provider Adapter（SD §10.5）。教練服務只依賴這個介面；供應商由 LlmProviderResolver 依環境與組織選定。
  * 共通行為：逾時、網路錯誤最多重試 1 次、錯誤只回分類（不把供應商的原始錯誤傳給前端）。
  */
 
@@ -15,6 +15,8 @@ export interface CompletionRequest {
   responseSchema: Record<string, unknown>;
   maxTokens: number;
   correlationId: string;
+  /** 用量歸屬標籤（例如 course:<id>、purpose:coach_answer）；不含學員資訊。只有 gateway 模式會送出 */
+  tags?: string[];
 }
 
 export interface CompletionResponse {
@@ -27,10 +29,13 @@ export interface CompletionResponse {
   finishReason: 'stop' | 'length' | 'refusal';
 }
 
-/** unavailable：金鑰錯誤、無權限、限流、模型不存在——學員看到「暫時無法使用」 */
+/**
+ * unavailable：金鑰錯誤、無權限、模型不存在——設定問題
+ * quota：限流或預算用完（LiteLLM 的金鑰預算）——暫時性，學員看到「AI 教練休息中」
+ */
 export class ProviderError extends Error {
   constructor(
-    readonly kind: 'timeout' | 'unavailable' | 'error',
+    readonly kind: 'timeout' | 'unavailable' | 'quota' | 'error',
     message: string,
     readonly latencyMs = 0,
   ) {
@@ -39,14 +44,23 @@ export class ProviderError extends Error {
   }
 }
 
+/** 測試連線的結果（不產生回答、不耗用 token） */
+export interface ConnectionTest {
+  ok: boolean;
+  reason: 'ok' | 'unauthorized' | 'model_not_available' | 'unreachable' | 'quota' | 'error';
+  latencyMs: number;
+}
+
 export interface LlmProvider {
   readonly name: string;
   readonly model: string;
-  /** 已設定（有金鑰）；false 時教練顯示暫時無法使用，系統其餘功能正常（NFR-AVAIL-002） */
+  /** 已設定（有金鑰）；false 時教練不可用，系統其餘功能正常（NFR-AVAIL-002） */
   readonly available: boolean;
   complete(req: CompletionRequest): Promise<CompletionResponse>;
+  testConnection?(): Promise<ConnectionTest>;
 }
 
+/** 平台層級的供應商（AI_PROVIDER=anthropic／openai…；litellm 模式下為 NONE，改由組織金鑰） */
 export const LLM_PROVIDER = Symbol('LLM_PROVIDER');
 
 /** 未設定供應商（AI_PROVIDER=none 或缺金鑰） */

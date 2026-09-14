@@ -20,6 +20,7 @@ import { LearnPage } from './pages/LearnPage';
 import { MyCoursesPage } from './pages/MyCoursesPage';
 import { MyTimelinePage } from './pages/MyTimelinePage';
 import { OrganizationsPage } from './pages/OrganizationsPage';
+import { OrgAiKeyPage } from './pages/OrgAiKeyPage';
 import { OrgMembersPage } from './pages/OrgMembersPage';
 import { ProfilePage } from './pages/ProfilePage';
 
@@ -65,6 +66,7 @@ export const router = createBrowserRouter([
       { path: 'platform/organizations', element: <OrganizationsPage /> },
       { path: 'platform/organizations/:orgId/users', element: <OrgMembersPage /> },
       { path: 'platform/organizations/:orgId/branding', element: <BrandingPage /> },
+      { path: 'platform/organizations/:orgId/ai-key', element: <OrgAiKeyPage /> },
       { path: 'platform/license', element: <LicensePage /> },
       { path: 'platform/system', element: <SettingsPage /> },
       { path: 'platform/jobs', element: <JobsPage /> },

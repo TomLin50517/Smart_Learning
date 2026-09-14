@@ -2290,6 +2290,65 @@ paths:
         '429': { $ref: '#/components/responses/RateLimited' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
+  /organizations/{id}/ai-credential:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      operationId: getOrgAiCredential
+      tags: [Coach, Organization]
+      x-required-permission: org.read
+      description: |
+        組織 AI gateway 虛擬金鑰的狀態（SD §6.22、ADR-034）：`mode`（organization＝AI_PROVIDER=litellm，每個組織自己的金鑰；
+        platform＝平台共用設定）、`configured`、`alias`（金鑰代號）、`updatedAt`、`updatedBy`、`encryptionReady`。
+        **金鑰本身永遠不回傳。**
+      responses:
+        '200': { description: OrgAiCredentialDto }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      operationId: setOrgAiCredential
+      tags: [Coach, Organization]
+      x-required-permission: platform.ai_provider.write
+      x-required-capability: configurationWriteAllowed
+      x-audit: org.ai_credential.updated
+      description: |
+        平台管理員設定（或更換）組織的虛擬金鑰。以 AES-256-GCM 加密後存放（主金鑰為環境變數 AI_KEY_ENCRYPTION_KEY，
+        AAD＝組織 id）；未設定主金鑰 → 422 `encryption_key_missing`。稽核只記代號與是否設定，不記金鑰。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [alias, key]
+              properties:
+                alias: { type: string, minLength: 1, maxLength: 100, description: 金鑰代號（例如 LiteLLM 的 key alias） }
+                key:   { type: string, minLength: 8, maxLength: 2048, writeOnly: true, description: 虛擬金鑰（不含空白） }
+      responses:
+        '200': { description: OrgAiCredentialDto（不含金鑰） }
+    delete:
+      operationId: removeOrgAiCredential
+      tags: [Coach, Organization]
+      x-required-permission: platform.ai_provider.write
+      x-required-capability: configurationWriteAllowed
+      x-audit: org.ai_credential.removed
+      description: 移除組織的金鑰；之後該組織的 AI 教練不可用（學員畫面隱藏），其他功能不受影響。沒有金鑰 → 404。
+      responses:
+        '204': { description: 已移除 }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /organizations/{id}/ai-credential/test:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    post:
+      operationId: testOrgAiCredential
+      tags: [Coach, Organization]
+      x-required-permission: platform.ai_provider.write
+      description: |
+        以該組織的設定測試連線：OpenAI 相容／LiteLLM 呼叫 `GET /models`，Claude 呼叫 Models API——驗證金鑰與模型權限，
+        不產生回答、不耗用 token。reason：ok、unauthorized、model_not_available、unreachable、quota、error、
+        provider_unavailable（平台未設定 gateway 或主金鑰）、organization_key_missing。每人每分鐘 10 次。
+      responses:
+        '200': { description: AiConnectionTestDto }
+
   /organizations/{id}/coach-settings:
     parameters: [{ $ref: '#/components/parameters/ResourceId' }]
     get:

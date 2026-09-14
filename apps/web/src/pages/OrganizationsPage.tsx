@@ -79,6 +79,7 @@ export function OrganizationsPage() {
                     <td className="actions">
                       {can(me, 'org.user.read') && o.status === 'active' && <Link to={`/app/platform/organizations/${o.id}/users`}>成員</Link>}
                       {can(me, 'org.settings.write') && o.status === 'active' && <Link to={`/app/platform/organizations/${o.id}/branding`}>品牌</Link>}
+                      {can(me, 'platform.ai_provider.write') && o.status === 'active' && <Link to={`/app/platform/organizations/${o.id}/ai-key`}>AI 金鑰</Link>}
                       {can(me, 'platform.organization.create') && (
                         <button className="btn btn-small btn-ghost" disabled={!writable} onClick={() => setRecovering(recovering === o.id ? null : o.id)} aria-expanded={recovering === o.id}>
                           管理員復原

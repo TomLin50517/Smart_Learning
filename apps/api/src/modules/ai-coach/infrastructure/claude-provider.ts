@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { ProviderError, type CompletionRequest, type CompletionResponse, type LlmProvider } from './llm-provider.js';
+import { ProviderError, type CompletionRequest, type CompletionResponse, type ConnectionTest, type LlmProvider } from './llm-provider.js';
 
 /**
  * Claude（Anthropic 官方 SDK）。回應格式以 structured output（output_config.format）限定為教練的 JSON Schema；
@@ -30,8 +30,8 @@ export class ClaudeProvider implements LlmProvider {
         system: req.system,
         messages: req.messages,
         output_config: { effort: this.opts.effort, format: { type: 'json_schema', schema: req.responseSchema } },
-        betas: ['server-side-fallback-2026-07-01'],
-        fallbacks: 'default',
+        // 伺服器端備援只在直連 Anthropic 時啟用；經 gateway（自訂 baseURL）時備援由 gateway 負責
+        ...(!this.opts.baseURL && { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' as const }),
       });
       const text = res.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('');
       const u = res.usage;
@@ -49,9 +49,25 @@ export class ClaudeProvider implements LlmProvider {
       if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError || e instanceof Anthropic.NotFoundError) {
         throw new ProviderError('unavailable', `${e.status} ${e.name}`, ms);
       }
-      if (e instanceof Anthropic.RateLimitError) throw new ProviderError('unavailable', 'rate limited', ms);
+      if (e instanceof Anthropic.RateLimitError) throw new ProviderError('quota', 'rate limited', ms);
       if (e instanceof Anthropic.APIError) throw new ProviderError('error', `${e.status ?? 'network'} ${e.name}`, ms);
       throw e;
+    }
+  }
+
+  /** Models API：驗證金鑰與模型，不產生回答 */
+  async testConnection(): Promise<ConnectionTest> {
+    const started = Date.now();
+    try {
+      await this.client.models.retrieve(this.opts.model);
+      return { ok: true, reason: 'ok', latencyMs: Date.now() - started };
+    } catch (e) {
+      const latencyMs = Date.now() - started;
+      if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) return { ok: false, reason: 'unauthorized', latencyMs };
+      if (e instanceof Anthropic.NotFoundError) return { ok: false, reason: 'model_not_available', latencyMs };
+      if (e instanceof Anthropic.RateLimitError) return { ok: false, reason: 'quota', latencyMs };
+      if (e instanceof Anthropic.APIConnectionError) return { ok: false, reason: 'unreachable', latencyMs };
+      return { ok: false, reason: 'error', latencyMs };
     }
   }
 }

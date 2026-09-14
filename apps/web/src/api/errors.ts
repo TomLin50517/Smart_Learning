@@ -53,7 +53,7 @@ export const ERROR_MESSAGES: Record<ClientErrorCode, string> = {
   COACH_PROVIDER_UNAVAILABLE: 'AI 學習教練暫時無法使用；課程學習不受影響。',
   COACH_TRANSCRIPT_NOT_VISIBLE: '依組織政策，您無法檢視此對話紀錄。',
   TRANSCRIPT_VISIBILITY_IMMUTABLE: '對話紀錄可見性設定已確定，無法再變更。',
-  AI_QUOTA_EXCEEDED: '今日的 AI 使用額度已用完。',
+  AI_QUOTA_EXCEEDED: 'AI 教練休息中（今日額度已用完），請稍後再試。',
   LICENSE_NOT_ACTIVATED: '系統尚未啟用授權。',
   LICENSE_EXPIRED: '授權已到期。',
   LICENSE_CONFIG_FROZEN: '授權維護期已過，設定目前為唯讀。',
@@ -181,6 +181,9 @@ const ISSUE_MESSAGES: Record<string, string> = {
   enrollment_inactive: '目前的選課狀態無法使用 AI 教練',
   not_in_course_version: '這個活動不屬於此課程版本',
   no_result: '這次作答還沒有結果',
+  organization_key_missing: '組織尚未設定 AI 金鑰，請聯絡平台管理員',
+  quota_exceeded: '今日的 AI 使用額度已用完',
+  encryption_key_missing: '伺服器尚未設定加密主金鑰（AI_KEY_ENCRYPTION_KEY），無法儲存金鑰',
   organization_policy: '組織目前不開放課程人員查看對話紀錄',
   conversation_stamp: '這段對話開始時設定為不公開，無法查看',
   // 完成條件驗證（SD §3.6）：伺服器於 params.message 附上具體說明

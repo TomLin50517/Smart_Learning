@@ -4,7 +4,8 @@ import pg from 'pg';
 import { DB_API } from '../../../common/database.module.js';
 import { DomainError } from '../../../common/domain-error.js';
 import { ENV, type Env } from '../../../config/env.js';
-import { LLM_PROVIDER, type LlmProvider } from '../infrastructure/llm-provider.js';
+import { LlmProviderResolver } from '../infrastructure/provider-resolver.js';
+import { AiCredentialService } from './ai-credentials.service.js';
 
 const ENABLED_KEY = 'coach.enabled';
 /** 0009 起的鍵名；「無列」＝尚未決定，視為 aggregate_only（SD §2.11.2） */
@@ -24,7 +25,8 @@ export class CoachSettingsService {
   constructor(
     @Inject(DB_API) private readonly db: pg.Pool,
     @Inject(ENV) private readonly env: Env,
-    @Inject(LLM_PROVIDER) private readonly llm: LlmProvider,
+    private readonly providers: LlmProviderResolver,
+    private readonly credentials: AiCredentialService,
   ) {}
 
   async get(organizationId: string, q: pg.Pool | pg.PoolClient = this.db): Promise<CoachSettingsDto> {
@@ -40,7 +42,8 @@ export class CoachSettingsService {
     return {
       enabled: m.get(ENABLED_KEY) !== false,
       transcriptVisibility: m.get(VISIBILITY_KEY) === 'course_staff' ? 'course_staff' : 'aggregate_only',
-      providerConfigured: this.llm.available,
+      providerConfigured: (await this.providers.status(organizationId)).ok,
+      aiKey: await this.credentials.describe(organizationId).then(({ mode, configured, alias, updatedAt }) => ({ mode, configured, alias, updatedAt })),
       tokensUsedToday: Number(used.rows[0]!.n),
       dailyTokenBudget: this.env.AI_DAILY_TOKEN_BUDGET_DEFAULT,
     };
