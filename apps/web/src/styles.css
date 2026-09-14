@@ -473,6 +473,40 @@ details.bulk > summary {
   flex-direction: column;
   gap: 10px;
 }
+/* ---- 選課（SD §6.24） ------------------------------------------------------ */
+.enroll-code {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 10px;
+  padding: 10px 14px;
+  background: var(--surface-2);
+  border-radius: var(--radius);
+}
+.enroll-code-value {
+  font-family: var(--font-mono);
+  font-size: 1.4rem;
+  letter-spacing: 0.15em;
+}
+.enroll-code-input {
+  font-family: var(--font-mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.catalog-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.catalog-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
 /* ---- 課程素材（SD §6.23） -------------------------------------------------- */
 .media-thumb {
   display: inline-flex;
