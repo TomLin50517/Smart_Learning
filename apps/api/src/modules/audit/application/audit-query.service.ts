@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { AuditVisibility } from '../../../common/authz.js';
 import { DB_API } from '../../../common/database.module.js';
 import { DomainError } from '../../../common/domain-error.js';
-import { toCsv } from '../domain/csv.js';
+import { toCsv } from '../../../common/csv.js';
 
 export interface AuditFilter {
   /** 精確比對；以 ".*" 結尾表示前綴（例：org.*） */
