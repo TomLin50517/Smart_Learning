@@ -1956,15 +1956,146 @@ paths:
       responses:
         '200': { description: '`MyEnrollmentDto[]`' }
 
+  /me/catalog:
+    get:
+      operationId: listCatalog
+      tags: [Enrollment]
+      x-required-permission: enrollment.self_enroll
+      description: |
+        目前組織中公開於課程目錄（`joinBy = catalog`）、已發布、未封存的課程（SD §6.24）；附本人的選課狀態與
+        `availability`（open／not_yet／closed／full）。
+      responses:
+        '200': { description: 'CatalogCourseDto[]' }
+
+  /me/enrollments/join:
+    post:
+      operationId: joinByCode
+      tags: [Enrollment]
+      x-required-permission: enrollment.self_enroll
+      x-required-limit: maxActiveLearners
+      x-audit: enrollment.joined
+      description: |
+        輸入選課碼加入（UC-ENR-003）：只在目前所在的組織內找（碼會正規化：去空白與連字號、轉大寫）。找不到或課程不是
+        選課碼模式 → 422 `code_not_found`（不透露課程是否存在）；已封存、未發布、成員停用、期間外（`enrollment_closed`）、
+        額滿（`course_full`）→ 422。已在課程中 → 200 並 `alreadyEnrolled: true`。需審核的課程建立**待審核**選課
+        （enroll_method = approval、不寫學習事件）。綁定當下的已發布版本。每人每分鐘 10 次。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [code]
+              properties:
+                code: { type: string, minLength: 4, maxLength: 20 }
+      responses:
+        '200': { description: JoinResultDto }
+
+  /courses/{id}/join:
+    parameters: [{ $ref: '#/components/parameters/CourseId' }]
+    post:
+      operationId: joinFromCatalog
+      tags: [Enrollment]
+      x-required-permission: enrollment.self_enroll
+      x-required-limit: maxActiveLearners
+      x-audit: enrollment.joined
+      description: 從課程目錄加入（UC-ENR-002）；規則同 joinByCode，課程須為目前組織中 `joinBy = catalog` 的課程，否則 404。
+      responses:
+        '200': { description: JoinResultDto }
+        '404': { $ref: '#/components/responses/NotFound' }
+
   /enrollments/{id}/approve:
     parameters: [{ $ref: '#/components/parameters/ResourceId' }]
     post:
       operationId: approveEnrollment
       tags: [Enrollment]
       x-required-permission: enrollment.approve
+      x-required-limit: maxActiveLearners
       x-audit: enrollment.approved
+      description: |
+        核准加入申請（UC-ENR-004）：待審核 → 學習中。改綁「核准當下」的已發布版本（AC-CRS-003），並寫入 course.enrolled
+        （學習歷程的起點）。鎖序與指派相同（先課程、後選課）。不是待審核 → 422 `invalid_transition`。
       responses:
-        '200': { description: OK }
+        '200': { description: EnrollmentDto }
+
+  /enrollments/{id}/reject:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    post:
+      operationId: rejectEnrollment
+      tags: [Enrollment]
+      x-required-permission: enrollment.approve
+      x-audit: enrollment.rejected
+      description: 拒絕加入申請：待審核 → 未通過審核；學員之後可以再申請。選填 `reason` 只記在稽核。
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                reason: { type: string, maxLength: 500 }
+      responses:
+        '200': { description: EnrollmentDto }
+
+  /courses/{id}/enrollment-policy:
+    parameters: [{ $ref: '#/components/parameters/CourseId' }]
+    get:
+      operationId: getEnrollmentPolicy
+      tags: [Enrollment]
+      x-required-permission: enrollment.assign
+      description: 選課政策與占用名額、待審核數（SD §6.24）。
+      responses:
+        '200': { description: EnrollmentPolicyViewDto }
+    put:
+      operationId: setEnrollmentPolicy
+      tags: [Enrollment]
+      x-required-permission: enrollment.assign
+      x-required-capability: configurationWriteAllowed
+      x-audit: course.enrollment_policy.updated
+      description: |
+        `joinBy`：assign（只由管理者指派）／code（選課碼）／catalog（課程目錄）；`requireApproval`（assign 時忽略）；
+        `opensAt`／`closesAt`（開放期間，須 opens < closes）；`maxSeats`（名額，只限制自行加入與申請）。
+        選課碼模式下沒有碼或 `regenerateCode: true` 時由伺服器產生 8 碼（不含 0／O、1／I，同組織唯一）；改成其他方式時清除舊碼。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [joinBy]
+              properties:
+                joinBy:          { type: string, enum: [assign, code, catalog] }
+                requireApproval: { type: boolean }
+                opensAt:         { type: [string, 'null'], format: date-time }
+                closesAt:        { type: [string, 'null'], format: date-time }
+                maxSeats:        { type: [integer, 'null'], minimum: 1 }
+                regenerateCode:  { type: boolean }
+      responses:
+        '200': { description: EnrollmentPolicyViewDto }
+
+  /courses/{id}/learners/export:
+    parameters:
+      - $ref: '#/components/parameters/CourseId'
+      - { name: status, in: query, schema: { type: string } }
+      - { name: cohort, in: query, schema: { type: string } }
+      - { name: q, in: query, schema: { type: string } }
+    get:
+      operationId: exportCourseLearners
+      tags: [Enrollment]
+      x-required-permission: learning.result.read_all
+      x-audit: course.learners.exported
+      description: |
+        學員名單 CSV（UTF-8 BOM、儲存格防公式注入）：學號、姓名、Email、班級、狀態、加入方式、加入時間、版本、必修完成／總數、
+        完成率、目前總分、最後學習、完成時間、期限，以及目前已發布版本各活動的最佳結果（分數；沒有分數時顯示結果）。
+        篩選同名單；超過 10,000 列 → 422 `too_many_rows`（不靜默截斷）。每次匯出都寫稽核（列數與篩選條件）。
+      responses:
+        '200':
+          description: CSV
+          content:
+            text/csv:
+              schema: { type: string }
 
   /enrollments/{id}/withdraw:
     parameters: [{ $ref: '#/components/parameters/ResourceId' }]
