@@ -3,9 +3,8 @@
 #   cp .env.example .env   # 填入密碼
 #   docker compose -f infra/compose/docker-compose.yml up --build
 #
-# 預設啟動 postgres / migrate / api / worker / reverse-proxy / object-storage（MinIO，Phase 3-1 起）。
-# Elasticsearch 以 profile 啟用（Phase 3-2 起預設啟動）：
-#   docker compose -f infra/compose/docker-compose.yml --profile search up
+# 預設啟動 postgres / migrate / api / worker / reverse-proxy / object-storage（MinIO，Phase 3-1 起）/
+# elasticsearch（Phase 3-2 起）。MinIO 與 Elasticsearch 只在 compose 內部網路，不對外開埠。
 # 不含 Redis / Kafka / RabbitMQ（ARCH §5.2、ADR-011）。
 # =============================================================================
 name: iac
@@ -55,11 +54,14 @@ services:
     environment:
       # api 只經由 nginx 對外 → 信任一層代理的 X-Forwarded-For
       TRUST_PROXY: "1"
-      <<: &s3
+      <<: &backing
         S3_ENDPOINT: http://object-storage:9000
         S3_BUCKET: ${S3_BUCKET:-iac-data}
         S3_ACCESS_KEY: ${S3_ACCESS_KEY:-iac}
         S3_SECRET_KEY: ${S3_SECRET_KEY:-changeme123}
+        ELASTICSEARCH_URL: http://elasticsearch:9200
+        ELASTICSEARCH_USERNAME: elastic
+        ELASTICSEARCH_PASSWORD: ${ES_PASSWORD:-changeme}
     depends_on:
       migrate: { condition: service_completed_successfully }
     healthcheck:
@@ -74,7 +76,7 @@ services:
     command: ["node", "apps/worker/dist/main.js"]
     environment:
       WORKER_QUEUES: ingest,ai,output
-      <<: *s3
+      <<: *backing
     depends_on:
       migrate: { condition: service_completed_successfully }
     mem_limit: 4g
@@ -91,16 +93,23 @@ services:
     mem_limit: 512m
 
   # ---- Phase 2 ---------------------------------------------------------------
+  # 教材檢索（Phase 3-2 起預設啟動；只在 compose 內部網路）。lexical_only（BM25 + cjk_bigram），
+  # 不需要機器學習模組，因此關閉 ML、heap 1 GB；之後啟用語意檢索時再調高
   elasticsearch:
-    profiles: ["search"]
     image: docker.elastic.co/elasticsearch/elasticsearch:9.0.0
     environment:
       discovery.type: single-node
-      ES_JAVA_OPTS: "-Xms2g -Xmx2g"
+      ES_JAVA_OPTS: "-Xms1g -Xmx1g"
       xpack.security.enabled: "true"
+      xpack.ml.enabled: "false"
       ELASTIC_PASSWORD: ${ES_PASSWORD:-changeme}
     volumes: [esdata:/usr/share/elasticsearch/data]
-    mem_limit: 4g
+    mem_limit: 2g
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs -u elastic:$$ELASTIC_PASSWORD http://localhost:9200/_cluster/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
 
   # 教材原始檔與擷取文字（Phase 3-1 起預設啟動；只在 compose 內部網路，不對外開埠）
   object-storage:

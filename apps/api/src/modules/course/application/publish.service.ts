@@ -117,8 +117,9 @@ export class CoursePublishService {
         ORDER BY kb.priority, kb.document_version_id`,
       [id],
     );
+    // superseded（已有新版）仍可引用：內容保留在索引中，已發布的舊版本也還在用
     docs.rows.forEach((d, i) => {
-      if (d.status !== 'ready') {
+      if (d.status !== 'ready' && d.status !== 'superseded') {
         errors.push({
           check: 'C3',
           code: 'C3_DOCUMENT_NOT_READY',

@@ -4,6 +4,7 @@ export * from './completion/evaluate.js';
 export * from './completion/validate-rule.js';
 export * from './knowledge/chunk.js';
 export * from './knowledge/detect.js';
+export * from './knowledge/search.js';
 export * from './publish/canonical-json.js';
 export * from './publish/json-schema-lite.js';
 export * from './publish/reachability.js';

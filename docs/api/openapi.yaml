@@ -2430,6 +2430,32 @@ paths:
       responses:
         '200': { description: OK }
 
+  /course-versions/{id}/knowledge/search:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    post:
+      operationId: searchCourseKnowledge
+      tags: [Knowledge]
+      x-required-permission: knowledge.document.read
+      description: |
+        課程人員測試檢索（SD §6.18）：與 AI 教練同一個檢索器（lexical_only：BM25 + cjk_bigram）與範圍——
+        這個課程版本綁定的教材、`verification_status` ∈ {source, verified}、`acl_scope` ∈ {course, organization}，
+        組織由伺服器決定。最多 10 筆，依知識類型加權排序。以 POST 傳送問題（不放網址，避免進入存取紀錄）。
+        每位使用者每分鐘 60 次。此版本沒有可檢索的教材時直接回空結果；有教材但搜尋服務未設定或無法連線 → 503。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [query]
+              properties:
+                query: { type: string, minLength: 1, maxLength: 500 }
+      responses:
+        '200': { description: 'KnowledgeSearchResultDto：hits（chunkId、documentId、documentVersionId、title、pageNo、sectionPath、content、score）、searchableDocuments、pendingDocuments' }
+        '429': { description: 超過每分鐘次數上限 }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
   /course-versions/{id}/knowledge/documents:
     parameters:
       - $ref: '#/components/parameters/ResourceId'

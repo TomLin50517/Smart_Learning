@@ -116,11 +116,13 @@ beforeAll(async () => {
   await app.init();
   await app.getHttpAdapter().getInstance().ready();
 
-  // worker 以自己的 DB 角色（app_worker）執行；索引（document.embed_index）於 3-2 實作，這裡先以空 handler 承接
+  // worker 以自己的 DB 角色（app_worker）執行。這個測試只驗證上傳與解析：索引與綁定同步
+  // （需要 Elasticsearch）以空 handler 承接，見 knowledge-retrieval.test.ts
   workerPool = new pg.Pool({ connectionString: `postgres://app_worker:${PW.worker_pw}@${h}:${p}/iac` });
   dispatcher = new Dispatcher(workerPool, pino({ level: 'silent' }), { workerId: 'e2e', queues: ['ingest'] })
     .register(new DocumentParseHandler(workerPool, mem))
-    .register({ jobType: 'document.embed_index', timeoutMs: 1000, handle: async () => undefined });
+    .register({ jobType: 'document.embed_index', timeoutMs: 1000, handle: async () => undefined })
+    .register({ jobType: 'document.sync_bindings', timeoutMs: 1000, handle: async () => undefined });
 
   courseId = (await call('POST', '/api/courses', 'admin', { title: '烘焙入門' })).json().id;
   await call('POST', `/api/courses/${courseId}/staff`, 'admin', { email: 'instr@knw.test', role: 'instructor' });
@@ -285,5 +287,11 @@ describe('course versions', () => {
     const del = await call('DELETE', `/api/knowledge/documents/${pdfDoc}`, 'instr');
     expect(del.json().error.details[0].issue).toBe('document_in_use');
     expect(await count(`SELECT 1 FROM document_versions WHERE source_document_id = $1`, [pdfDoc])).toBe(2);
+  });
+
+  it('without a search service, test search reports it is unavailable instead of failing silently', async () => {
+    const r = await call('POST', `/api/course-versions/${v1}/knowledge/search`, 'instr', { query: 'Baking' });
+    expect(r.statusCode).toBe(503);
+    expect(r.json().error.code).toBe('SOURCE_TEMPORARILY_UNAVAILABLE');
   });
 });

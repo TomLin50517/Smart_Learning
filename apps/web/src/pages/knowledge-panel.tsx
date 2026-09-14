@@ -6,6 +6,8 @@ import {
   type CourseKnowledgeDto,
   type DocumentVersionDto,
   type DocumentViewDto,
+  type KnowledgeSearchHitDto,
+  type KnowledgeSearchResultDto,
 } from '@iac/contracts';
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, apiUpload } from '../api/client';
@@ -119,7 +121,71 @@ export function KnowledgePanel({ versionId, editable }: { versionId: string; edi
       )}
 
       {preview && <Preview key={`${preview.versionId}-${preview.page}`} {...preview} onPage={(page) => setPreview({ ...preview, page })} onClose={() => setPreview(null)} />}
+      {k && k.bound.length > 0 && <SearchBox versionId={versionId} onOpen={(h) => setPreview({ documentId: h.documentId, versionId: h.documentVersionId, page: h.pageNo ?? 1 })} />}
     </section>
+  );
+}
+
+/** 測試搜尋（SD §6.18）：與 AI 教練同一個檢索器，老師可確認學員的問題會找到哪些段落 */
+function SearchBox({ versionId, onOpen }: { versionId: string; onOpen(h: KnowledgeSearchHitDto): void }) {
+  const [query, setQuery] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const [result, setResult] = useState<KnowledgeSearchResultDto | null>(null);
+
+  async function submit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!query.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setResult(await api<KnowledgeSearchResultDto>('POST', `/api/course-versions/${versionId}/knowledge/search`, { query: query.trim() }));
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="editor">
+      <strong>測試搜尋</strong>
+      <p className="muted small">輸入學員可能會問的問題，看看 AI 教練會找到哪些教材段落。找不到時，教練會回答「教材中沒有足夠的資料」。</p>
+      <form className="row" onSubmit={(e) => void submit(e)}>
+        <input className="grow" maxLength={500} value={query} placeholder="例如：發酵溫度要多少？" aria-label="測試問題" onChange={(e) => setQuery(e.target.value)} />
+        <button type="submit" className="btn" disabled={busy || !query.trim()}>
+          {busy ? '搜尋中…' : '搜尋'}
+        </button>
+      </form>
+      <ErrorAlert error={error} />
+      {result && (
+        <>
+          {result.pendingDocuments > 0 && <p className="muted small">還有 {result.pendingDocuments} 份教材處理中，尚未納入搜尋。</p>}
+          {result.hits.length === 0 ? (
+            <p className="muted">{result.searchableDocuments === 0 ? '此版本還沒有可搜尋的教材。' : '沒有找到相關段落。'}</p>
+          ) : (
+            <ol className="search-hits">
+              {result.hits.map((h) => (
+                <li key={h.chunkId}>
+                  <div className="row">
+                    <strong className="grow">
+                      {h.title}
+                      {h.pageNo !== null && <span className="muted small">・第 {h.pageNo} 頁</span>}
+                      {h.sectionPath && <span className="muted small">・{h.sectionPath}</span>}
+                    </strong>
+                    <span className="muted small" title="相關程度（只用來比較這次搜尋的結果）">{h.score.toFixed(2)}</span>
+                    <button type="button" className="btn btn-small btn-ghost" onClick={() => onOpen(h)}>
+                      看原文
+                    </button>
+                  </div>
+                  <p className="small search-snippet">{h.content.length > 400 ? `${h.content.slice(0, 400)}…` : h.content}</p>
+                </li>
+              ))}
+            </ol>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 

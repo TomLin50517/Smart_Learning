@@ -70,7 +70,12 @@ const schema = z.object({
   S3_ACCESS_KEY: z.string().optional().default(''),
   S3_SECRET_KEY: z.string().optional().default(''),
 
+  // --- Elasticsearch（SD §4）：未設定時教材檢索與 AI 教練回 503，其餘功能正常 ---------------
   ELASTICSEARCH_URL: z.string().optional().default(''),
+  // 二擇一：API key 或帳號密碼
+  ELASTICSEARCH_API_KEY: z.string().optional().default(''),
+  ELASTICSEARCH_USERNAME: z.string().optional().default(''),
+  ELASTICSEARCH_PASSWORD: z.string().optional().default(''),
   AI_PROVIDER: z.enum(['none', 'openai', 'azure_openai', 'internal']).default('none'),
   AI_DAILY_TOKEN_BUDGET_DEFAULT: z.coerce.number().int().positive().default(200_000),
 }).superRefine((v, ctx) => {

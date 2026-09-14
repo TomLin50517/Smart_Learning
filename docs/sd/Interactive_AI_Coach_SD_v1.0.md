@@ -2379,6 +2379,22 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 權限 | 讀：knowledge.document.read（講師、課程管理員、組織管理員）；寫：knowledge.document.write＋authoringAllowed。ScopeResolver 新增 `document` 資源（依 source_documents 的組織與課程） |
 | 前端 | 課程版本編輯頁的「教材」卡片：上傳（檔名預設為名稱）、狀態徽章與失敗原因、處理中每 4 秒自動更新、頁數與段數、預覽文字（分頁）、重試、上傳新版、移出、刪除、加入其他版本用過的教材 |
 
+## 6.18 教材檢索（Phase 3-2，v1.28）
+
+實作：`packages/domain/src/knowledge/search.ts`（index 定義、查詢產生、權重排序，純函式）、`apps/api/src/common/elasticsearch.ts`、`modules/knowledge/{knowledge.contracts.ts,application/retriever.ts}`、`apps/worker/src/{search.ts,handlers/document-index.ts,handlers/document-sync.ts}`。Elasticsearch 以 REST（fetch）呼叫，不另裝官方 client。無 migration。
+
+| 項目 | 實作 |
+|---|---|
+| 模式 | `lexical_only`（§4.6）：BM25，分析器 `standard` + `cjk_width` → `lowercase` → `asciifolding` → `cjk_bigram`（中文切成相鄰兩字，不需安裝分詞外掛）。mapping 同 §4.2 但不含 `semantic_text`；語意檢索之後以設定切換，`KnowledgeRetriever` 介面不變 |
+| Index | worker 第一次索引時建立 `knowledge_chunks_v1` 與 alias `knowledge_chunks`（程式碼只用 alias）。api 查詢時 index 尚未建立 → 視為沒有結果 |
+| 索引（worker） | `document.embed_index`（ingest，最多 5 次，10 分鐘）：依 manifest 的位置從 `extracted.txt` 取出每段文字，`_bulk`（500 段一批，最後一批 `refresh=wait_for`），`_id` = chunk_id；`course_version_ids` = 當下綁定這個教材版本的課程版本；`knowledge_type = source`、`verification_status = source`、`acl_scope` = course（組織共用教材為 organization）。完成：manifest `indexed_at`、教材版本 `ready`＋`processed_at`，同一份教材較舊的 ready 版本轉 `superseded`（chunk 保留，已發布版本仍引用）。未設定 Elasticsearch → failed `search_unavailable`；最後一次重試仍失敗 → failed `index_failed`；兩者都可按「重試」 |
+| 綁定同步 | 綁定改變（加入、移出、上傳新版而移動草稿的綁定、複製課程版本、刪除教材）時，在同一交易排入 `document.sync_bindings`（payload：教材版本 id 陣列）。worker 以資料庫為準**重算整份** `course_version_ids`（`_update_by_query`），教材版本已刪除則 `_delete_by_query`——重複或順序顛倒都不會錯；仍在建立索引中 → 稍後重試（避免與索引互相覆寫）。發布本身不改綁定，不需同步 |
+| 檢索器 | `KNOWLEDGE_RETRIEVER`（`knowledge.contracts.ts`，供 AI 教練使用）：`retrieve(params, scope)`，查詢由 `buildRetrieveQuery` 產生——四個範圍 filter（組織、課程版本、驗證狀態、可見範圍）最後附加、整個查詢深度凍結（INV-T6 單元測試）；問題或範圍為空則不查詢。取 20 筆後依 §4.4.3 權重排序取前 K（1～20，預設 8）。Elasticsearch 無法連線或回錯 → 503 `SOURCE_TEMPORARILY_UNAVAILABLE` |
+| 測試搜尋 | `POST /course-versions/{id}/knowledge/search {query}`（knowledge.document.read，每人每分鐘 60 次）：範圍＝這個版本、source／verified、course／organization；回傳 10 筆（標題、頁碼、章節、段落文字、分數）與「可搜尋／處理中」教材數。問題放在 body 不放網址。沒有可搜尋的教材時不呼叫 Elasticsearch |
+| C3 | 發布檢查接受 `ready` 與 `superseded`（被取代的版本內容仍在索引中） |
+| Compose | Elasticsearch 預設啟動：heap 1 GB、關閉 ML（lexical 不需要）、安全性開啟（帳號 elastic／`ES_PASSWORD`）、健康檢查；api／worker 由 compose 指向 `http://elasticsearch:9200`。只在內部網路 |
+| 前端 | 「教材」卡片下方「測試搜尋」：輸入學員可能問的問題，顯示找到的段落（標題、頁碼、章節、分數），可開啟原文預覽 |
+
 ---
 
 # 7. Frontend 設計
@@ -4374,3 +4390,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.25 | 2026-09-14 | Phase 2-5 班級與學號：新增 §6.15（member_profiles／cohorts／cohort_members、每年更新流程、批次匯入更新既有成員、整班加入、選課時的班級快照、老師的篩選與搜尋）；migration 0019 | Software Designer |
 | v1.26 | 2026-09-14 | Phase 2-6 組織品牌：新增 §6.16（組織登入網址 /o/{code}、平台名稱、八組預設配色與自訂主色的對比度檢查、Logo／小圖示的格式與安全、公開端點與限流、設計變數）；migration 0020 | Software Designer |
 | v1.27 | 2026-09-14 | Phase 3-1 教材上傳與解析：新增 §6.17（串流上傳與 application/octet-stream、檔頭判斷格式、quarantine 與物件 key、document.parse 流程與失敗原因、切段規則、chunk manifest、綁定／新版／刪除規則、課程人員預覽）；Compose 預設啟動 MinIO；無 migration | Software Designer |
+| v1.28 | 2026-09-14 | Phase 3-2 教材檢索：新增 §6.18（lexical_only＋cjk_bigram、index 建立、document.embed_index 索引與 superseded、document.sync_bindings 綁定同步、KnowledgeRetriever 與四個凍結的範圍 filter、課程人員測試搜尋、C3 接受 superseded）；Compose 預設啟動 Elasticsearch；無 migration | Software Designer |
