@@ -2395,6 +2395,27 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | Compose | Elasticsearch 預設啟動：heap 1 GB、關閉 ML（lexical 不需要）、安全性開啟（帳號 elastic／`ES_PASSWORD`）、健康檢查；api／worker 由 compose 指向 `http://elasticsearch:9200`。只在內部網路 |
 | 前端 | 「教材」卡片下方「測試搜尋」：輸入學員可能問的問題，顯示找到的段落（標題、頁碼、章節、分數），可開啟原文預覽 |
 
+## 6.19 AI 教練問答（Phase 3-3，v1.29）
+
+實作：`packages/domain/src/coach/{prompt,answer}.ts`（提示詞組裝、回應解析、V0～V9 驗證，純函式）、`packages/contracts/src/coach.ts`、`modules/ai-coach/{application/coach.service.ts,application/coach-settings.service.ts,api/*,infrastructure/*}`。無 migration（沿用 0008 的資料表）。
+
+| 項目 | 實作 |
+|---|---|
+| 供應商 | `LlmProvider`（§10.5）：`ClaudeProvider`（`@anthropic-ai/sdk`，預設 `claude-opus-5`；structured output `output_config.format` 限定回應 JSON；`output_config.effort` 預設 medium；啟用伺服器端備援 `fallbacks: "default"`——安全分類器拒答時由 Anthropic 改用建議的備援模型，整條都拒答 → `MODEL_REFUSED` 替代回答）、`OpenAiCompatibleProvider`（fetch `/chat/completions`，azure_openai／internal 亦同）、`NONE_PROVIDER`。依 `AI_PROVIDER` 選定；缺金鑰或網址時退回 NONE 並記警告，API 照常啟動。金鑰只在 `.env`（`AI_API_KEY`，Claude 亦可用 `ANTHROPIC_API_KEY`）。逾時 `AI_TIMEOUT_MS`（預設 60 秒，Opus 5 思考需要時間）、重試 1 次 |
+| 流程 | `prepare`（開始串流前，錯誤以一般錯誤碼回應）：組織是否停用 → 供應商／檢索是否設定 → 選課狀態（active／reopened／completed）→ 組織每日 token 額度（`AI_DAILY_TOKEN_BUDGET_DEFAULT`，超過 429 `AI_QUOTA_EXCEEDED`）→ 檢索（範圍：此組織、此課程版本、教練設定允許的知識類型，前 8 段）。`answer`：無教材且須引用 → 不呼叫模型，回「資料不足」；否則組提示詞 → 模型 → 解析與驗證 → 修正一次或替代 → 保存 |
+| 去識別化 | 送出的只有：問題、教材摘錄、學習情境摘要（課程／課節／活動名稱、此活動嘗試次數、已完成活動數）與不透明代號 `lrn_` + HMAC(學員 id:對話 id) 前 12 字。姓名、email、學號、真實 id 一律不送（e2e 斷言）。問題中疑似 email／電話／身分證號只記錄旗標（`policy_snapshot.piiFlags`），不改寫問題 |
+| 提示詞 | §10.1：SYSTEM＋POLICY 在 system；CONTEXT／DATA／QUESTION 在 user；對話最近 6 則作為歷史。教材內容不能偽造資料區結束標記或 chunk 標頭（替換 `<<<`、`>>>`、行首 `[chunk_id:`）。版本 `coach_answer@1` 記於 `policy_snapshot.prompt` |
+| 驗證 | §10.4：V0 格式（長度、數量、citation_id 格式、不重複）→ V7 宣稱改分（即使標為資料不足也攔）→ V1 狀態短路 → V2 缺引用 → V3 杜撰 chunk → V4 反查 manifest＋綁定（出處不屬於此組織／課程版本）→ V5 引文逐字比對（忽略空白、全半形）→ V6 本課程其他學員姓名 → V8 禁止主題 → V9 先給提示模式下太直接。REPAIR 修正一次（附前次輸出與違反的規則）；REJECT（V4／V6／V7／拒答）不修正、直接替代並告警 |
+| 回答狀態 | answered、cannot_modify_assessment（回模型的說明）、insufficient_evidence、out_of_scope（固定文案）、fallback（「目前無法根據課程資料提供可靠的回答，請詢問教師」）。另附「此為 AI 教練的學習建議，不影響成績」 |
+| 串流 | `POST /coach/conversations/{id}/messages` 為 SSE（ADR-025 B+）：`stage retrieving` → `sources`（標題、頁碼、章節）→ `stage composing` → `stage validating` → 驗證通過後才以 24 字一段送 `token` → `done`（完整 CoachAnswerDto）。開始串流後的錯誤以 `error` 事件回報；每 15 秒送註解行防代理斷線；`X-Accel-Buffering: no` |
+| 保存 | 全部經 app_coach 連線（ADR-026）：`coach_messages`（user＋assistant，seq 由 `UPDATE … message_count + 2 RETURNING` 取得）、`policy_snapshot`（設定、狀態、後續問題、提示詞版本、供應商）、`validation_status`（passed／repaired／fallback）、`fallback_reason`、`coach_citations`（chunk、教材版本、頁碼、章節、字元位置）、每次模型呼叫一筆 `ai_usage_records`（成功、錯誤、逾時都記） |
+| 對話 | `GET /enrollments/{id}/coach`：能不能用與原因＋自己的對話清單；`POST /coach/conversations`：只能建立在自己的選課上，戳印組織當下的逐字稿可見性（不可變）；`GET /coach/conversations/{id}`：自己的對話與引用。不是本人一律 404 |
+| 引用原文 | `GET /coach/citations/{id}/source`：每次重新檢查——引用屬於本人的對話、教材版本仍綁在對話的課程版本（否則 403 `SOURCE_ACCESS_DENIED`）；回傳引用段落前後各 1500 字與標示位置，計入 `opened_count` |
+| 教師測試 | `POST /course-versions/{id}/coach/test`（coach.interact_test）：以自己的身分在任一課程版本（含草稿）試問，流程與學員相同，對話標為 `is_test`、不綁選課；回 JSON |
+| 組織設定 | `GET/PUT /organizations/{id}/coach-settings`：`enabled`（組織可停用教練）、`transcriptVisibility`（只影響之後的對話）；另回平台是否已設定 AI 服務、今日已用 token／上限。稽核 `org.coach_settings.updated` |
+| 限流 | 學員每人每分鐘 10 次、每日 200 次；教師測試每分鐘 20 次 |
+| 未做 | 結果觸發的教練（`/coach/from-result`）、課程人員讀逐字稿與匿名統計、語意檢索、提示詞版本表（`prompt_versions`）管理 |
+
 ---
 
 # 7. Frontend 設計
@@ -4391,3 +4412,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.26 | 2026-09-14 | Phase 2-6 組織品牌：新增 §6.16（組織登入網址 /o/{code}、平台名稱、八組預設配色與自訂主色的對比度檢查、Logo／小圖示的格式與安全、公開端點與限流、設計變數）；migration 0020 | Software Designer |
 | v1.27 | 2026-09-14 | Phase 3-1 教材上傳與解析：新增 §6.17（串流上傳與 application/octet-stream、檔頭判斷格式、quarantine 與物件 key、document.parse 流程與失敗原因、切段規則、chunk manifest、綁定／新版／刪除規則、課程人員預覽）；Compose 預設啟動 MinIO；無 migration | Software Designer |
 | v1.28 | 2026-09-14 | Phase 3-2 教材檢索：新增 §6.18（lexical_only＋cjk_bigram、index 建立、document.embed_index 索引與 superseded、document.sync_bindings 綁定同步、KnowledgeRetriever 與四個凍結的範圍 filter、課程人員測試搜尋、C3 接受 superseded）；Compose 預設啟動 Elasticsearch；無 migration | Software Designer |
+| v1.29 | 2026-09-14 | Phase 3-3 AI 教練問答：新增 §6.19（Claude／OpenAI 相容供應商與伺服器端備援、prepare／answer 流程、去識別化、提示詞防偽造、V0～V9 驗證與修正／拒絕、SSE B+、保存與用量、對話與引用原文、教師測試、組織設定、限流）；無 migration | Software Designer |

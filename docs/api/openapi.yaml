@@ -2245,6 +2245,82 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
 
   # ------------------------------------------------------------------ Coach
+  /enrollments/{id}/coach:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      operationId: getEnrollmentCoach
+      tags: [Coach]
+      x-required-permission: coach.conversation.read_self
+      description: |
+        AI 教練能不能用（`available`、`reason`：disabled_by_organization、provider_unavailable、search_unavailable、
+        enrollment_inactive）與這位學員在此選課的對話（最多 20）。不要求 aiCoachAllowed——未授權時前端依
+        `licenseCapabilities` 顯示原因。不是本人的選課 → 404（SD §6.19）。
+      responses:
+        '200': { description: CoachAvailabilityDto }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /course-versions/{id}/coach/test:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    post:
+      operationId: testCoach
+      tags: [Coach]
+      x-required-permission: coach.interact_test
+      x-required-capability: aiCoachAllowed
+      description: |
+        教師測試模式（SD §6.19）：以自己的身分在課程版本（含草稿）試問，檢索、提示詞與驗證都與學員相同。
+        對話標為 `is_test`、不綁選課、不列入統計；帶 `conversationId` 可延續同一段測試對話。回傳 JSON（不串流）。
+        每人每分鐘 20 次。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [content]
+              properties:
+                content:        { type: string, minLength: 1, maxLength: 2000 }
+                conversationId: { type: string, format: uuid }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CoachAnswer' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /organizations/{id}/coach-settings:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      operationId: getCoachSettings
+      tags: [Coach, Organization]
+      x-required-permission: org.read
+      description: 組織的 AI 教練設定、平台是否已設定 AI 服務、今日已用 token 與每日上限（SD §6.19）。
+      responses:
+        '200': { description: CoachSettingsDto }
+    put:
+      operationId: updateCoachSettings
+      tags: [Coach, Organization]
+      x-required-permission: coach.transcript_policy.write
+      x-required-capability: configurationWriteAllowed
+      x-audit: org.coach_settings.updated
+      description: |
+        `enabled`：組織可停用 AI 教練（學員看到「暫時無法使用」，其他功能不受影響）。
+        `transcriptVisibility`：只影響之後建立的對話——既有對話的戳印不可變（ADR-028 條件 4）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                enabled:              { type: boolean }
+                transcriptVisibility: { type: string, enum: [aggregate_only, course_staff] }
+      responses:
+        '200': { description: CoachSettingsDto }
+
   /coach/conversations:
     post:
       operationId: createCoachConversation
@@ -2253,10 +2329,23 @@ paths:
       x-required-capability: aiCoachAllowed
       description: |
         建立時依組織當下政策戳印 `transcript_visibility`，之後不可變
-        （ADR-028 條件 4、SD §2.11.3）。
+        （ADR-028 條件 4、SD §2.11.3）。只能建立在自己的選課上（否則 404）；
+        `activityId` 須屬於該選課的課程版本。組織停用教練或選課已結束 → 503 `COACH_PROVIDER_UNAVAILABLE`。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [enrollmentId]
+              properties:
+                enrollmentId: { type: string, format: uuid }
+                activityId:   { type: string, format: uuid }
       responses:
-        '201': { description: 已建立 }
+        '201': { description: CoachConversationDto（含 messages） }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
   /coach/conversations/{id}:
     parameters: [{ $ref: '#/components/parameters/ResourceId' }]
@@ -2290,18 +2379,21 @@ paths:
         `token` **只在** ResponseValidator 通過後才送出——未驗證的 LLM
         文字永遠不會到達瀏覽器（INV-5）。檢索結果先於生成完成且已通過
         ACL 過濾，因此可提前送出讓學員先閱讀教材。
+
+        實作（SD §6.19）：組織停用、供應商未設定、檢索服務未設定、選課已結束 → 開始串流前回 503
+        `COACH_PROVIDER_UNAVAILABLE`（details.issue 說明原因）；組織當日 token 用完 → 429 `AI_QUOTA_EXCEEDED`。
+        開始串流後的錯誤以 `event: error` 回報；模型失敗、拒答或驗證兩次未過 → `done` 的 status 為 `fallback`
+        （固定的安全替代文字）。每 15 秒送一行註解（`: ping`）避免代理斷線。每人每分鐘 10 次、每日 200 次。
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [content]
               properties:
-                content:    { type: string, maxLength: 2000 }
-                lessonId:   { type: string, format: uuid }
-                activityId: { type: string, format: uuid }
-                attemptId:  { type: string, format: uuid }
+                content: { type: string, minLength: 1, maxLength: 2000 }
       responses:
         '200':
           description: SSE 串流
