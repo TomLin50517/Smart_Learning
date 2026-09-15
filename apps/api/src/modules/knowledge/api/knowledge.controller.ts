@@ -20,7 +20,7 @@ const Bind = z.strictObject({ documentVersionId: z.guid() });
 const Search = z.strictObject({ query: z.string().trim().min(1).max(500) });
 
 /** 檔案以 application/octet-stream 傳送原始內容（bootstrap 註冊的串流 parser） */
-function fileBody(req: FastifyRequest): Readable {
+export function fileBody(req: FastifyRequest): Readable {
   if (req.body instanceof Readable) return req.body;
   throw new DomainError('UNSUPPORTED_MEDIA_TYPE', 'Send the file body as application/octet-stream');
 }

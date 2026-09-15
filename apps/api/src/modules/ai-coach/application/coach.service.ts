@@ -3,6 +3,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import {
   COACH_TEXT,
   documentObjectKeys,
+  faqIdFromChunk,
   type CitationSourceDto,
   type CoachAnswerDto,
   type CoachAnswerStatus,
@@ -344,14 +345,22 @@ export class CoachService {
     if (await this.quotaReached(organizationId)) throw new DomainError('AI_QUOTA_EXCEEDED', 'Daily AI token budget reached');
   }
 
-  /** V4：反查 chunk 仍屬於此組織、且綁在此課程版本 */
+  /**
+   * V4：反查 chunk 仍屬於此組織、且綁在此課程版本。FAQ／常見錯誤（dk:…）須為同一門課、已生效的項目（SD §6.27）——
+   * 索引裡的狀態可能比資料庫舊（下架後 worker 尚未更新），以資料庫為準。
+   */
   private async authorizedChunks(chunkIds: string[], organizationId: string, courseVersionId: string): Promise<Set<string>> {
     if (!chunkIds.length) return new Set();
+    const faqIds = chunkIds.map(faqIdFromChunk).filter((id): id is string => !!id && /^[0-9a-f-]{36}$/i.test(id));
     const r = await this.db.query<{ chunk_id: string }>(
       `SELECT m.chunk_id FROM knowledge_chunk_manifest m
          JOIN knowledge_bindings kb ON kb.document_version_id = m.document_version_id AND kb.course_version_id = $3
-        WHERE m.chunk_id = ANY($1::text[]) AND m.organization_id = $2`,
-      [chunkIds, organizationId, courseVersionId],
+        WHERE m.chunk_id = ANY($1::text[]) AND m.organization_id = $2
+       UNION ALL
+       SELECT 'dk:' || dk.id::text FROM derived_knowledge dk JOIN course_versions cv ON cv.id = dk.course_version_id
+        WHERE dk.id = ANY($4::uuid[]) AND dk.organization_id = $2 AND dk.status = 'verified' AND dk.evidence_status = 'grounded'
+          AND cv.course_id = (SELECT course_id FROM course_versions WHERE id = $3)`,
+      [chunkIds, organizationId, courseVersionId, faqIds],
     );
     return new Set(r.rows.map((x) => x.chunk_id));
   }
@@ -557,10 +566,14 @@ export class CoachService {
       const citations: CoachCitationDto[] = [];
       for (const x of cited) {
         const chunk = byChunk.get(x.chunk_id)!;
+        // FAQ／常見錯誤沒有教材版本與原文位置：改記 derived_knowledge_id（SD §6.27）
+        const faqId = faqIdFromChunk(x.chunk_id);
         const r = await c.query<{ id: string }>(
-          `INSERT INTO coach_citations (organization_id, message_id, citation_ref, chunk_id, document_version_id, title, page_no, section_path, char_start, char_end)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
-          [p.conv.organization_id, messageId, x.citation_id, x.chunk_id, chunk.documentVersionId, chunk.title, chunk.pageNo, chunk.sectionPath, chunk.charStart, chunk.charEnd],
+          `INSERT INTO coach_citations (organization_id, message_id, citation_ref, chunk_id, document_version_id, derived_knowledge_id, title, page_no, section_path, char_start, char_end)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+          faqId
+            ? [p.conv.organization_id, messageId, x.citation_id, x.chunk_id, null, faqId, chunk.title, null, null, null, null]
+            : [p.conv.organization_id, messageId, x.citation_id, x.chunk_id, chunk.documentVersionId, null, chunk.title, chunk.pageNo, chunk.sectionPath, chunk.charStart, chunk.charEnd],
         );
         citations.push({ id: r.rows[0]!.id, citationId: x.citation_id, title: chunk.title, pageNo: chunk.pageNo, sectionPath: chunk.sectionPath, quote: x.quote || null });
       }
@@ -597,16 +610,19 @@ export class CoachService {
       char_start: number | null;
       char_end: number | null;
       document_version_id: string | null;
+      derived_knowledge_id: string | null;
       course_version_id: string;
       organization_id: string;
     }>(
-      `SELECT cc.id, cc.citation_ref, cc.title, cc.page_no, cc.section_path, cc.char_start, cc.char_end, cc.document_version_id, c.course_version_id, c.organization_id
+      `SELECT cc.id, cc.citation_ref, cc.title, cc.page_no, cc.section_path, cc.char_start, cc.char_end, cc.document_version_id, cc.derived_knowledge_id,
+              c.course_version_id, c.organization_id
          FROM coach_citations cc JOIN coach_messages m ON m.id = cc.message_id JOIN coach_conversations c ON c.id = m.conversation_id
         WHERE cc.id = $1 AND c.learner_id = $2 AND c.organization_id = $3`,
       [citationId, user.id, user.activeOrganizationId],
     );
     const cit = r.rows[0];
     if (!cit) throw new DomainError('NOT_FOUND');
+    if (cit.derived_knowledge_id) return this.openFaq({ ...cit, derived_knowledge_id: cit.derived_knowledge_id });
     if (!cit.document_version_id || cit.char_start === null || cit.char_end === null) throw new DomainError('SOURCE_ACCESS_DENIED');
     const d = await this.db.query<{ source_document_id: string; storage_prefix: string }>(
       `SELECT dv.source_document_id, o.storage_prefix FROM knowledge_bindings kb
@@ -638,6 +654,32 @@ export class CoachService {
       highlightEnd: cit.char_end - from,
       truncatedBefore: from > 0,
       truncatedAfter: to < full.length,
+    };
+  }
+
+  /** 引用的是 FAQ／常見錯誤：顯示目前的問與答；已下架或不屬於這門課 → 無法開啟（SD §6.27） */
+  private async openFaq(cit: { id: string; citation_ref: string; title: string; derived_knowledge_id: string; course_version_id: string; organization_id: string }): Promise<CitationSourceDto> {
+    const r = await this.db.query<{ question: string; answer: string }>(
+      `SELECT v.question, v.answer FROM derived_knowledge dk
+         JOIN derived_knowledge_versions v ON v.id = dk.current_version_id JOIN course_versions cv ON cv.id = dk.course_version_id
+        WHERE dk.id = $1 AND dk.organization_id = $2 AND dk.status = 'verified'
+          AND cv.course_id = (SELECT course_id FROM course_versions WHERE id = $3)`,
+      [cit.derived_knowledge_id, cit.organization_id, cit.course_version_id],
+    );
+    const f = r.rows[0];
+    if (!f) throw new DomainError('SOURCE_ACCESS_DENIED');
+    await this.db.query(`UPDATE coach_citations SET opened_count = opened_count + 1 WHERE id = $1`, [cit.id]);
+    const head = `問：${f.question}\n\n答：`;
+    return {
+      citationId: cit.citation_ref,
+      title: cit.title,
+      pageNo: null,
+      sectionPath: null,
+      text: head + f.answer,
+      highlightStart: head.length,
+      highlightEnd: head.length + f.answer.length,
+      truncatedBefore: false,
+      truncatedAfter: false,
     };
   }
 }

@@ -21,6 +21,7 @@ import { Dispatcher } from '../../apps/worker/src/dispatcher.js';
 import { DocumentIndexHandler } from '../../apps/worker/src/handlers/document-index.js';
 import { DocumentParseHandler } from '../../apps/worker/src/handlers/document-parse.js';
 import { DocumentSyncHandler } from '../../apps/worker/src/handlers/document-sync.js';
+import { DerivedIndexHandler } from '../../apps/worker/src/handlers/derived-index.js';
 import { createWorkerSearch } from '../../apps/worker/src/search.js';
 import { applyMigrations } from '../../tools/migrate.js';
 import { makePdf } from '../fixtures/make-pdf.js';
@@ -150,7 +151,9 @@ beforeAll(async () => {
   dispatcher = new Dispatcher(workerPool, pino({ level: 'silent' }), { workerId: 'e2e', queues: ['ingest'] })
     .register(new DocumentParseHandler(workerPool, mem))
     .register(new DocumentIndexHandler(workerPool, mem, esClient))
-    .register(new DocumentSyncHandler(workerPool, esClient));
+    .register(new DocumentSyncHandler(workerPool, esClient))
+    // 複製與發布版本時也會排入課程 FAQ 的索引（SD §6.27）
+    .register(new DerivedIndexHandler(workerPool, esClient));
 
   const makeCourse = async (title: string) => {
     const id = (await call('POST', '/api/courses', 'admin', { title })).json().id as string;
