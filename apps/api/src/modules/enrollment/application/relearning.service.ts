@@ -6,7 +6,9 @@ import { DomainError } from '../../../common/domain-error.js';
 import { COMPLETION_ENGINE, type CompletionEngine } from '../../completion/completion.contracts.js';
 import { LEARNING_EVENTS, type LearningEventWriter } from '../../learning-record/learning-record.contracts.js';
 import { LICENSE_EVALUATOR, type LicenseEvaluator } from '../../license/license.contracts.js';
+import { NOTIFIER, type Notifier } from '../../notification/notification.contracts.js';
 import { EnrollmentService } from './enrollment.service.js';
+import { enrollmentNotice } from './notify-helpers.js';
 
 const invalid = (field: string, issue: string) => new DomainError('VALIDATION_FAILED', `${field}: ${issue}`, [{ field, issue }]);
 const rejected = (issue: string, params?: Record<string, string>) => new DomainError('VALIDATION_FAILED', issue, [{ issue, ...(params && { params }) }]);
@@ -37,6 +39,7 @@ export class RelearningService {
     @Inject(LEARNING_EVENTS) private readonly events: LearningEventWriter,
     @Inject(COMPLETION_ENGINE) private readonly engine: CompletionEngine,
     @Inject(LICENSE_EVALUATOR) private readonly license: LicenseEvaluator,
+    @Inject(NOTIFIER) private readonly notifier: Notifier,
   ) {}
 
   private async tx<T>(fn: (c: pg.PoolClient) => Promise<T>): Promise<T> {
@@ -76,6 +79,8 @@ export class RelearningService {
       await this.ensureSeat(c, x.user_id);
       await c.query(`UPDATE enrollments SET status = 'reopened', completed_at = NULL, updated_at = now() WHERE id = $1`, [enrollmentId]);
       await this.events.recordTx(c, enrollmentId, [{ eventType: 'course.reopened', payload: { via: 'reopen', scope: 'course', ...(reason && { reason }) } }]);
+      const n = await enrollmentNotice(c, enrollmentId);
+      await this.notifier.notifyTx(c, { userIds: [n.userId], organizationId: n.organizationId, type: 'enrollment.reopened', payload: n.payload });
       return this.enrollments.get(enrollmentId, c);
     });
   }
@@ -133,7 +138,16 @@ export class RelearningService {
       // 名單上的進度立即反映重修（只寫快照，不改狀態；完成與否等學員下次送出作答時判定）
       const p = await this.engine.progress(enrollmentId, c);
       await this.engine.snapshot(p, this.engine.evaluate(p), c);
-      return { relearning: p.relearning.assignments.find((r) => r.id === relearningId)!, enrollment: await this.enrollments.get(enrollmentId, c), before: x.status };
+      const relearning = p.relearning.assignments.find((r) => r.id === relearningId)!;
+      // 通知學員（SD §6.26）：原因只在站內通知，信件只說有新的重修
+      const n = await enrollmentNotice(c, enrollmentId);
+      await this.notifier.notifyTx(c, {
+        userIds: [n.userId],
+        organizationId: n.organizationId,
+        type: 'relearning.assigned',
+        payload: { ...n.payload, scopeType: relearning.scopeType, scopeTitle: relearning.scopeTitle, reason: relearning.reason },
+      });
+      return { relearning, enrollment: await this.enrollments.get(enrollmentId, c), before: x.status };
     });
   }
 }

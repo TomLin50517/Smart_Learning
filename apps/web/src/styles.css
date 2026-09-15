@@ -473,6 +473,54 @@ details.bulk > summary {
   flex-direction: column;
   gap: 10px;
 }
+/* ---- 通知（SD §6.26） ------------------------------------------------------ */
+.bell {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 6px;
+  text-decoration: none;
+  font-size: 1.1rem;
+}
+.bell-count {
+  position: absolute;
+  top: -2px;
+  right: -6px;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--danger, #b91c1c);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+.notification-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.notification-list li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+.notification-list li.unread a {
+  font-weight: 700;
+}
+.notification-list li.unread::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  margin-top: 8px;
+  border-radius: 50%;
+  background: var(--primary, #1d4ed8);
+}
+
 /* ---- 選課（SD §6.24） ------------------------------------------------------ */
 .enroll-code {
   display: flex;

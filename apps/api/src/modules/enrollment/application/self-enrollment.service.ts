@@ -6,8 +6,10 @@ import type { AuthUser } from '../../../common/context.js';
 import { DB_API } from '../../../common/database.module.js';
 import { DomainError } from '../../../common/domain-error.js';
 import { LEARNING_EVENTS, type LearningEventWriter } from '../../learning-record/learning-record.contracts.js';
+import { NOTIFIER, type Notifier } from '../../notification/notification.contracts.js';
 import { generateEnrollmentCode, joinAvailability, normalizeEnrollmentCode, parsePolicy } from '../domain/policy.js';
 import { EnrollmentService } from './enrollment.service.js';
+import { approverIds, courseNotice, enrollmentNotice } from './notify-helpers.js';
 
 const invalid = (field: string, issue: string) => new DomainError('VALIDATION_FAILED', `${field}: ${issue}`, [{ field, issue }]);
 const rejected = (issue: string, params?: Record<string, string>) => new DomainError('VALIDATION_FAILED', issue, [{ issue, ...(params && { params }) }]);
@@ -35,6 +37,7 @@ export class SelfEnrollmentService {
     @Inject(DB_API) private readonly db: pg.Pool,
     private readonly enrollments: EnrollmentService,
     @Inject(LEARNING_EVENTS) private readonly events: LearningEventWriter,
+    @Inject(NOTIFIER) private readonly notifier: Notifier,
   ) {}
 
   private async tx<T>(fn: (c: pg.PoolClient) => Promise<T>): Promise<T> {
@@ -186,6 +189,16 @@ export class SelfEnrollmentService {
         enrollMethod: p.requireApproval ? 'approval' : byCode ? 'code' : 'self',
         assignedBy: null,
       });
+      if (status === 'pending') {
+        // 通知可以審核的人（SD §6.26）
+        const who = await c.query<{ display_name: string }>(`SELECT display_name FROM users WHERE id = $1`, [user.id]);
+        await this.notifier.notifyTx(c, {
+          userIds: await approverIds(c, orgId, course.id),
+          organizationId: orgId,
+          type: 'enrollment.requested',
+          payload: { ...(await courseNotice(c, course.id)), learnerName: who.rows[0]?.display_name ?? '' },
+        });
+      }
       return { enrollmentId: e.enrollmentId, courseId: course.id, courseTitle: course.title, status, alreadyEnrolled: false };
     });
   }
@@ -210,6 +223,8 @@ export class SelfEnrollmentService {
         actorId,
       ]);
       await this.events.recordTx(c, enrollmentId, [{ eventType: 'course.enrolled', payload: { method: 'approval', approved_by: actorId } }]);
+      const n = await enrollmentNotice(c, enrollmentId);
+      await this.notifier.notifyTx(c, { userIds: [n.userId], organizationId: n.organizationId, type: 'enrollment.approved', payload: n.payload });
       return this.enrollments.get(enrollmentId, c);
     });
   }
@@ -221,6 +236,8 @@ export class SelfEnrollmentService {
       if (!e.rows[0]) throw new DomainError('NOT_FOUND');
       if (e.rows[0].status !== 'pending') throw rejected('invalid_transition', { from: e.rows[0].status });
       await c.query(`UPDATE enrollments SET status = 'rejected', updated_at = now() WHERE id = $1`, [enrollmentId]);
+      const n = await enrollmentNotice(c, enrollmentId);
+      await this.notifier.notifyTx(c, { userIds: [n.userId], organizationId: n.organizationId, type: 'enrollment.rejected', payload: n.payload });
       return this.enrollments.get(enrollmentId, c);
     });
   }

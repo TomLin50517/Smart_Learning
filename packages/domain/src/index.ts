@@ -13,3 +13,4 @@ export * from './publish/reachability.js';
 export * from './runtime/evaluators.js';
 export * from './runtime/learning-time.js';
 export * from './runtime/unlock.js';
+export * from './notification/templates.js';

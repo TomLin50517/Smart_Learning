@@ -2,13 +2,14 @@ import { CERTIFICATE_JOB } from '@iac/contracts';
 import type pg from 'pg';
 import type { Job, JobHandler } from '../dispatcher.js';
 import { newUlid, verificationCode } from '../ids.js';
+import { notifyTx } from '../notify.js';
 import { FatalError } from '../retry-policy.js';
 
 /**
  * 發證（UC-CRT-001、SEQ-10、SD §6.14）：選課完成時由 API 在同一交易排入（idempotency key cert:{enrollmentId}）。
  * 冪等：只發給已完成的選課；已有有效或已撤銷的證書就結束（撤銷後不自動重發）；部分唯一索引 uq_cert_enr_valid 為最後防線。
  * 顯示欄位（姓名、課程、組織）為發證當下的快照。證書、學習事件與稽核在同一交易。
- * 證書為網頁版——伺服器端 PDF 產生與通知於後續批次（pdf_object_key 維持 NULL）。
+ * 發證時在同一交易通知學員（certificate.issued，SD §6.26）。證書為網頁版——伺服器端 PDF 於後續批次（pdf_object_key 維持 NULL）。
  */
 export class CertificateGenerateHandler implements JobHandler {
   readonly jobType = CERTIFICATE_JOB.type;
@@ -67,6 +68,13 @@ export class CertificateGenerateHandler implements JobHandler {
            VALUES ('system', 'certificate.issued', 'certificate', $1, $2, $3, $4::jsonb, $5)`,
           [cert.id, enr.organization_id, enr.course_id, JSON.stringify({ enrollment_id: enrollmentId, public_id: cert.public_id, job_id: job.id }), job.correlation_id],
         );
+        await notifyTx(c, {
+          userIds: [enr.user_id],
+          organizationId: enr.organization_id,
+          type: 'certificate.issued',
+          payload: { organizationName: enr.org_name, courseId: enr.course_id, courseTitle: enr.title, enrollmentId, certificateId: cert.id },
+          correlationId: job.correlation_id,
+        });
       }
       await c.query('COMMIT');
     } catch (err) {

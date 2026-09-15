@@ -1,6 +1,8 @@
 /**
  * MOD-NOTIF 對外介面。其他模組只能 import 此檔或 notification.module.ts（SD §1.2、.dependency-cruiser.cjs）。
  */
+import type { NotificationPayload, NotificationType } from '@iac/contracts';
+import type pg from 'pg';
 
 export interface MailRecipient {
   to: string;
@@ -27,3 +29,20 @@ export interface AccountMailer {
 }
 
 export const ACCOUNT_MAILER = Symbol('ACCOUNT_MAILER');
+
+export interface NotifyInput {
+  userIds: readonly string[];
+  organizationId: string | null;
+  type: NotificationType;
+  payload: NotificationPayload;
+}
+
+/**
+ * 事件通知（SD §6.26）：在呼叫端的交易內，依收件者偏好寫入站內通知與 Email 通知，Email 同時排入寄送 job。
+ * 交易回滾時通知一併消失——不會通知一件沒有發生的事。
+ */
+export interface Notifier {
+  notifyTx(c: pg.PoolClient, n: NotifyInput): Promise<void>;
+}
+
+export const NOTIFIER = Symbol('NOTIFIER');

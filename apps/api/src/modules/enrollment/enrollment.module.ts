@@ -8,6 +8,7 @@ import { RelearningController } from './api/relearning.controller.js';
 import { RelearningService } from './application/relearning.service.js';
 import { CompletionModule } from '../completion/completion.module.js';
 import { LicenseModule } from '../license/license.module.js';
+import { NotificationModule } from '../notification/notification.module.js';
 import { BulkImportService } from './application/bulk-import.service.js';
 import { EnrollmentService } from './application/enrollment.service.js';
 import { LearnerExportService } from './application/learner-export.service.js';
@@ -25,7 +26,8 @@ import { SelfEnrollmentService } from './application/self-enrollment.service.js'
 @Module({
   // LearningRecordModule：選課時寫入 course.enrolled（LEARNING_EVENTS）
   // CompletionModule：重修後更新進度快照；LicenseModule：已完成 → 重新開啟時檢查授權的學員數
-  imports: [OrganizationModule, LearningRecordModule, CompletionModule, LicenseModule],
+  // NotificationModule：加入、審核、重修等事件通知（NOTIFIER，SD §6.26）
+  imports: [OrganizationModule, LearningRecordModule, CompletionModule, LicenseModule, NotificationModule],
   controllers: [EnrollmentController, BulkImportController, SelfEnrollmentController, RelearningController],
   providers: [EnrollmentService, BulkImportService, SelfEnrollmentService, LearnerExportService, RelearningService],
 })

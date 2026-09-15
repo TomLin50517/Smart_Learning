@@ -16,6 +16,7 @@ import { hashToken } from '../../apps/api/src/common/tokens.js';
 import { ENV, loadEnv } from '../../apps/api/src/config/env.js';
 import { Dispatcher } from '../../apps/worker/src/dispatcher.js';
 import { CertificateGenerateHandler } from '../../apps/worker/src/handlers/certificate-generate.js';
+import { NotificationEmailHandler } from '../../apps/worker/src/handlers/notification-email.js';
 import { applyMigrations } from '../../tools/migrate.js';
 
 const PW = { api_pw: 'e2e_api', coach_pw: 'e2e_coach', worker_pw: 'e2e_worker', ro_pw: 'e2e_ro' };
@@ -102,7 +103,10 @@ beforeAll(async () => {
 
   // worker 以自己的 DB 角色（app_worker）執行，與正式環境相同
   workerPool = new pg.Pool({ connectionString: `postgres://app_worker:${PW.worker_pw}@${h}:${p}/iac` });
-  dispatcher = new Dispatcher(workerPool, pino({ level: 'silent' }), { workerId: 'e2e', queues: ['output'] }).register(new CertificateGenerateHandler(workerPool));
+  // output 佇列也有通知信的 job（SD §6.26）：不設 SMTP，寄信 job 只記 log
+  dispatcher = new Dispatcher(workerPool, pino({ level: 'silent' }), { workerId: 'e2e', queues: ['output'] })
+    .register(new CertificateGenerateHandler(workerPool))
+    .register(new NotificationEmailHandler(workerPool, null, pino({ level: 'silent' }), 'https://learn.example.test'));
 
   // 課程：一個閱讀活動；完成條件＝完成必修活動 且 講師核可
   courseId = (await call('POST', '/api/courses', 'admin', { title: '安全實務' })).json().id;
@@ -135,7 +139,7 @@ describe('manual approval', () => {
     expect(o.progress.blockingReasons.map((r: { code: string }) => r.code)).toContain('MANUAL_APPROVAL_PENDING');
     const p = (await call('GET', `/api/enrollments/${myEnrollment}/progress`, 'instr')).json();
     expect(p.approval).toEqual({ required: ['instructor'], given: [] });
-    expect((await admin.query(`SELECT 1 FROM job_queue`)).rowCount).toBe(0);
+    expect((await admin.query(`SELECT 1 FROM job_queue WHERE job_type = 'certificate.generate'`)).rowCount).toBe(0);
   });
 
   it('only someone holding the role named in the rule can approve', async () => {
@@ -151,7 +155,7 @@ describe('manual approval', () => {
     expect(r.statusCode).toBe(200);
     expect(r.json()).toEqual({ approvedRoles: ['instructor'], completionChanged: true });
     expect((await admin.query(`SELECT status FROM enrollments WHERE id = $1`, [myEnrollment])).rows[0].status).toBe('completed');
-    const jobs = await admin.query(`SELECT job_type, queue, idempotency_key, status FROM job_queue`);
+    const jobs = await admin.query(`SELECT job_type, queue, idempotency_key, status FROM job_queue WHERE job_type = 'certificate.generate'`);
     expect(jobs.rows).toEqual([{ job_type: 'certificate.generate', queue: 'output', idempotency_key: `cert:${myEnrollment}`, status: 'pending' }]);
     const audit = await admin.query(`SELECT metadata FROM audit_logs WHERE action = 'completion.approved'`);
     expect(audit.rows[0].metadata).toMatchObject({ note: '實作表現良好' });
@@ -174,9 +178,12 @@ describe('issuing (worker)', () => {
 
     // 重複的工作（例如人為重跑）不會多發
     await admin.query(`INSERT INTO job_queue (job_type, queue, payload, idempotency_key) VALUES ('certificate.generate', 'output', $1, 'rerun-1')`, [{ enrollmentId: myEnrollment }]);
-    expect(await dispatcher.tick()).toBe(true);
+    // 連同通知信的 job 一起跑完
+    while (await dispatcher.tick()) {
+      /* 繼續取下一件 */
+    }
+    expect((await admin.query(`SELECT status FROM job_queue WHERE idempotency_key = 'rerun-1'`)).rows[0].status).toBe('succeeded');
     expect((await admin.query(`SELECT 1 FROM certificates WHERE enrollment_id = $1`, [myEnrollment])).rowCount).toBe(1);
-    expect(await dispatcher.tick()).toBe(false);
 
     expect((await admin.query(`SELECT 1 FROM audit_logs WHERE action = 'certificate.issued' AND resource_id = $1`, [certId])).rowCount).toBe(1);
     const t = (await call('GET', `/api/me/enrollments/${myEnrollment}/timeline?limit=100`, 'me')).json();
