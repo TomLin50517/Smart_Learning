@@ -2506,6 +2506,22 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 教師畫面 | 學員名單：已完成者有「重新開啟」。學員學習狀況頁「重修與重新開啟」卡片：歷次重修、指派表單（範圍依大綱選單元／課節／活動、原因、新期限、是否沿用作答次數）、只重新開啟；各活動標示重修中 |
 | 未做 | 重修開始時 AI 教練的回顧（UC-COA-004）、重修通知信（排在通知批次）、批次指派重修 |
 
+## 6.26 通知：站內與 Email（v1.36）
+
+實作：`modules/notification/{application/notification.service.ts,api/notification.controller.ts}`（`NOTIFIER`）、`modules/enrollment/application/notify-helpers.ts`、`packages/domain/src/notification/templates.ts`、`apps/worker/src/{mailer.ts,notify.ts,handlers/notification-email.ts}`、`apps/web/src/{notify-lib.ts,pages/NotificationsPage.tsx,components/AppShell.tsx}`；`migrations/0024_notifications.sql`（站內清單索引）。資料表 `notifications`、`notification_preferences` 自 0009 起即存在。對應 SA UC-AUD-003／004、MOD-NOTIF。
+
+| 項目 | 實作 |
+|---|---|
+| 事件與對象 | `enrollment.assigned`（管理者指派、批次匯入、整班加入 → 學員；學員自行加入不通知）、`enrollment.requested`（需審核的加入申請 → 組織管理員與該課的課程管理員，成員資格停用者除外）、`enrollment.approved`／`enrollment.rejected`（→ 學員）、`enrollment.reopened`、`relearning.assigned`（→ 學員）、`certificate.issued`（worker 發證時 → 學員；代表完成課程，不另發「完成」通知） |
+| 寫入 | `Notifier.notifyTx` 在事件的**同一交易**內執行：交易回滾（例：批次匯入的預覽）時通知一併消失。依 `notification_preferences`（沒有列＝站內、Email 皆開啟）寫入 `channel = in_app` 與 `channel = email` 各一列；Email 列同一交易排入 `notification.email`（idempotency key `mail:{notificationId}`）。worker 發證時以 `apps/worker/src/notify.ts` 執行相同規則（worker 不可 import API 模組） |
+| 內容護欄 | payload 只放組織名稱、課程名稱與連結所需的 id（重修另含範圍與原因、申請另含申請人姓名）——不含成績、作答。**重修原因只出現在站內通知**，信件只說有新的重修、請登入查看 |
+| 寄信 | worker `notification.email`（output 佇列）：讀通知與收件者（email、`locale`、帳號狀態）→ 模板（`@iac/domain` 純函式，zh-TW／en 依 `users.locale`；HTML 跳脫、主旨去控制字元並限長）→ SMTP → 寫 `sent_at`。冪等：`sent_at` 非 NULL 即跳過；寄出後才寫 `sent_at`（至少一次）。帳號非 active 不寄。未設定 SMTP 時只記 log、不寫 `sent_at`。SMTP 設定與 TLS 規則同 §8.10（`SMTP_*`；Compose 的 worker 與 api 共用 `.env`）；信中連結以 `PUBLIC_BASE_URL` 組成，並附通知設定的連結。`Auto-Submitted: auto-generated`。Log 只記類型、收件者網域、message id 與 SMTP 錯誤碼。worker 宣告 `nodemailer` 相依（與 api 同版本，lockfile 未新增套件） |
+| 權限 | 通知端點皆為 `@AuthOnly`：每個查詢都限定 `user_id = 本人`，任何登入者都能使用。不用 `notification.*_self`——ADR-016 讓組織層級的授權不涵蓋 self，而加入申請的收件者（組織管理員）通常沒有 self 授權，會看不到發給自己的通知 |
+| 站內 | `GET /notifications?unread=&limit=&cursor=`：本人、新到舊、keyset（游標保存 PostgreSQL 文字格式的時間，保留微秒）、`meta.unread`；`POST /notifications/{id}/read`（別人的 404）、`POST /notifications/read-all`。索引 `idx_ntf_user_list`（0024） |
+| 偏好 | `GET /me/notification-preferences`（七種類型，預設皆開啟）、`PUT`（upsert；未知類型 400） |
+| 前端 | 頁首鈴鐺與未讀數（每分鐘與換頁時更新）；`/app/notifications`：通知清單（未讀粗體、點開即已讀並前往對應頁面）、只看未讀、全部標為已讀、通知設定（每類的站內／Email） |
+| 未做 | 期限到期前提醒（需排程器）、每日摘要、瀏覽器推播、全站公告、退信與信箱失效處理 |
+
 ---
 
 # 7. Frontend 設計
@@ -4516,3 +4532,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.33 | 2026-09-15 | 新增 §6.23 課程素材：`media_assets`（kind／MIME 相符、不存 SVG）、串流上傳與共用上傳模組、MP4／WebM 檔頭判斷、引用與 `usedBy`、使用中不可刪、發布檢查 C1_ASSET_MISSING 與影片活動 C5、內容端點的存取檢查與 Range／ETag／CSP、影片活動可用素材庫影片、前端素材庫與編輯器；migration 0022 | Software Designer |
 | v1.34 | 2026-09-15 | 新增 §6.24：選課政策（指派／選課碼／課程目錄、需審核、開放期間、名額）、8 碼選課碼（排除易混淆字元、同組織唯一、換碼即失效）、學員自行加入與申請、核准改綁當下版本、拒絕後可再申請、課程目錄、學員名單 CSV 匯出（各活動最佳結果、BOM、防公式注入、上限 10,000 列）；`common/csv.ts` 共用；migration 0023 | Software Designer |
 | v1.35 | 2026-09-15 | 新增 §6.25：重新開啟（completed → reopened，成績照舊、證書不重發）、重修（四種範圍、範圍內只採計指派之後的結果與觀看、reset_counter／append、作答記下所屬重修、整門課重修後核可需重新取得、進行中作答作廢、course.reopened 事件）、授權學員數在服務層檢查、學員與教師畫面；沿用 migration 0006，無新 migration | Software Designer |
+| v1.36 | 2026-09-15 | 新增 §6.26 通知：七種事件（指派、申請、核准／拒絕、重新開啟、重修、發證）在事件交易內寫入站內與 Email 通知、偏好（預設開啟）、worker `notification.email` 經 SMTP 寄出（zh-TW／en 模板、冪等 sent_at、重修原因不進信件）、站內清單與已讀、頁首鈴鐺與通知頁；migration 0024（索引） | Software Designer |
