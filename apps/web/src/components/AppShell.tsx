@@ -84,6 +84,7 @@ function AppShell() {
         </Link>
         <OrgSwitcher />
         <div className="topbar-user">
+          <NotificationBell />
           <Link to="/app/profile" className="user-name" title={`${me.user.email}（個人資料）`}>
             {me.user.displayName}
           </Link>
@@ -112,6 +113,40 @@ function AppShell() {
         <Outlet />
       </main>
     </div>
+  );
+}
+
+/** 頁首的通知鈴鐺（SD §6.26）：未讀數，每分鐘與換頁時更新 */
+function NotificationBell() {
+  const { me } = useSession();
+  const location = useLocation();
+  const [unread, setUnread] = useState(0);
+  // 通知端點只要登入即可（只碰本人的資料，SD §6.26）
+  const allowed = !!me;
+
+  useEffect(() => {
+    if (!allowed) return;
+    let stopped = false;
+    const load = () =>
+      api<{ meta: { unread: number } }>('GET', '/api/notifications?limit=1')
+        .then((r) => {
+          if (!stopped) setUnread(r.meta.unread);
+        })
+        .catch(() => undefined);
+    void load();
+    const t = setInterval(() => void load(), 60_000);
+    return () => {
+      stopped = true;
+      clearInterval(t);
+    };
+  }, [allowed, location.pathname]);
+
+  if (!allowed) return null;
+  return (
+    <Link to="/app/notifications" className="bell" aria-label={unread ? `通知（${unread} 則未讀）` : '通知'} title="通知">
+      <span aria-hidden="true">🔔</span>
+      {unread > 0 && <span className="bell-count">{unread > 99 ? '99+' : unread}</span>}
+    </Link>
   );
 }
 

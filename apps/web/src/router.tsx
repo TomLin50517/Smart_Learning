@@ -18,6 +18,7 @@ import { LearnerDetailPage } from './pages/LearnerDetailPage';
 import { VerifyPage } from './pages/VerifyPage';
 import { LearnPage } from './pages/LearnPage';
 import { MyCoursesPage } from './pages/MyCoursesPage';
+import { NotificationsPage } from './pages/NotificationsPage';
 import { MyTimelinePage } from './pages/MyTimelinePage';
 import { OrganizationsPage } from './pages/OrganizationsPage';
 import { OrgAiKeyPage } from './pages/OrgAiKeyPage';
@@ -46,6 +47,7 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <HomePage /> },
       { path: 'profile', element: <ProfilePage /> },
+      { path: 'notifications', element: <NotificationsPage /> },
       // 學員（SD §6.8）
       { path: 'learn', element: <MyCoursesPage /> },
       { path: 'learn/:enrollmentId', element: <LearnPage /> },
