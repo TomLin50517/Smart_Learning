@@ -7,6 +7,8 @@ import { CertificateGenerateHandler } from './handlers/certificate-generate.js';
 import { DocumentIndexHandler } from './handlers/document-index.js';
 import { DocumentParseHandler } from './handlers/document-parse.js';
 import { DocumentSyncHandler } from './handlers/document-sync.js';
+import { NotificationEmailHandler } from './handlers/notification-email.js';
+import { createWorkerMailer } from './mailer.js';
 import { createWorkerSearch } from './search.js';
 import { createWorkerStorage } from './storage.js';
 
@@ -28,6 +30,25 @@ const env = z
     ELASTICSEARCH_API_KEY: z.string().default(''),
     ELASTICSEARCH_USERNAME: z.string().default(''),
     ELASTICSEARCH_PASSWORD: z.string().default(''),
+    // Email 通知（SD §6.26）：與 API 相同的 SMTP_* 設定（§8.10、ADR-031）；PUBLIC_BASE_URL 用來組信中的連結
+    NODE_ENV: z.string().default('development'),
+    PUBLIC_BASE_URL: z.string().min(1).default('http://localhost:8080'),
+    SMTP_HOST: z.string().default(''),
+    SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(587),
+    SMTP_SECURE: z.stringbool().default(false),
+    SMTP_REQUIRE_TLS: z.stringbool().default(true),
+    SMTP_USER: z.string().default(''),
+    SMTP_PASSWORD: z.string().default(''),
+    SMTP_FROM: z.string().default(''),
+  })
+  .superRefine((v, ctx) => {
+    if (v.SMTP_HOST && !/@[^@\s>]+/.test(v.SMTP_FROM)) {
+      ctx.addIssue({ code: 'custom', path: ['SMTP_FROM'], message: 'required when SMTP_HOST is set (e.g. "Name <no-reply@example.com>")' });
+    }
+    if (v.SMTP_USER && !v.SMTP_PASSWORD) ctx.addIssue({ code: 'custom', path: ['SMTP_PASSWORD'], message: 'required when SMTP_USER is set' });
+    if (v.NODE_ENV === 'production' && v.SMTP_HOST && !v.SMTP_SECURE && !v.SMTP_REQUIRE_TLS) {
+      ctx.addIssue({ code: 'custom', path: ['SMTP_REQUIRE_TLS'], message: 'plaintext SMTP is not allowed in production' });
+    }
   })
   .parse(process.env);
 
@@ -35,6 +56,8 @@ const log = pino({ level: env.LOG_LEVEL, base: { service: 'worker', worker_id: e
 const db = new pg.Pool({ connectionString: env.DATABASE_URL_WORKER, max: 5, application_name: 'iac-worker' });
 const storage = createWorkerStorage(env);
 const search = createWorkerSearch(env);
+const mailer = createWorkerMailer(env);
+if (!mailer && env.NODE_ENV === 'production') log.warn('SMTP_HOST is not set — notification emails will NOT be sent');
 
 const dispatcher = new Dispatcher(db, log, {
   workerId: env.WORKER_ID,
@@ -46,10 +69,12 @@ dispatcher.register(new CertificateGenerateHandler(db));
 dispatcher.register(new DocumentParseHandler(db, storage));
 dispatcher.register(new DocumentIndexHandler(db, storage, search));
 dispatcher.register(new DocumentSyncHandler(db, search));
+dispatcher.register(new NotificationEmailHandler(db, mailer, log, env.PUBLIC_BASE_URL));
 
 async function shutdown(signal: string): Promise<void> {
   log.info({ signal }, 'shutting down');
   await dispatcher.stop();
+  mailer?.close();
   await db.end();
   process.exit(0);
 }
