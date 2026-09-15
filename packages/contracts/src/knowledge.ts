@@ -50,6 +50,8 @@ export interface DocumentVersionDto {
 export interface BoundDocumentDto {
   documentId: string;
   title: string;
+  /** 組織共用教材（SD §6.27）：課程人員只能加入或移出，不能上傳新版或刪除 */
+  shared: boolean;
   bindingType: string;
   /** 此課程版本引用的版本 */
   boundVersion: DocumentVersionDto;
@@ -62,8 +64,17 @@ export interface CourseKnowledgeDto {
   /** 版本為草稿：可上傳、加入、移出 */
   editable: boolean;
   bound: BoundDocumentDto[];
-  /** 本課程其他版本用過、但沒有綁在這個版本的教材 */
-  available: { documentId: string; title: string; latestVersion: DocumentVersionDto }[];
+  /** 本課程其他版本用過、或組織共用、但沒有綁在這個版本的教材 */
+  available: { documentId: string; title: string; shared: boolean; latestVersion: DocumentVersionDto }[];
+}
+
+/** GET /org/knowledge/documents：組織共用教材（SD §6.27） */
+export interface SharedDocumentDto {
+  documentId: string;
+  title: string;
+  latestVersion: DocumentVersionDto;
+  /** 有多少門課的版本加入了這份教材 */
+  usedByCourses: number;
 }
 
 /** POST /course-versions/{id}/knowledge/search：課程人員測試檢索（與 AI 教練用同一個檢索器與範圍） */

@@ -245,8 +245,8 @@ SELECT pg_temp.t('T51 default privs: app_coach cannot write new table', 'app_coa
  $$INSERT INTO zz_future_table VALUES (1)$$, '42501');
 
 -- ============================================================ seed data
-SELECT pg_temp.t('T52 73 permissions seeded', NULL,
- $$DO $d$ BEGIN IF (SELECT count(*) FROM permissions) <> 73 THEN RAISE EXCEPTION 'COUNT %', (SELECT count(*) FROM permissions); END IF; END $d$ $$, 'OK');
+SELECT pg_temp.t('T52 74 permissions seeded', NULL,
+ $$DO $d$ BEGIN IF (SELECT count(*) FROM permissions) <> 74 THEN RAISE EXCEPTION 'COUNT %', (SELECT count(*) FROM permissions); END IF; END $d$ $$, 'OK');
 SELECT pg_temp.t('T53 6 roles seeded', NULL,
  $$DO $d$ BEGIN IF (SELECT count(*) FROM roles) <> 6 THEN RAISE EXCEPTION 'COUNT'; END IF; END $d$ $$, 'OK');
 SELECT pg_temp.t('T54 no duplicate platform.audit.read', NULL,
@@ -268,8 +268,8 @@ SELECT pg_temp.t('T58 4 monthly partitions per table', NULL,
      OR (SELECT count(*) FROM pg_inherits i JOIN pg_class c ON c.oid=i.inhrelid
           WHERE i.inhparent='audit_logs'::regclass AND c.relname ~ '_\d{4}_\d{2}$') <> 4
      THEN RAISE EXCEPTION 'PARTITIONS'; END IF; END $d$ $$, 'OK');
-SELECT pg_temp.t('T59 24 migrations recorded', NULL,
- $$DO $d$ BEGIN IF (SELECT count(*) FROM schema_migrations) <> 24 THEN RAISE EXCEPTION 'COUNT'; END IF; END $d$ $$, 'OK');
+SELECT pg_temp.t('T59 25 migrations recorded', NULL,
+ $$DO $d$ BEGIN IF (SELECT count(*) FROM schema_migrations) <> 25 THEN RAISE EXCEPTION 'COUNT'; END IF; END $d$ $$, 'OK');
 
 -- ============================================================ 0015 auth tables
 SELECT pg_temp.t('T60 app_coach cannot read password_reset_tokens', 'app_coach',
@@ -393,6 +393,13 @@ SELECT pg_temp.t('T93 enrollment code unique within an organization', NULL,
 SELECT pg_temp.t('T94 enrollment code format is fixed (no look-alikes)', NULL,
  $$INSERT INTO courses (organization_id, code, title, enrollment_policy)
    VALUES ('11111111-0000-0000-0000-000000000001', 'EC-3', 'C', '{"joinBy":"code","code":"ABCD1O23"}')$$, '23514');
+-- ============================================================ 0025 shared knowledge
+SELECT pg_temp.t('T96 only org_admin can manage shared knowledge', NULL,
+ $$DO $d$ BEGIN
+   IF (SELECT array_agg(r.code::text ORDER BY r.code::text) FROM role_permissions rp JOIN roles r ON r.id = rp.role_id
+         JOIN permissions p ON p.id = rp.permission_id WHERE p.code = 'knowledge.shared.write') IS DISTINCT FROM ARRAY['org_admin']
+   THEN RAISE EXCEPTION 'ROLES'; END IF;
+ END $d$ $$, 'OK');
 -- ============================================================ 0024 notifications
 SELECT pg_temp.t('T95 app_coach cannot write notifications', 'app_coach',
  $$INSERT INTO notifications (user_id, type) SELECT id, 'enrollment.assigned' FROM users LIMIT 1$$, '42501');

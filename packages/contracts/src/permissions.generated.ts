@@ -63,6 +63,7 @@ export const PERMISSIONS = {
   "knowledge.document.read": { minScope: "course", capability: null, description: "讀文件清單/狀態" },
   "knowledge.document.write": { minScope: "course", capability: "authoringAllowed", description: "上傳/新版/刪除" },
   "knowledge.faq.write": { minScope: "course", capability: "authoringAllowed", description: "建立正式 FAQ" },
+  "knowledge.shared.write": { minScope: "organization", capability: "authoringAllowed", description: "管理組織共用教材（v1.33）" },
   "knowledge.source.view": { minScope: "self", capability: null, description: "開啟原文 viewer（學員經 citation 為 self；課程人員為 course）" },
   "knowledge.reindex.execute": { minScope: "organization", capability: "configurationWriteAllowed", description: "觸發重新索引" },
   "derived.read": { minScope: "course", capability: null, description: "讀 derived knowledge" },
