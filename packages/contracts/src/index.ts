@@ -16,3 +16,4 @@ export * from './knowledge.js';
 export * from './coach.js';
 export * from './media.js';
 export * from './permissions.generated.js';
+export * from './notification.js';

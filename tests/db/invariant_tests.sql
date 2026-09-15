@@ -268,8 +268,8 @@ SELECT pg_temp.t('T58 4 monthly partitions per table', NULL,
      OR (SELECT count(*) FROM pg_inherits i JOIN pg_class c ON c.oid=i.inhrelid
           WHERE i.inhparent='audit_logs'::regclass AND c.relname ~ '_\d{4}_\d{2}$') <> 4
      THEN RAISE EXCEPTION 'PARTITIONS'; END IF; END $d$ $$, 'OK');
-SELECT pg_temp.t('T59 23 migrations recorded', NULL,
- $$DO $d$ BEGIN IF (SELECT count(*) FROM schema_migrations) <> 23 THEN RAISE EXCEPTION 'COUNT'; END IF; END $d$ $$, 'OK');
+SELECT pg_temp.t('T59 24 migrations recorded', NULL,
+ $$DO $d$ BEGIN IF (SELECT count(*) FROM schema_migrations) <> 24 THEN RAISE EXCEPTION 'COUNT'; END IF; END $d$ $$, 'OK');
 
 -- ============================================================ 0015 auth tables
 SELECT pg_temp.t('T60 app_coach cannot read password_reset_tokens', 'app_coach',
@@ -393,6 +393,9 @@ SELECT pg_temp.t('T93 enrollment code unique within an organization', NULL,
 SELECT pg_temp.t('T94 enrollment code format is fixed (no look-alikes)', NULL,
  $$INSERT INTO courses (organization_id, code, title, enrollment_policy)
    VALUES ('11111111-0000-0000-0000-000000000001', 'EC-3', 'C', '{"joinBy":"code","code":"ABCD1O23"}')$$, '23514');
+-- ============================================================ 0024 notifications
+SELECT pg_temp.t('T95 app_coach cannot write notifications', 'app_coach',
+ $$INSERT INTO notifications (user_id, type) SELECT id, 'enrollment.assigned' FROM users LIMIT 1$$, '42501');
 SELECT pg_temp.t('T92 app_coach cannot write media', 'app_coach',
  $$INSERT INTO media_assets (organization_id, course_id, kind, mime_type, title, original_filename, size_bytes, sha256, object_key)
    VALUES ('11111111-0000-0000-0000-000000000001', 'c0000000-0000-0000-0000-000000000001', 'image', 'image/png', 't', 'a.png', 1, repeat('a', 64), 'k')$$, '42501');
