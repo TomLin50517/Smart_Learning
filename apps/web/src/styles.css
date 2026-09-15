@@ -473,6 +473,24 @@ details.bulk > summary {
   flex-direction: column;
   gap: 10px;
 }
+/* ---- 常見問答（SD §6.27） -------------------------------------------------- */
+.faq-list {
+  margin: 8px 0;
+  padding: 0;
+  list-style: none;
+}
+.faq-list li {
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+.faq-list li.retired {
+  opacity: 0.6;
+}
+.faq-answer {
+  margin: 6px 0;
+  white-space: pre-wrap;
+}
+
 /* ---- 通知（SD §6.26） ------------------------------------------------------ */
 .bell {
   position: relative;

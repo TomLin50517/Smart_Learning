@@ -106,11 +106,11 @@ export function KnowledgePanel({ versionId, editable }: { versionId: string; edi
 
       {canEdit && k && k.available.length > 0 && (
         <details className="bulk">
-          <summary>加入本課程其他版本用過的教材（{k.available.length}）</summary>
+          <summary>加入本課程其他版本用過、或組織共用的教材（{k.available.length}）</summary>
           <ul className="link-list">
             {k.available.map((a) => (
               <li key={a.documentId}>
-                {a.title} <span className="muted small">v{a.latestVersion.versionNo}</span> <StatusBadge v={a.latestVersion} />{' '}
+                {a.title} {a.shared && <span className="badge">組織共用</span>} <span className="muted small">v{a.latestVersion.versionNo}</span> <StatusBadge v={a.latestVersion} />{' '}
                 <button type="button" className="btn btn-small" disabled={busy} onClick={() => void run(() => api('POST', `/api/course-versions/${versionId}/knowledge/bindings`, { documentVersionId: a.latestVersion.id }))}>
                   加入此版本
                 </button>
@@ -248,7 +248,9 @@ function BoundRow(props: {
   return (
     <tr>
       <td>
-        <div>{b.title}</div>
+        <div>
+          {b.title} {b.shared && <span className="badge" title="由組織管理員維護；這裡只能加入或移出">組織共用</span>}
+        </div>
         <div className="muted small">
           v{v.versionNo}・{v.originalFilename}・{formatBytes(v.sizeBytes)}
         </div>
@@ -274,7 +276,7 @@ function BoundRow(props: {
               重試
             </button>
           )}
-          {props.canEdit && (
+          {props.canEdit && !b.shared && (
             <label className="btn btn-small">
               上傳新版
               <input type="file" accept={DOCUMENT_ACCEPT} hidden disabled={props.busy} onChange={(e) => e.target.files?.[0] && props.onNewVersion(e.target.files[0])} />
@@ -285,7 +287,7 @@ function BoundRow(props: {
               移出
             </button>
           )}
-          {props.canEdit && (
+          {props.canEdit && !b.shared && (
             <button type="button" className="btn btn-small btn-danger" disabled={props.busy} onClick={props.onDelete}>
               刪除
             </button>
