@@ -6,7 +6,7 @@ import { useMe } from '../auth/session';
 import { ErrorAlert, Forbidden, Notice, PageHeader, Spinner } from '../components/ui';
 import { ACTIVITY_STATE_ICONS, ENROLLMENT_STATUS_LABELS, formatDateTime, formatMinutes } from '../format';
 import { useApi, useTitle } from '../hooks';
-import { blockingReasonText, parseMarkdownLite } from '../learn-lib';
+import { blockingReasonText, parseMarkdownLite, relearningScopeText } from '../learn-lib';
 import { ActivityPanel } from './activity-panel';
 import { CoachPanel } from './coach-panel';
 
@@ -66,6 +66,14 @@ export function LearnPage() {
           你已完成這門課程，現在是回顧模式。{can(me, 'certificate.read_self') && <Link to="/app/certificates">查看我的證書</Link>}
         </Notice>
       )}
+      {o.relearning && (
+        <Notice kind="info">
+          老師指派了重修（{relearningScopeText(o.relearning)}）：{o.relearning.reason}
+          {o.relearning.dueDate && `　期限：${formatDateTime(o.relearning.dueDate)}`}
+          。標示 🔁 的活動需要重新完成；之前的作答與成績仍保留在學習歷程中。
+        </Notice>
+      )}
+      {o.enrollment.status === 'reopened' && !o.relearning && <Notice kind="info">課程已重新開啟，可以繼續練習；成績採計最好的一次。</Notice>}
 
       <div className="player">
         <nav className="card outline" aria-label="課程大綱">
@@ -87,6 +95,7 @@ export function LearnPage() {
                       <span>{l.title}</span>
                       <span className="state-icons" aria-label={l.activities.map((a) => `${a.title}：${a.state}`).join('、')}>
                         {l.activities.map((a) => ACTIVITY_STATE_ICONS[a.state]).join('')}
+                        {l.activities.some((a) => a.inRelearning) && ' 🔁'}
                       </span>
                     </button>
                   </li>

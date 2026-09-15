@@ -292,6 +292,8 @@ const ACTION_LABELS: Record<string, string> = {
   'enrollment.withdrawn': '退課',
   'enrollment.suspended': '暫停選課',
   'enrollment.resumed': '恢復選課',
+  'enrollment.reopened': '重新開啟課程',
+  'enrollment.relearning.assigned': '指派重修',
   'completion.approved': '核可課程完成',
   'certificate.issued': '發出證書',
   'certificate.revoked': '撤銷證書',

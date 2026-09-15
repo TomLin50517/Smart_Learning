@@ -37,6 +37,12 @@ const DETAIL_FIELDS: Record<string, [string, string][]> = {
   'completion.approved': [['approver_roles', 'approverRoles']],
   'certificate.issued': [['public_id', 'publicId']],
   'certificate.revoked': [['public_id', 'publicId']],
+  // 重新開啟／重修（SD §6.25）：原因是老師寫給學員的，學員看得到
+  'course.reopened': [
+    ['via', 'via'],
+    ['scope', 'scope'],
+    ['reason', 'reason'],
+  ],
 };
 const Cursor = z.tuple([z.string().max(64), z.guid()]);
 const invalid = (field: string, issue: string) => new DomainError('VALIDATION_FAILED', 'Validation failed', [{ field, issue }]);
