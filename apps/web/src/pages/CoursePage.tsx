@@ -20,6 +20,7 @@ import { useApi, useTitle } from '../hooks';
 import { CertificatesPanel } from './certificates-panel';
 import { CoachInsightsPanel } from './coach-insights-panel';
 import { EnrollmentPolicyCard } from './enrollment-policy-card';
+import { FaqCard } from './faq-card';
 import { MediaLibraryCard } from './media-library';
 import { LearnersPanel } from './learners-panel';
 
@@ -169,6 +170,7 @@ export function CoursePage() {
       </section>
 
       {can(me, 'course.version.read') && <MediaLibraryCard courseId={c.id} />}
+      {can(me, 'derived.read') && <FaqCard courseId={c.id} />}
       {can(me, 'course.staff.assign') && <StaffPanel courseId={c.id} />}
       {can(me, 'enrollment.assign') && <EnrollmentPolicyCard course={c} />}
       {can(me, 'learning.result.read_all') && <LearnersPanel course={c} />}

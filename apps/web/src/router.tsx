@@ -19,6 +19,7 @@ import { VerifyPage } from './pages/VerifyPage';
 import { LearnPage } from './pages/LearnPage';
 import { MyCoursesPage } from './pages/MyCoursesPage';
 import { NotificationsPage } from './pages/NotificationsPage';
+import { OrgKnowledgePage } from './pages/OrgKnowledgePage';
 import { MyTimelinePage } from './pages/MyTimelinePage';
 import { OrganizationsPage } from './pages/OrganizationsPage';
 import { OrgAiKeyPage } from './pages/OrgAiKeyPage';
@@ -63,6 +64,7 @@ export const router = createBrowserRouter([
       { path: 'org/users', element: <OrgMembersPage /> },
       { path: 'org/cohorts', element: <CohortsPage /> },
       { path: 'org/branding', element: <BrandingPage /> },
+      { path: 'org/knowledge', element: <OrgKnowledgePage /> },
       { path: 'org/coach', element: <CoachSettingsPage /> },
       // Platform Admin
       { path: 'platform/organizations', element: <OrganizationsPage /> },

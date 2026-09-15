@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  DERIVED_INDEX_JOB,
   PREREQUISITE_CONDITION_TYPES,
   type CourseStatus,
   type CourseVersionDetailDto,
@@ -20,6 +21,7 @@ import {
 import pg from 'pg';
 import { DB_API } from '../../../common/database.module.js';
 import { DomainError } from '../../../common/domain-error.js';
+import { enqueueJobTx } from '../../../common/job-queue.js';
 import { CoachPolicyInput } from './course-inputs.js';
 import { CourseService } from './course.service.js';
 
@@ -247,7 +249,7 @@ export class CoursePublishService {
       const v = await c.query<{ course_id: string }>(`SELECT course_id FROM course_versions WHERE id = $1`, [id]);
       if (!v.rows[0]) throw new DomainError('NOT_FOUND');
       const courseId = v.rows[0].course_id;
-      const course = await c.query<{ status: CourseStatus }>(`SELECT status FROM courses WHERE id = $1 FOR UPDATE`, [courseId]);
+      const course = await c.query<{ status: CourseStatus; organization_id: string }>(`SELECT status, organization_id FROM courses WHERE id = $1 FOR UPDATE`, [courseId]);
       const cur = await c.query<{ status: CourseVersionStatus }>(`SELECT status FROM course_versions WHERE id = $1 FOR UPDATE`, [id]);
       const previousStatus = cur.rows[0]!.status;
       if (!PUBLISHABLE.includes(previousStatus)) throw new DomainError('COURSE_VERSION_IMMUTABLE');
@@ -270,6 +272,14 @@ export class CoursePublishService {
         contentSnapshotHash,
       ]);
       await c.query(`UPDATE courses SET status = 'active' WHERE id = $1 AND status = 'draft'`, [courseId]);
+      // FAQ 屬於課程：讓索引中的 FAQ 涵蓋新發布的版本（SD §6.27）
+      await enqueueJobTx(c, {
+        jobType: DERIVED_INDEX_JOB.type,
+        queue: DERIVED_INDEX_JOB.queue,
+        maxAttempts: DERIVED_INDEX_JOB.maxAttempts,
+        payload: { courseId },
+        organizationId: course.rows[0]!.organization_id,
+      });
       await c.query('COMMIT');
       result = { previousStatus, supersededVersionId: prev.rows[0]?.id ?? null, contentSnapshotHash };
     } catch (e) {

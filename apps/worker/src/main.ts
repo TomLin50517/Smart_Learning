@@ -4,6 +4,7 @@ import { pino } from 'pino';
 import { z } from 'zod';
 import { Dispatcher } from './dispatcher.js';
 import { CertificateGenerateHandler } from './handlers/certificate-generate.js';
+import { DerivedIndexHandler } from './handlers/derived-index.js';
 import { DocumentIndexHandler } from './handlers/document-index.js';
 import { DocumentParseHandler } from './handlers/document-parse.js';
 import { DocumentSyncHandler } from './handlers/document-sync.js';
@@ -69,6 +70,7 @@ dispatcher.register(new CertificateGenerateHandler(db));
 dispatcher.register(new DocumentParseHandler(db, storage));
 dispatcher.register(new DocumentIndexHandler(db, storage, search));
 dispatcher.register(new DocumentSyncHandler(db, search));
+dispatcher.register(new DerivedIndexHandler(db, search));
 dispatcher.register(new NotificationEmailHandler(db, mailer, log, env.PUBLIC_BASE_URL));
 
 async function shutdown(signal: string): Promise<void> {

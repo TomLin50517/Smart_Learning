@@ -1,4 +1,4 @@
-import { assetUrl, COACH_HIDDEN_REASONS, type CoachAvailabilityDto, type LearnerOutlineDto, type LearningTimeDto, type LessonBlock, type OutlineActivityDto, type ProgressDto } from '@iac/contracts';
+import { assetUrl, COACH_HIDDEN_REASONS, type CoachAvailabilityDto, type LearnerFaqDto, type LearnerOutlineDto, type LearningTimeDto, type LessonBlock, type OutlineActivityDto, type ProgressDto } from '@iac/contracts';
 import { useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { can } from '../auth/permissions';
@@ -116,6 +116,7 @@ export function LearnPage() {
           )}
         </div>
       </div>
+      <LearnerFaq enrollmentId={enrollmentId} />
       {coachShown && <CoachPanel enrollmentId={enrollmentId} activityId={current?.activities[0]?.id} contextTitle={current?.title ?? null} resultRequest={coachResult} />}
     </>
   );
@@ -157,6 +158,32 @@ export function ProgressCard({ progress: p, time, titleOf }: { progress: Progres
 }
 
 type AskCoach = ((attemptId: string) => void) | undefined;
+
+/** 老師整理的常見問答與常見錯誤（SD §6.27）；沒有內容時不顯示 */
+function LearnerFaq({ enrollmentId }: { enrollmentId: string }) {
+  const faq = useApi<LearnerFaqDto[]>(`/api/enrollments/${enrollmentId}/faq`);
+  if (!faq.data?.length) return null;
+  return (
+    <section className="card">
+      <details>
+        <summary>
+          <strong>常見問答（{faq.data.length}）</strong>
+        </summary>
+        <ul className="faq-list">
+          {faq.data.map((f) => (
+            <li key={f.id}>
+              <div className="row">
+                <span className={`badge ${f.kind === 'common_error' ? 'badge-grace' : 'badge-active'}`}>{f.kind === 'common_error' ? '常見錯誤' : '問答'}</span>
+                <strong className="grow">{f.question}</strong>
+              </div>
+              <p className="faq-answer">{f.answer}</p>
+            </li>
+          ))}
+        </ul>
+      </details>
+    </section>
+  );
+}
 
 function LessonView({ lesson, canLearn, onChanged, onAskCoach }: { lesson: Lesson; canLearn: boolean; onChanged(): void; onAskCoach: AskCoach }) {
   const byId = new Map<string, OutlineActivityDto>(lesson.activities.map((a) => [a.id, a]));

@@ -2522,6 +2522,22 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 前端 | 頁首鈴鐺與未讀數（每分鐘與換頁時更新）；`/app/notifications`：通知清單（未讀粗體、點開即已讀並前往對應頁面）、只看未讀、全部標為已讀、通知設定（每類的站內／Email） |
 | 未做 | 期限到期前提醒（需排程器）、每日摘要、瀏覽器推播、全站公告、退信與信箱失效處理 |
 
+## 6.27 常見問答、常見錯誤與組織共用教材（v1.37）
+
+實作：`modules/derived-knowledge/{application/faq.service.ts,api/faq.controller.ts}`、`modules/ai-coach/{application/faq-draft.service.ts,api/faq-draft.controller.ts}`、`coach.service.ts`（引用 FAQ）、`packages/domain/src/knowledge/{insights.ts,faq-index.ts}`、`apps/worker/src/handlers/derived-index.ts`、`modules/knowledge/{application/knowledge.service.ts,api/shared-knowledge.controller.ts}`、`apps/web/src/pages/{faq-card.tsx,OrgKnowledgePage.tsx,LearnPage.tsx,knowledge-panel.tsx}`；`migrations/0025_faq_shared_knowledge.sql`。沿用 0007 的 `derived_knowledge`／`derived_knowledge_versions`。對應 SA UC-KNW-004～008、§7.5、§15.3、AC-DRV-001～007。本批採「老師主導＋系統整理線索」：不做排程自動產生候選（SEQ-07 全自動）。
+
+| 項目 | 實作 |
+|---|---|
+| FAQ 的歸屬 | 屬於**課程**：`derived_knowledge.course_version_id` 為建立當下的版本（已發布優先），列出、學員檢視、檢索都以課程為單位；索引文件的 `course_version_ids` 為這門課所有版本。複製版本、發布時排入 `derived.index` 讓新版本也涵蓋 |
+| 老師撰寫 | `POST /courses/{id}/faq`（knowledge.faq.write＋authoringAllowed，稽核 `knowledge.faq.created`）：kind faq／common_error，直接生效（`verified`、`grounded`——老師就是依據）。`PATCH` 建新版本、舊版保留（AC-DRV-004，`knowledge.faq.updated`）；`POST …/retire` 下架（`retired`，紀錄保留，AC-DRV-007）。`cluster_key`：老師撰寫為 `manual:{uuid}`，由線索建立為「線索代號#亂數」（同一線索已有生效項目 → `faq_exists`；下架後可再建立） |
+| 系統整理的線索 | `GET /courses/{id}/faq-insights`（derived.read）近 90 天：①作答結果的問題代碼依（活動、代碼、題目）彙整，附題目名稱；②學員向 AI 教練的提問（不含教師測試、已匿名化的對話）→ 去識別化（Email、電話、名單中的姓名與學號、6 位以上數字）→ 以「單字＋相鄰兩字」集合的 Dice 係數做 single-linkage 分群（任兩題 ≥ 0.45 即同群，與順序無關；不需分詞，短句的換句話說仍能歸在一起）→ 代表問題取群內最相似者。兩者都只列出**不同學員數 ≥ `derived.min_threshold`**（ARCH §14.5）；學員只以不透明編號計數，身分不進入分群。已有對應 FAQ 的線索標示「已建立」（代號或問題相似度 ≥ 0.5） |
+| AI 起草 | `POST /courses/{id}/faq/draft`（knowledge.faq.write，每人每分鐘 10 次）在 MOD-COACH：前提同 AI 教練（組織未停用、供應商／組織金鑰、檢索、每日額度）；只檢索教材（source）→ 限定 JSON 輸出（answer、citations、insufficient）→ 引用必須是這次檢索到的段落、不得含個人資料，否則 `insufficient_evidence`。**不儲存**——老師檢查、修改後按儲存才生效。用量 `purpose = derived_generate` |
+| 檢索與 AI 教練 | worker `derived.index`（payload courseId，冪等整門課重整）：生效且有依據者寫入 `knowledge_chunks`（`_id = dk:{id}`、knowledge_type = kind、verification_status = verified，權重 1.3 高於教材 1.0，AC-DRV-005），其餘刪除。AI 教練的 V4 授權以資料庫為準（同課程、verified、grounded——索引較舊時不會引用已下架的項目）；引用 FAQ 時 `coach_citations.derived_knowledge_id`（無教材版本與位置），「看原文」顯示目前的問與答 |
+| 學員 | `GET /enrollments/{id}/faq`（本人的選課）；學習頁「常見問答」可展開 |
+| 組織共用教材 | `source_documents.course_id IS NULL`。新權限 `knowledge.shared.write`（organization、authoringAllowed，migration 0025 只給組織管理員，T96）：`/org/knowledge/documents` 上傳、新版、重試、預覽、刪除（已發布版本仍引用時不可刪）。以教材 id 操作的端點由 ScopeResolver 解析到組織（課程層級的授權涵蓋不到），服務層再確認是共用教材（課程自己的教材 404）。課程人員在草稿版本的「教材」看到並加入共用教材（同組織），但不能上傳新版或刪除；共用教材索引為 `acl_scope = organization` |
+| 前端 | 課程頁「常見問答與常見錯誤」卡片（新增、請 AI 起草、編輯、下架、顯示已下架、系統整理的線索與一鍵建立）；學習頁常見問答；組織選單「共用教材」頁；教材卡片標示「組織共用」 |
+| 未做 | 排程自動彙整與 AI 產生候選、語意分群（需 embedding）、FAQ 的多語版本、共用教材的組織層級預設加入 |
+
 ---
 
 # 7. Frontend 設計
@@ -4533,3 +4549,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.34 | 2026-09-15 | 新增 §6.24：選課政策（指派／選課碼／課程目錄、需審核、開放期間、名額）、8 碼選課碼（排除易混淆字元、同組織唯一、換碼即失效）、學員自行加入與申請、核准改綁當下版本、拒絕後可再申請、課程目錄、學員名單 CSV 匯出（各活動最佳結果、BOM、防公式注入、上限 10,000 列）；`common/csv.ts` 共用；migration 0023 | Software Designer |
 | v1.35 | 2026-09-15 | 新增 §6.25：重新開啟（completed → reopened，成績照舊、證書不重發）、重修（四種範圍、範圍內只採計指派之後的結果與觀看、reset_counter／append、作答記下所屬重修、整門課重修後核可需重新取得、進行中作答作廢、course.reopened 事件）、授權學員數在服務層檢查、學員與教師畫面；沿用 migration 0006，無新 migration | Software Designer |
 | v1.36 | 2026-09-15 | 新增 §6.26 通知：七種事件（指派、申請、核准／拒絕、重新開啟、重修、發證）在事件交易內寫入站內與 Email 通知、偏好（預設開啟）、worker `notification.email` 經 SMTP 寄出（zh-TW／en 模板、冪等 sent_at、重修原因不進信件）、站內清單與已讀、頁首鈴鐺與通知頁；migration 0024（索引） | Software Designer |
+| v1.37 | 2026-09-15 | 新增 §6.27：課程的常見問答與常見錯誤（老師撰寫直接生效、版本保留、下架）、系統整理的線索（作答問題代碼彙整、提問去識別化與相似度分群、匿名門檻）、AI 依教材起草（不儲存）、FAQ 進入檢索（權重 1.3）與 AI 教練引用 FAQ、組織共用教材（新權限 knowledge.shared.write）；migration 0025 | Software Designer |

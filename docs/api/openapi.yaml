@@ -3314,6 +3314,202 @@ paths:
         '400': { description: '`VALIDATION_FAILED`：`to: range_too_large`（超過 366 天）或 `to: too_many_rows`（超過 50,000 列）' }
         '404': { description: organizationId 不在匯出範圍內 }
 
+  /courses/{id}/faq:
+    parameters:
+      - $ref: '#/components/parameters/CourseId'
+      - { name: includeRetired, in: query, schema: { type: boolean, default: false } }
+    get:
+      operationId: listCourseFaq
+      tags: [Knowledge]
+      x-required-permission: derived.read
+      description: 課程的常見問答與常見錯誤（SD §6.27）；FAQ 屬於課程，不綁特定版本。預設只列出生效中的項目。
+      responses:
+        '200': { description: 'FaqDto[]' }
+    post:
+      operationId: createCourseFaq
+      tags: [Knowledge]
+      x-required-permission: knowledge.faq.write
+      x-required-capability: authoringAllowed
+      x-audit: knowledge.faq.created
+      description: |
+        老師撰寫的 FAQ／常見錯誤直接生效（verified、grounded——老師就是依據）；同一交易排入 derived.index 更新檢索索引，
+        AI 教練以權重 1.3 優先引用。由系統線索建立時帶 `insightKey`（同一線索已有生效中的項目 → 422 `faq_exists`）。
+        課程沒有任何版本 → 422 `course_has_no_version`。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [kind, question, answer]
+              properties:
+                kind:       { type: string, enum: [faq, common_error] }
+                question:   { type: string, minLength: 2, maxLength: 300 }
+                answer:     { type: string, minLength: 1, maxLength: 2000 }
+                citations:  { type: array, maxItems: 10, items: { type: object } }
+                insightKey: { type: [string, 'null'], pattern: '^(issue|q):[\w:.-]{1,200}$' }
+                learners:   { type: [integer, 'null'], minimum: 1 }
+      responses:
+        '201': { description: FaqDto }
+
+  /courses/{id}/faq/{faqId}:
+    parameters:
+      - $ref: '#/components/parameters/CourseId'
+      - { name: faqId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      operationId: updateCourseFaq
+      tags: [Knowledge]
+      x-required-permission: knowledge.faq.write
+      x-required-capability: authoringAllowed
+      x-audit: knowledge.faq.updated
+      description: 建立新的 derived_knowledge_versions，舊版保留（AC-DRV-004）。已下架 → 422 `faq_retired`。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [question, answer]
+              properties:
+                question:  { type: string, minLength: 2, maxLength: 300 }
+                answer:    { type: string, minLength: 1, maxLength: 2000 }
+                citations: { type: array, maxItems: 10, items: { type: object } }
+      responses:
+        '200': { description: FaqDto }
+
+  /courses/{id}/faq/{faqId}/retire:
+    parameters:
+      - $ref: '#/components/parameters/CourseId'
+      - { name: faqId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      operationId: retireCourseFaq
+      tags: [Knowledge]
+      x-required-permission: knowledge.faq.write
+      x-required-capability: authoringAllowed
+      x-audit: knowledge.faq.retired
+      description: 下架：學員與 AI 教練不再看到；紀錄保留（AC-DRV-007）。
+      responses:
+        '200': { description: FaqDto }
+
+  /courses/{id}/faq/draft:
+    parameters: [{ $ref: '#/components/parameters/CourseId' }]
+    post:
+      operationId: draftCourseFaq
+      tags: [Knowledge]
+      x-required-permission: knowledge.faq.write
+      x-required-capability: authoringAllowed
+      description: |
+        「請 AI 起草」：只依課程教材（source）起草答案，不儲存。前提同 AI 教練（組織未停用、有供應商／組織金鑰、有檢索、未達每日額度），
+        否則 COACH_PROVIDER_UNAVAILABLE／AI_QUOTA_EXCEEDED。引用必須是這次檢索到的段落；教材不足或含個人資料 → `insufficient_evidence`。
+        用量記為 purpose = derived_generate。每人每分鐘 10 次。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [kind, question]
+              properties:
+                kind:     { type: string, enum: [faq, common_error] }
+                question: { type: string, minLength: 2, maxLength: 300 }
+      responses:
+        '200': { description: FaqDraftDto }
+
+  /courses/{id}/faq-insights:
+    parameters: [{ $ref: '#/components/parameters/CourseId' }]
+    get:
+      operationId: getCourseFaqInsights
+      tags: [Knowledge]
+      x-required-permission: derived.read
+      description: |
+        系統整理的線索（近 90 天）：作答結果的問題代碼依活動彙整、學員提問去識別化後依文字相似度分群；
+        只列出不同學員數 ≥ 平台設定 derived.min_threshold 者（ARCH §14.5）。
+      responses:
+        '200': { description: FaqInsightsDto }
+
+  /enrollments/{id}/faq:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      operationId: listMyCourseFaq
+      tags: [Knowledge]
+      x-required-permission: learning.result.read_self
+      description: 學員看得到的 FAQ（本人的選課所屬課程、生效中的項目）；別人的選課 404。
+      responses:
+        '200': { description: 'LearnerFaqDto[]' }
+
+  /org/knowledge/documents:
+    get:
+      operationId: listSharedKnowledge
+      tags: [Knowledge]
+      x-required-permission: knowledge.shared.write
+      description: 組織共用教材（course_id 為 NULL，SD §6.27）與使用中的課程數。
+      responses:
+        '200': { description: 'SharedDocumentDto[]' }
+    post:
+      operationId: uploadSharedKnowledge
+      tags: [Knowledge]
+      x-required-permission: knowledge.shared.write
+      x-required-capability: authoringAllowed
+      x-audit: knowledge.document.uploaded
+      description: 上傳組織共用教材（application/octet-stream）；不綁任何課程，各課程在草稿版本自行加入後才會被檢索。
+      parameters:
+        - { name: filename, in: query, required: true, schema: { type: string, maxLength: 255 } }
+        - { name: title, in: query, schema: { type: string, maxLength: 200 } }
+      responses:
+        '202': { description: DocumentVersionDto }
+
+  /org/knowledge/documents/{id}:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    delete:
+      operationId: deleteSharedKnowledge
+      tags: [Knowledge]
+      x-required-permission: knowledge.shared.write
+      x-required-capability: authoringAllowed
+      x-audit: knowledge.document.deleted
+      description: 已發布或已取代的課程版本仍引用時不可刪（document_in_use）；課程自己的教材 404。
+      responses:
+        '204': { description: 已刪除 }
+
+  /org/knowledge/documents/{id}/versions:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    post:
+      operationId: addSharedDocumentVersion
+      tags: [Knowledge]
+      x-required-permission: knowledge.shared.write
+      x-required-capability: authoringAllowed
+      x-audit: knowledge.document.version_added
+      parameters:
+        - { name: filename, in: query, required: true, schema: { type: string, maxLength: 255 } }
+      responses:
+        '202': { description: DocumentVersionDto }
+
+  /org/knowledge/documents/{id}/versions/{versionId}/retry:
+    parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      operationId: retrySharedDocumentVersion
+      tags: [Knowledge]
+      x-required-permission: knowledge.shared.write
+      x-required-capability: authoringAllowed
+      responses:
+        '202': { description: DocumentVersionDto }
+
+  /org/knowledge/documents/{id}/versions/{versionId}/view:
+    parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: page, in: query, schema: { type: integer, minimum: 1 } }
+    get:
+      operationId: viewSharedDocument
+      tags: [Knowledge]
+      x-required-permission: knowledge.shared.write
+      responses:
+        '200': { description: DocumentViewDto }
+
   /notifications:
     parameters:
       - { name: unread, in: query, schema: { type: boolean, default: false } }

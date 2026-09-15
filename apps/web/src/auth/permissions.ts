@@ -27,6 +27,7 @@ export function navItems(me: MeResponse): NavItem[] {
     items.push({ to: '/app/org/cohorts', label: '班級管理' });
   }
   if (me.activeOrganization && can(me, 'org.settings.write')) items.push({ to: '/app/org/branding', label: '品牌設定' });
+  if (me.activeOrganization && can(me, 'knowledge.shared.write')) items.push({ to: '/app/org/knowledge', label: '共用教材' });
   if (me.activeOrganization && can(me, 'coach.transcript_policy.write')) items.push({ to: '/app/org/coach', label: 'AI 教練設定' });
   if (can(me, 'course.read')) items.push({ to: '/app/courses', label: '課程管理' });
   if (can(me, 'platform.organization.create') || can(me, 'platform.organization.disable')) {

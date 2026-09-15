@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
-import { DOCUMENT_SYNC_JOB } from '@iac/contracts';
+import { DERIVED_INDEX_JOB, DOCUMENT_SYNC_JOB } from '@iac/contracts';
 import { validateRule, type RuleStructure } from '@iac/domain';
 import {
   COURSE_LIMITS,
@@ -476,6 +476,14 @@ export class CourseService {
           organizationId: bound.rows[0]!.organization_id,
         });
       }
+      // FAQ 屬於課程：讓索引中的 FAQ 也涵蓋新版本（教師測試問答用得到；SD §6.27）
+      await enqueueJobTx(c, {
+        jobType: DERIVED_INDEX_JOB.type,
+        queue: DERIVED_INDEX_JOB.queue,
+        maxAttempts: DERIVED_INDEX_JOB.maxAttempts,
+        payload: { courseId: src.course_id },
+        organizationId: src.organization_id,
+      });
       return id;
     });
     return this.getVersion(newId);
