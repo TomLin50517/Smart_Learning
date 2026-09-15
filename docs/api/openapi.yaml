@@ -3315,12 +3315,75 @@ paths:
         '404': { description: organizationId 不在匯出範圍內 }
 
   /notifications:
+    parameters:
+      - { name: unread, in: query, schema: { type: boolean, default: false } }
+      - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      - { name: cursor, in: query, schema: { type: string } }
     get:
       operationId: listNotifications
       tags: [System]
-      x-required-permission: notification.read_self
+      x-auth-only: true
+      description: |
+        本人的站內通知（SD §6.26），新到舊、keyset 分頁；`meta.unread` 為未讀總數（頁首鈴鐺用）。
+        通知端點皆為 auth-only：只碰本人的資料；不用 notification.*_self，因為組織層級的授權不涵蓋 self（ADR-016），
+        而加入申請的收件者（組織管理員）通常沒有 self 授權。
+        通知內容只有課程名稱等顯示欄位與連結所需的 id，不含成績等學習細節。
       responses:
-        '200': { description: OK }
+        '200': { description: '`{ data: NotificationDto[], meta: { next_cursor, unread } }`' }
+
+  /notifications/read-all:
+    post:
+      operationId: markAllNotificationsRead
+      tags: [System]
+      x-auth-only: true
+      responses:
+        '200': { description: '`{ updated }`' }
+
+  /notifications/{id}/read:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    post:
+      operationId: markNotificationRead
+      tags: [System]
+      x-auth-only: true
+      description: 標為已讀（已讀者不變）；別人的通知 404。
+      responses:
+        '204': { description: 已讀 }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /me/notification-preferences:
+    get:
+      operationId: getNotificationPreferences
+      tags: [System]
+      x-auth-only: true
+      description: 每種通知的站內／Email 偏好；沒有設定過的預設皆開啟。
+      responses:
+        '200': { description: 'NotificationPreferenceDto[]' }
+    put:
+      operationId: setNotificationPreferences
+      tags: [System]
+      x-auth-only: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [preferences]
+              properties:
+                preferences:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [type, inApp, email]
+                    properties:
+                      type:  { type: string, enum: [enrollment.assigned, enrollment.approved, enrollment.rejected, enrollment.requested, enrollment.reopened, relearning.assigned, certificate.issued] }
+                      inApp: { type: boolean }
+                      email: { type: boolean }
+      responses:
+        '200': { description: 'NotificationPreferenceDto[]' }
 
   /platform/settings:
     get:

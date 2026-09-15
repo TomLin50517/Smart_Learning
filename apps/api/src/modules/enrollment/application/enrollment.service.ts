@@ -12,7 +12,9 @@ import { z } from 'zod';
 import { DB_API } from '../../../common/database.module.js';
 import { DomainError } from '../../../common/domain-error.js';
 import { LEARNING_EVENTS, type LearningEventWriter } from '../../learning-record/learning-record.contracts.js';
+import { NOTIFIER, type Notifier } from '../../notification/notification.contracts.js';
 import { nextEnrollmentStatus, type EnrollmentAction } from '../domain/transitions.js';
+import { courseNotice } from './notify-helpers.js';
 
 type Q = pg.Pool | pg.PoolClient;
 
@@ -65,6 +67,7 @@ export class EnrollmentService {
   constructor(
     @Inject(DB_API) private readonly db: pg.Pool,
     @Inject(LEARNING_EVENTS) private readonly events: LearningEventWriter,
+    @Inject(NOTIFIER) private readonly notifier: Notifier,
   ) {}
 
   private async tx<T>(fn: (c: pg.PoolClient) => Promise<T>): Promise<T> {
@@ -156,6 +159,10 @@ export class EnrollmentService {
     const enrollmentId = e.rows[0]!.id;
     // 學習歷程的起點（SA §10.2）；同一交易——批次匯入的預覽復原時一起復原
     if (status === 'active') await this.events.recordTx(c, enrollmentId, [{ eventType: 'course.enrolled', payload: { method, assigned_by: opts.assignedBy === undefined ? actorId : opts.assignedBy } }]);
+    // 管理者指派（單筆、批次、整班）時通知學員（SD §6.26）；學員自己加入不通知。批次預覽復原時通知一併復原
+    if (status === 'active' && (method === 'assign' || method === 'bulk_import')) {
+      await this.notifier.notifyTx(c, { userIds: [userId], organizationId: course.organizationId, type: 'enrollment.assigned', payload: { ...(await courseNotice(c, course.id)), enrollmentId } });
+    }
     return { enrollmentId, created: true, learnerRoleGranted: (grant.rowCount ?? 0) > 0 };
   }
 
