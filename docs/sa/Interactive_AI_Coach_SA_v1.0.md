@@ -729,6 +729,7 @@ ALLOW  ⇔  ∃ grant ∈ effectivePermissions(user)
 | `knowledge.document.read` | 讀文件清單/狀態 | course | — |
 | `knowledge.document.write` | 上傳/新版/刪除 | course | `authoringAllowed` |
 | `knowledge.faq.write` | 建立正式 FAQ | course | `authoringAllowed` |
+| `knowledge.shared.write` | 管理組織共用教材（v1.33） | organization | `authoringAllowed` |
 | `knowledge.source.view` | 開啟原文 viewer（學員經 citation 為 self；課程人員為 course） | self | — |
 | `knowledge.reindex.execute` | 觸發重新索引 | organization | `configurationWriteAllowed` |
 | `derived.read` | 讀 derived knowledge | course | — |
@@ -755,7 +756,7 @@ ALLOW  ⇔  ∃ grant ∈ effectivePermissions(user)
 | Role | 預設 scope | 預設 Permission（摘要） |
 |---|---|---|
 | `platform_admin` | platform | `platform.*`, `org.read`, `org.user.read`（§5.3 UC-ORG-003；v1.5 補列，migration 0016）, `cms.*`, `audit.read_platform`, `audit.export`, `course.read`, `course.version.read`, `coach.interact_test` |
-| `org_admin` | organization | `org.*`, `cms.*`（可委派）, `course.create`, `course.archive`, `course.staff.assign`, `course.read`, `course.version.read`, `enrollment.*`（可設定）, `learning.result.read_all`, `coach.transcript_policy.write`, `audit.read_org`, `audit.export`（限本組織；v1.8 依 migration 0012 補列） |
+| `org_admin` | organization | `org.*`, `cms.*`（可委派）, `course.create`, `course.archive`, `course.staff.assign`, `course.read`, `course.version.read`, `enrollment.*`（可設定）, `learning.result.read_all`, `coach.transcript_policy.write`, `audit.read_org`, `audit.export`（限本組織；v1.8 依 migration 0012 補列）, `knowledge.shared.write`（組織共用教材；v1.33，migration 0025） |
 | `course_admin` | course | `course.*`（除 `course.create` 由 org 授予）, `enrollment.*`, `learning.result.read_all`, `learning.timeline.read_all`, `certificate.read_all`, `certificate.revoke`, `knowledge.document.*`, `derived.read`, `coach.conversation.read_course`†, `audit.read_course` |
 | `instructor` | course | `course.version.write/validate/create`, `course.completion_rule.write`, `course.coach_policy.write`, `knowledge.*`, `derived.*`, `learning.result.read_all`, `learning.timeline.read_all`, `coach.interact_test`, `coach.usage_stats.read`, `coach.conversation.read_course`†, `audit.read_course` |
 | `learner` | self | `self.profile.*`, `enrollment.self_enroll`, `learning.*_self`, `coach.interact_self`, `coach.conversation.read_self`, `coach.citation.open`, `certificate.read_self`, `audit.read_self`, `notification.*_self` |
@@ -2885,3 +2886,4 @@ Browser (X-Request-Id) → Nginx → API (correlation_id)
 | v1.30 | 2026-09-15 | 選課碼與課程目錄（UC-ENR-002／003／004）：每門課可設定學員怎麼加入（只由管理者指派、選課碼、公開在課程目錄），可要求老師審核、設定開放期間與名額；學員在「我的課程」輸入選課碼或從可加入的課程清單加入；組織管理員與課程管理員在學員名單核准或拒絕；學員名單可匯出成 Excel 可直接開啟的 CSV（含各活動成績）（SD §6.24） | System Analyst |
 | v1.31 | 2026-09-15 | 重新開啟與重修（UC-ENR-007／009）：組織管理員與課程管理員可以把已完成的課程重新開啟（成績照舊、可以繼續練習），或指派重修——整門課、單元、課節或單一活動，附原因與新的期限；範圍內的活動要重新完成，作答次數預設重新計算；之前的作答與成績完整保留在學習歷程中（INV-6）；再次完成不會重發證書（SD §6.25） | System Analyst |
 | v1.32 | 2026-09-15 | 通知（UC-AUD-003／004）：學員被加入課程、加入申請通過或未通過、課程重新開啟、被指派重修、取得證書時收到通知；有學員申請加入時通知組織管理員與課程管理員。通知顯示在頁首鈴鐺與通知頁，並寄 Email（依使用者語系）；每位使用者可以分別關閉每一類的站內或 Email 通知。信件只有課程名稱與連結，不含成績，重修原因只在站內顯示（SD §6.26） | System Analyst |
+| v1.33 | 2026-09-15 | 常見問答與常見錯誤（UC-KNW-004～008，採老師主導）：老師為課程撰寫常見問答與常見錯誤，儲存即生效，學員在學習頁看得到，AI 教練回答時優先引用；系統整理「很多學員答錯」與「很多學員問」的線索（達匿名門檻才顯示、提問已去除個人資料），老師一鍵建立；可請 AI 只根據教材起草答案，老師確認後才生效。組織共用教材：新增權限 `knowledge.shared.write`（組織管理員），各課程自行加入使用（SD §6.27） | System Analyst |
