@@ -2568,6 +2568,22 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 部署 | compose 預設啟動 `clamav`（約 1.5 GB 記憶體常駐病毒庫）。worker **不** `depends_on` 它——病毒庫首次下載需數分鐘，不該拖住 worker；期間的教材解析會重試。資源不足的部署可移除該服務並把 `CLAMAV_HOST` 留空 |
 | 未做 | 掃描結果不另存欄位（沿用 `failure_reason`）；不做既有教材的定期重新掃描；PPTX／XLSX 尚未開放上傳，故 zip 檢查目前只用於 .docx |
 
+## 6.30 掃描版 PDF 的文字辨識（OCR，v1.40）
+
+實作：`apps/worker/src/{ocr.ts,extract.ts,handlers/document-parse.ts}`、`infra/docker/Dockerfile`（worker target）、`infra/compose/docker-compose.yml`。對應 SA SEQ-06、UC-KNW-002。**無 migration**。
+
+| 項目 | 實作 |
+|---|---|
+| 觸發條件 | 只有 **PDF 且沒有文字層** 時才跑（原本直接以 `no_text` 退件）。有文字層的 PDF、Word、Markdown、純文字完全不受影響，不會多花任何時間 |
+| 流程 | `pdftoppm -r 300 -gray -png`（poppler-utils）逐頁轉圖 → `tesseract -l chi_tra+eng --psm 6` 辨識；暫存目錄用完即刪 |
+| 後處理 | tesseract 會在**每個中文字之間插入空白**。`tidyOcrText()` 只移除相鄰 CJK 之間的空白，英文與數字之間一律保留——那裡的空白可能是真的，誤刪會把句子黏成一團 |
+| 品質 | 實測 300 DPI 繁中辨識良好：單次影像化的樣本零錯字；再經一次影像化（模擬重新掃描的劣化）仍有 10/11 正確。150 DPI 明顯變差（約 6 成），600 DPI 沒有更好。**英文的空白不可靠**——數字被拆成 `2 0 0`、單字黏成 `Bakeat`；`tidyOcrText` 刻意不動英數字之間的空白，因為要判斷哪些空白是假的必然得用猜的，誤刪會把真正的斷字黏起來，比留著更糟 |
+| 上限 | `OCR_MAX_PAGES`（預設 50）與單頁 `OCR_PAGE_TIMEOUT_MS`（預設 60 秒）：OCR 每頁需數秒，必須守住 `document.parse` 的 15 分鐘上限 |
+| 讀不到 | OCR 沒讀到文字 → 仍以 `no_text` 退件，與未啟用 OCR 的結果一致（辨識不出來不是系統錯誤） |
+| 未啟用 | `OCR_ENABLED` 預設 **false**，行為與加入 OCR 前完全相同。啟用卻缺工具 → job 明確失敗，**不會把工具缺失誤當成「這份 PDF 沒有文字」** |
+| image | OCR 工具只裝在 worker 的 target（`--target worker`，約 +100 MiB）；api 用不到那些二進位。layer 與 runtime 共享，磁碟無額外成本（與 backup target 同模式）。compose 的 worker 預設 `OCR_ENABLED=true` |
+| 未做 | 不做版面分析（表格、多欄），整頁視為單一文字區塊（`--psm 6`）；不對既有已退件的教材自動重跑；不支援手寫辨識 |
+
 ---
 
 # 7. Frontend 設計
@@ -4582,3 +4598,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.37 | 2026-09-15 | 新增 §6.27：課程的常見問答與常見錯誤（老師撰寫直接生效、版本保留、下架）、系統整理的線索（作答問題代碼彙整、提問去識別化與相似度分群、匿名門檻）、AI 依教材起草（不儲存）、FAQ 進入檢索（權重 1.3）與 AI 教練引用 FAQ、組織共用教材（新權限 knowledge.shared.write）；migration 0025 | Software Designer |
 | v1.38 | 2026-09-16 | 新增 §6.28 維運：證書 PDF（pdf-lib＋Noto Sans TC subset＋QR code，發證時產生、學員與課程人員下載）、備份（compose backup 服務、每日 pg_dump＋物件增量同步、7／4／6 保留、手動觸發、backup_runs）、系統狀態頁與告警、維運指標與 Prometheus 規則；migration 0026 | Software Designer |
 | v1.39 | 2026-09-16 | 新增 §6.29 上傳安全：教材在移出 quarantine 前經 clamd（zINSTREAM）掃描惡意程式，掃到即 rejected 並記 `malware_detected: <簽章>`；掃描服務不可用一律重試而非放行（「掃不到」≠「乾淨」）；未設定 CLAMAV_HOST 時為 no-op 並於 worker 啟動留痕；.docx 以 inspectZip 限制解壓比例與總量防 zip bomb；clamd.conf 放寬 StreamMaxLength 至 512 MB 對齊 upload.max_size；compose 新增 clamav 服務。無 migration | Software Designer |
+| v1.40 | 2026-09-16 | 新增 §6.30 掃描版 PDF 的 OCR：PDF 沒有文字層時以 pdftoppm 轉圖（300 DPI 灰階）＋ tesseract（chi_tra+eng、psm 6）辨識，`tidyOcrText` 移除 tesseract 在中文字之間插入的空白（英文空白保留）；上限 50 頁／單頁 60 秒；讀不到文字仍回 `no_text`；`OCR_ENABLED` 預設 false，啟用卻缺工具則 job 明確失敗；OCR 工具只裝在 Dockerfile 的 worker target（約 +100 MiB，api 不含），compose 的 worker 預設開啟。無 migration | Software Designer |
