@@ -7,6 +7,10 @@ export type CertificateStatus = (typeof CERTIFICATE_STATUSES)[number];
 export const CERTIFICATE_JOB = { type: 'certificate.generate', queue: 'output', priority: 50, maxAttempts: 5 } as const;
 export const certificateJobKey = (enrollmentId: string): string => `cert:${enrollmentId}`;
 
+/** 證書 PDF 的物件 key（SD §5.1）：不含姓名或課程名稱 */
+export const certificateObjectKey = (p: { prefix: string; organizationId: string; certificateId: string }): string =>
+  `${p.prefix}/certificates/${p.organizationId}/${p.certificateId}.pdf`;
+
 /** 驗證碼：20 bytes 隨機值的 base32（32 字元、160 bits，不可猜測） */
 export const VERIFICATION_CODE_PATTERN = /^[A-Z2-7]{32}$/;
 

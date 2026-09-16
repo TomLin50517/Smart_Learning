@@ -1,5 +1,5 @@
 import { Controller, Get, Header, Inject, Res } from '@nestjs/common';
-import type { JobQueueStatus } from '@iac/contracts';
+import type { JobQueueStatus, SystemStatusDto } from '@iac/contracts';
 import type { FastifyReply } from 'fastify';
 import pg from 'pg';
 import { DB_API } from '../../../common/database.module.js';
@@ -7,6 +7,7 @@ import { Public, RequirePermission } from '../../../common/decorators.js';
 import { ENV, type Env } from '../../../config/env.js';
 import { JobStatusService } from '../application/job-status.service.js';
 import { MetricsCollector } from '../application/metrics-collector.js';
+import { SystemStatusService } from '../application/system-status.service.js';
 
 @Controller('api/system')
 export class SystemController {
@@ -15,6 +16,7 @@ export class SystemController {
     @Inject(ENV) private readonly env: Env,
     private readonly collector: MetricsCollector,
     private readonly jobStatus: JobStatusService,
+    private readonly systemStatus: SystemStatusService,
   ) {}
 
   /** openapi: getHealth——liveness：只確認進程存活 */
@@ -60,6 +62,13 @@ export class SystemController {
   @RequirePermission('platform.health.read', { scope: 'platform' })
   jobs(): Promise<JobQueueStatus> {
     return this.jobStatus.status();
+  }
+
+  /** openapi: getSystemStatus——平台管理員的一頁總覽與告警（SD §6.28） */
+  @Get('status')
+  @RequirePermission('platform.health.read', { scope: 'platform' })
+  status(): Promise<SystemStatusDto> {
+    return this.systemStatus.status();
   }
 
   /** openapi: getMetrics——Prometheus text format 0.0.4（SD §13.2） */

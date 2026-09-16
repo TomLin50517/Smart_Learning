@@ -3138,15 +3138,16 @@ paths:
       responses:
         '200': { description: '`CourseCertificateDto[]`' }
 
-  /certificates/{id}/download:
+  /me/certificates/{id}/pdf:
     parameters: [{ $ref: '#/components/parameters/ResourceId' }]
     get:
-      operationId: downloadCertificate
+      operationId: downloadMyCertificatePdf
       tags: [Certificate]
       x-required-permission: certificate.read_self
       description: |
-        proxy streaming；每次存取重新驗證 self/course scope。
-        **尚未實作**：目前證書為網頁版（GET /me/certificates/{id}，瀏覽器列印／另存 PDF），伺服器端 PDF 於後續批次（SD §6.14）。
+        自己的證書 PDF（發證時由 worker 產生並存入物件儲存，SD §6.28）。
+        proxy streaming：每次存取重新驗證 self scope，不是本人的一律 404。
+        PDF 尚未產生（例如發證工作還在佇列中）回 422 `pdf_not_ready`。
       responses:
         '200':
           description: PDF
@@ -3154,6 +3155,25 @@ paths:
             application/pdf:
               schema: { type: string, format: binary }
         '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /certificates/{id}/pdf:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      operationId: downloadCertificatePdf
+      tags: [Certificate]
+      x-required-permission: certificate.read_all
+      description: |
+        課程端下載已發出的證書 PDF（proxy streaming；每次存取重新驗證 course scope）。
+        PDF 尚未產生回 422 `pdf_not_ready`。
+      responses:
+        '200':
+          description: PDF
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
 
   /certificates/{id}/revoke:
     parameters: [{ $ref: '#/components/parameters/ResourceId' }]
@@ -3648,6 +3668,17 @@ paths:
       x-audit: backup.executed
       responses:
         '202': { description: 已排入佇列 }
+
+  /system/status:
+    get:
+      operationId: getSystemStatus
+      tags: [System]
+      x-required-permission: platform.health.read
+      description: |
+        平台管理員的一頁總覽（SD §6.28）：背景工作、檢索索引、AI 用量、儲存空間、授權與備份，
+        加上「值得處理的事」清單（`alerts[]`，info／warning／critical）。只含彙整數字，不含任何學員內容。
+      responses:
+        '200': { description: '`SystemStatusDto`（packages/contracts/src/ops.ts）' }
 
   /system/jobs:
     get:

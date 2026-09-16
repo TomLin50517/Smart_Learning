@@ -10,6 +10,7 @@ import {
 import pg from 'pg';
 import { DB_API } from '../../../common/database.module.js';
 import { DomainError } from '../../../common/domain-error.js';
+import { OBJECT_STORAGE, type ObjectStorage } from '../../../common/object-storage.js';
 import { LEARNING_EVENTS, type LearningEventWriter } from '../../learning-record/learning-record.contracts.js';
 
 interface Row {
@@ -65,7 +66,26 @@ export class CertificateService {
   constructor(
     @Inject(DB_API) private readonly db: pg.Pool,
     @Inject(LEARNING_EVENTS) private readonly events: LearningEventWriter,
+    @Inject(OBJECT_STORAGE) private readonly storage: ObjectStorage,
   ) {}
+
+  /**
+   * 證書 PDF（UC-CRT-002、SD §6.28）：發證時由 worker 產生並存入物件儲存，這裡只取出來給下載。
+   * 學員限本人（scope.userId）；課程人員經 certificate.read_all 的路由。還沒有 PDF（物件儲存當時不可用）→ 422 `pdf_not_ready`。
+   */
+  async pdf(id: string, scope: { userId?: string }): Promise<{ body: Buffer; filename: string }> {
+    const params: unknown[] = [id];
+    if (scope.userId) params.push(scope.userId);
+    const r = await this.db.query<{ public_id: string; pdf_object_key: string | null }>(
+      `SELECT c.public_id, c.pdf_object_key FROM certificates c JOIN enrollments e ON e.id = c.enrollment_id
+        WHERE c.id = $1 AND ${VISIBLE} ${scope.userId ? 'AND e.user_id = $2' : ''}`,
+      params,
+    );
+    const x = r.rows[0];
+    if (!x) throw new DomainError('NOT_FOUND');
+    if (!x.pdf_object_key) throw new DomainError('VALIDATION_FAILED', 'pdf_not_ready', [{ issue: 'pdf_not_ready' }]);
+    return { body: await this.storage.get(x.pdf_object_key), filename: `certificate-${x.public_id}.pdf` };
+  }
 
   async mine(userId: string): Promise<MyCertificateDto[]> {
     const r = await this.db.query<Row>(`${SELECT} WHERE e.user_id = $1 AND ${VISIBLE} ORDER BY c.issued_at DESC NULLS LAST LIMIT 200`, [userId]);

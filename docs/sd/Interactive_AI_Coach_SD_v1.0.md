@@ -2538,6 +2538,20 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 前端 | 課程頁「常見問答與常見錯誤」卡片（新增、請 AI 起草、編輯、下架、顯示已下架、系統整理的線索與一鍵建立）；學習頁常見問答；組織選單「共用教材」頁；教材卡片標示「組織共用」 |
 | 未做 | 排程自動彙整與 AI 產生候選、語意分群（需 embedding）、FAQ 的多語版本、共用教材的組織層級預設加入 |
 
+## 6.28 維運：證書 PDF、備份、系統狀態（v1.38）
+
+實作：`apps/worker/src/certificate-pdf.ts`（＋`handlers/certificate-generate.ts`）、`modules/certificate/`（下載）、`modules/system/{application/system-status.service.ts,api/backup.controller.ts}`、`common/metrics.ts`、`tools/backup.ts`、`infra/docker/Dockerfile`（backup 階段）、`infra/compose/docker-compose.yml`（backup 服務）、`infra/monitoring/prometheus-rules.yml`、`apps/web/src/pages/SystemStatusPage.tsx`；`migrations/0026_backup_runs.sql`；`docs/ops/backup-restore.md`。對應 SA UC-CRT-002、UC-PLT-008／010、§16、§18。
+
+| 項目 | 實作 |
+|---|---|
+| 證書 PDF | 發證時（`certificate.generate`）在同一交易產生：A4 橫式，內容與網頁版一致（組織、姓名、課程、發證日期、證書編號、查驗網址）並附 QR code。`pdf-lib` ＋ `@pdf-lib/fontkit`，中文字型 Noto Sans TC（SIL OFL，`assets/fonts/`，隨 image 提供，路徑可用 `CERTIFICATE_FONT_PATH` 覆寫），**只嵌入用到的字**（subset，每張約 100 KB）。QR 以 `qrcode-generator` 產生模組矩陣後直接畫方塊，不經影像編碼。key：`{prefix}/certificates/{org}/{certificateId}.pdf`。PDF 或物件儲存失敗 → 整筆交易回滾、job 重試（不會留下沒有 PDF 的證書） |
+| 下載 | `GET /me/certificates/{id}/pdf`（certificate.read_self，限本人）與 `GET /certificates/{id}/pdf`（certificate.read_all，課程人員）：由伺服器讀出後回傳，`Content-Disposition: attachment`、`Cache-Control: private, no-store`。舊證書沒有 PDF → 422 `pdf_not_ready`（網頁版仍可列印） |
+| 備份 | compose 的 `backup` 服務（與 api／worker 同一 image，`--target backup` 另裝 PostgreSQL client）跑 `tools/backup.ts`：每天 `BACKUP_HOUR` 後第一次檢查時執行，`pg_dump --format=custom` → 物件儲存增量同步（大小不同才重抓）→ 依保留策略刪除（7 日＋4 週（週日）＋6 月（1 日））。**先資料庫後物件**（SA §16.1）。手動：平台管理員在「系統狀態」按「立即備份」→ `POST /platform/backups` 寫入 `status='requested'`（稽核 `backup.executed`），備份服務下次輪詢取件（`FOR UPDATE SKIP LOCKED`）；已有進行中的備份 → 422 `backup_in_progress`。結果寫回 `backup_runs`（migration 0026） |
+| 還原 | 刻意**不做成按鈕**（避免誤按覆蓋線上資料）：步驟見 `docs/ops/backup-restore.md` 與 SA §16.3。備份不含 `.env` 與授權檔——`AI_KEY_ENCRYPTION_KEY` 須與備份分開保管（ADR-034） |
+| 系統狀態 | `GET /system/status`（platform.health.read）：背景工作（待處理、最久等待、已放棄、過期鎖）、教材處理與搜尋、AI 今日用量與安全替代比例、儲存用量（資料庫、教材、素材）、授權（到期天數、進行中的學員數）、最近備份，加上一份 `alerts[]`（critical／warning／info）。前端 `/app/platform/system-status` 一頁呈現並可觸發備份 |
+| 指標與告警 | `/system/metrics` 新增 `iac_es_index_backlog_documents`、`iac_ai_tokens_today`、`iac_ai_requests_today{status}`、`iac_coach_fallback_ratio`、`iac_storage_used_bytes{kind}`、`iac_backup_age_seconds`、`iac_backup_failed`（抓取時從資料庫計算，失敗保留上次的值）。`infra/monitoring/prometheus-rules.yml` 提供 SD §13.3 的告警規則給已有監控系統的客戶 |
+| 未做 | 異地備份（需客戶端環境）、WAL 連續備份與 PITR（目前為每日全量）、還原自動化、Prometheus／Grafana 容器、備份加密 |
+
 ---
 
 # 7. Frontend 設計
@@ -4550,3 +4564,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.35 | 2026-09-15 | 新增 §6.25：重新開啟（completed → reopened，成績照舊、證書不重發）、重修（四種範圍、範圍內只採計指派之後的結果與觀看、reset_counter／append、作答記下所屬重修、整門課重修後核可需重新取得、進行中作答作廢、course.reopened 事件）、授權學員數在服務層檢查、學員與教師畫面；沿用 migration 0006，無新 migration | Software Designer |
 | v1.36 | 2026-09-15 | 新增 §6.26 通知：七種事件（指派、申請、核准／拒絕、重新開啟、重修、發證）在事件交易內寫入站內與 Email 通知、偏好（預設開啟）、worker `notification.email` 經 SMTP 寄出（zh-TW／en 模板、冪等 sent_at、重修原因不進信件）、站內清單與已讀、頁首鈴鐺與通知頁；migration 0024（索引） | Software Designer |
 | v1.37 | 2026-09-15 | 新增 §6.27：課程的常見問答與常見錯誤（老師撰寫直接生效、版本保留、下架）、系統整理的線索（作答問題代碼彙整、提問去識別化與相似度分群、匿名門檻）、AI 依教材起草（不儲存）、FAQ 進入檢索（權重 1.3）與 AI 教練引用 FAQ、組織共用教材（新權限 knowledge.shared.write）；migration 0025 | Software Designer |
+| v1.38 | 2026-09-16 | 新增 §6.28 維運：證書 PDF（pdf-lib＋Noto Sans TC subset＋QR code，發證時產生、學員與課程人員下載）、備份（compose backup 服務、每日 pg_dump＋物件增量同步、7／4／6 保留、手動觸發、backup_runs）、系統狀態頁與告警、維運指標與 Prometheus 規則；migration 0026 | Software Designer |

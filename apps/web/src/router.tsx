@@ -20,6 +20,7 @@ import { LearnPage } from './pages/LearnPage';
 import { MyCoursesPage } from './pages/MyCoursesPage';
 import { NotificationsPage } from './pages/NotificationsPage';
 import { OrgKnowledgePage } from './pages/OrgKnowledgePage';
+import { SystemStatusPage } from './pages/SystemStatusPage';
 import { MyTimelinePage } from './pages/MyTimelinePage';
 import { OrganizationsPage } from './pages/OrganizationsPage';
 import { OrgAiKeyPage } from './pages/OrgAiKeyPage';
@@ -74,6 +75,7 @@ export const router = createBrowserRouter([
       { path: 'platform/license', element: <LicensePage /> },
       { path: 'platform/system', element: <SettingsPage /> },
       { path: 'platform/jobs', element: <JobsPage /> },
+      { path: 'platform/system-status', element: <SystemStatusPage /> },
       // 稽核紀錄／帳號活動（所有 audit.read_* 共用，SD §12.4）
       { path: 'audit', element: <AuditPage /> },
       { path: '*', element: <NotFoundPage /> },

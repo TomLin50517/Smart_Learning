@@ -163,4 +163,12 @@ export const metrics = {
   jobOldestPending: registry.register(new Gauge('iac_job_oldest_pending_seconds', 'Age of the oldest runnable pending job', ['queue'])),
   jobDead: registry.register(new Gauge('iac_job_dead_total', 'Jobs in the dead-letter table (not requeued)', ['job_type'])),
   licenseDaysRemaining: registry.register(new Gauge('iac_license_days_remaining', 'Days until license expiry or maintenance end', ['kind'])),
+  // 維運（SD §6.28、§13.2）：抓取時從資料庫計算
+  esIndexBacklog: registry.register(new Gauge('iac_es_index_backlog_documents', 'Documents waiting to be parsed or indexed')),
+  aiTokensToday: registry.register(new Gauge('iac_ai_tokens_today', 'AI tokens used since midnight')),
+  aiRequestsToday: registry.register(new Gauge('iac_ai_requests_today', 'AI requests since midnight', ['status'])),
+  coachFallbackRatio: registry.register(new Gauge('iac_coach_fallback_ratio', 'Share of today’s coach answers that fell back')),
+  storageUsedBytes: registry.register(new Gauge('iac_storage_used_bytes', 'Stored bytes by kind', ['kind'])),
+  backupAgeSeconds: registry.register(new Gauge('iac_backup_age_seconds', 'Seconds since the last successful backup')),
+  backupFailed: registry.register(new Gauge('iac_backup_failed', '1 when the most recent backup run failed')),
 };

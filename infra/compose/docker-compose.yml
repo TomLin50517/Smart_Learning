@@ -81,6 +81,29 @@ services:
       migrate: { condition: service_completed_successfully }
     mem_limit: 4g
 
+  # 備份（SD §6.28）：每日 pg_dump + 物件儲存增量同步，保留 7 日／4 週／6 月；
+  # 平台管理員也可在「系統狀態」頁按「立即備份」。備份檔留在 backups volume，還原見 docs/ops/backup-restore.md
+  backup:
+    <<: *app
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+      target: backup
+    image: iac-backup:dev
+    command: ["node", "tools/backup.ts"]
+    environment:
+      DATABASE_URL_BACKUP: postgres://postgres:${PG_SUPERUSER_PASSWORD}@postgres:5432/iac
+      BACKUP_DIR: /backups
+      <<: *backing
+    volumes:
+      - backups:/backups
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      # 備份一定要同步物件儲存（api／worker 少了它還能降級運作，備份不行）；
+      # 也讓 docs/ops/backup-restore.md 的 `docker compose run --rm backup` 能自行帶起它
+      object-storage: { condition: service_started }
+    mem_limit: 1g
+
   # nginx + React SPA（建置產物與 nginx.conf 皆包進 image，見 Dockerfile.web）
   reverse-proxy:
     build:
@@ -125,3 +148,4 @@ volumes:
   pgdata:
   esdata:
   objdata:
+  backups:

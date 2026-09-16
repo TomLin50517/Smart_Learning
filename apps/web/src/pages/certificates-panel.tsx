@@ -1,6 +1,6 @@
 import type { CourseCertificateDto, CourseDetailDto } from '@iac/contracts';
 import { useState } from 'react';
-import { api } from '../api/client';
+import { api, apiDownload, saveBlob } from '../api/client';
 import { can } from '../auth/permissions';
 import { useMe } from '../auth/session';
 import { ErrorAlert } from '../components/ui';
@@ -13,6 +13,16 @@ export function CertificatesPanel({ course }: { course: CourseDetailDto }) {
   const list = useApi<CourseCertificateDto[]>(`/api/courses/${course.id}/certificates`);
   const [error, setError] = useState<unknown>(null);
   const canRevoke = can(me, 'certificate.revoke');
+
+  async function download(c: CourseCertificateDto) {
+    setError(null);
+    try {
+      const { blob, filename } = await apiDownload('GET', `/api/certificates/${c.id}/pdf`);
+      saveBlob(blob, filename);
+    } catch (e) {
+      setError(e);
+    }
+  }
 
   async function revoke(c: CourseCertificateDto) {
     const reason = window.prompt(`撤銷「${c.learnerDisplayName}」的證書？\n撤銷後查驗會顯示「已撤銷」，證書紀錄仍會保留。\n\n請輸入撤銷原因：`)?.trim();
@@ -62,6 +72,9 @@ export function CertificatesPanel({ course }: { course: CourseDetailDto }) {
                     {c.revokeReason && <div className="muted small">原因：{c.revokeReason}</div>}
                   </td>
                   <td className="actions">
+                    <button type="button" className="btn btn-small" onClick={() => void download(c)}>
+                      下載 PDF
+                    </button>
                     {canRevoke && c.status === 'valid' && (
                       <button type="button" className="btn btn-small btn-danger" onClick={() => void revoke(c)}>
                         撤銷

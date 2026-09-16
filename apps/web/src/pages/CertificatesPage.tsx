@@ -1,6 +1,7 @@
 import type { MyCertificateDto } from '@iac/contracts';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router';
+import { apiDownload, saveBlob } from '../api/client';
 import { can } from '../auth/permissions';
 import { useMe } from '../auth/session';
 import { ErrorAlert, Forbidden, Notice, PageHeader, Spinner } from '../components/ui';
@@ -55,12 +56,28 @@ export function MyCertificatePage() {
   const allowed = can(me, 'certificate.read_self');
   const cert = useApi<MyCertificateDto>(allowed ? `/api/me/certificates/${certificateId}` : null);
   const [copied, setCopied] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [error, setError] = useState<unknown>(null);
   useTitle(cert.data ? `${cert.data.courseTitle} 證書` : '證書');
 
   if (!allowed) return <Forbidden />;
   if (!cert.data) return cert.loading ? <Spinner /> : <ErrorAlert error={cert.error} />;
   const c = cert.data;
   const url = verifyUrl(c.verificationCode);
+
+  /** 伺服器產生的 PDF（SD §6.28）：內容與這一頁相同，含查驗 QR code */
+  async function download() {
+    setDownloading(true);
+    setError(null);
+    try {
+      const { blob, filename } = await apiDownload('GET', `/api/me/certificates/${certificateId}/pdf`);
+      saveBlob(blob, filename);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setDownloading(false);
+    }
+  }
 
   async function copy() {
     try {
@@ -79,10 +96,14 @@ export function MyCertificatePage() {
           這張證書已於 {formatDate(c.revokedAt)} 撤銷{c.revokeReason ? `（原因：${c.revokeReason}）` : ''}。
         </Notice>
       )}
+      <ErrorAlert error={error} />
       <CertificateView c={c} verifyUrl={url} />
       <div className="row no-print">
-        <button type="button" className="btn btn-primary" onClick={() => window.print()}>
-          列印／另存 PDF
+        <button type="button" className="btn btn-primary" disabled={downloading} onClick={() => void download()}>
+          {downloading ? '準備中…' : '下載 PDF'}
+        </button>
+        <button type="button" className="btn" onClick={() => window.print()}>
+          列印
         </button>
         <button type="button" className="btn" onClick={() => void copy()}>
           {copied ? '已複製查驗連結' : '複製查驗連結'}

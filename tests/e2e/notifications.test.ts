@@ -5,6 +5,7 @@
 import 'reflect-metadata';
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
+import { fileURLToPath } from 'node:url';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
@@ -15,6 +16,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../../apps/api/src/app.module.js';
 import { configureApp, createAdapter } from '../../apps/api/src/bootstrap.js';
 import { csrfTokenFor } from '../../apps/api/src/common/csrf.js';
+import { MemoryObjectStorage } from '../../apps/api/src/common/object-storage.js';
 import { hashToken } from '../../apps/api/src/common/tokens.js';
 import { ENV, loadEnv } from '../../apps/api/src/config/env.js';
 import type { Job } from '../../apps/worker/src/dispatcher.js';
@@ -27,6 +29,7 @@ const PW = { api_pw: 'e2e_api', coach_pw: 'e2e_coach', worker_pw: 'e2e_worker', 
 const SECRET = 'notify-e2e-secret-notify-e2e-secret';
 const FINGERPRINT = 'sha256:e2e-notify';
 const BASE = 'https://learn.example.test';
+const FONT = fileURLToPath(new URL('../../assets/fonts/NotoSansTC[wght].ttf', import.meta.url));
 const ORG = 'cdcd5656-0000-0000-0000-00000000000a';
 const U = {
   admin: 'cdcd7878-0000-0000-0000-00000000000a',
@@ -314,7 +317,7 @@ describe('who gets told what', () => {
     const activityId = outline.modules[0].lessons[0].activities[0].id;
     const a = (await call('POST', `/api/activities/${activityId}/attempts`, 'l1')).json();
     expect((await call('POST', `/api/attempts/${a.attemptId}/submit`, 'l1', { input: {} })).json().completionChanged).toBe(true);
-    await new CertificateGenerateHandler(workerDb).handle(await jobByKey(`cert:${l1Enrollment}`));
+    await new CertificateGenerateHandler(workerDb, new MemoryObjectStorage(), { fontPath: FONT, baseUrl: BASE }).handle(await jobByKey(`cert:${l1Enrollment}`));
     const cert = (await list('l1')).data.find((x) => x.type === 'certificate.issued');
     expect(cert?.payload).toMatchObject({ courseTitle: '通知測試課', enrollmentId: l1Enrollment });
     expect(cert?.payload['certificateId']).toBeTruthy();

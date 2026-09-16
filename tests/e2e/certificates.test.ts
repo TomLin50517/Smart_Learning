@@ -3,6 +3,7 @@
  */
 import 'reflect-metadata';
 import { randomBytes, randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
@@ -12,6 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../../apps/api/src/app.module.js';
 import { configureApp, createAdapter } from '../../apps/api/src/bootstrap.js';
 import { csrfTokenFor } from '../../apps/api/src/common/csrf.js';
+import { MemoryObjectStorage } from '../../apps/api/src/common/object-storage.js';
 import { hashToken } from '../../apps/api/src/common/tokens.js';
 import { ENV, loadEnv } from '../../apps/api/src/config/env.js';
 import { Dispatcher } from '../../apps/worker/src/dispatcher.js';
@@ -22,6 +24,8 @@ import { applyMigrations } from '../../tools/migrate.js';
 const PW = { api_pw: 'e2e_api', coach_pw: 'e2e_coach', worker_pw: 'e2e_worker', ro_pw: 'e2e_ro' };
 const SECRET = 'cert-e2e-secret-cert-e2e-secret-cert';
 const FINGERPRINT = 'sha256:e2e-cert';
+const FONT = fileURLToPath(new URL('../../assets/fonts/NotoSansTC[wght].ttf', import.meta.url));
+const BASE = 'https://learn.example.test';
 const ORG = 'c1c1c1c1-0000-0000-0000-00000000000a';
 const U = {
   admin: 'c2c2c2c2-0000-0000-0000-00000000000a',
@@ -105,7 +109,7 @@ beforeAll(async () => {
   workerPool = new pg.Pool({ connectionString: `postgres://app_worker:${PW.worker_pw}@${h}:${p}/iac` });
   // output 佇列也有通知信的 job（SD §6.26）：不設 SMTP，寄信 job 只記 log
   dispatcher = new Dispatcher(workerPool, pino({ level: 'silent' }), { workerId: 'e2e', queues: ['output'] })
-    .register(new CertificateGenerateHandler(workerPool))
+    .register(new CertificateGenerateHandler(workerPool, new MemoryObjectStorage(), { fontPath: FONT, baseUrl: BASE }))
     .register(new NotificationEmailHandler(workerPool, null, pino({ level: 'silent' }), 'https://learn.example.test'));
 
   // 課程：一個閱讀活動；完成條件＝完成必修活動 且 講師核可

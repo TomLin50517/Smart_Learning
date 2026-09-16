@@ -1,0 +1,83 @@
+# =============================================================================
+# Prometheus 告警規則（SA §18.2、SD §13.3、§6.28）
+#   給已有監控系統的客戶；系統本身的「系統狀態」頁不需要這份檔案也能看到同樣的問題。
+#   指標來源：GET /api/system/metrics（需 platform.health.read；抓取方式見 SD §13.5）
+# =============================================================================
+groups:
+  - name: iac-platform
+    interval: 60s
+    rules:
+      - alert: IacApiLatencyHigh
+        expr: histogram_quantile(0.95, sum by (le) (rate(iac_http_request_duration_seconds_bucket[5m]))) > 0.8
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: API P95 延遲超過 800 ms
+          description: 持續 5 分鐘。先看背景工作與資料庫負載。
+
+      - alert: IacApiErrorRateHigh
+        expr: sum(rate(iac_http_requests_total{status=~"5.."}[5m])) / clamp_min(sum(rate(iac_http_requests_total[5m])), 0.001) > 0.01
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: API 5xx 比例超過 1%
+
+      - alert: IacJobBacklog
+        expr: max(iac_job_oldest_pending_seconds) > 1800
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: 背景工作積壓超過 30 分鐘
+          description: 確認 worker 是否存活（docker compose ps worker）。
+
+      - alert: IacJobDeadLetter
+        expr: increase(iac_job_dead_total[10m]) > 0
+        labels: { severity: critical }
+        annotations:
+          summary: 有背景工作重試失敗後被放棄
+          description: 在「背景工作」頁查看錯誤內容。
+
+      - alert: IacBackupStale
+        expr: iac_backup_age_seconds > 108000
+        labels: { severity: critical }
+        annotations:
+          summary: 超過 30 小時沒有成功的備份
+
+      - alert: IacBackupFailed
+        expr: iac_backup_failed > 0
+        labels: { severity: critical }
+        annotations:
+          summary: 最近一次備份失敗
+
+      - alert: IacCoachFallbackHigh
+        expr: iac_coach_fallback_ratio > 0.2
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: AI 教練的安全替代回答比例偏高
+          description: 可能是教材不足、模型或 gateway 有問題。
+
+      - alert: IacIndexBacklog
+        expr: iac_es_index_backlog_documents > 20
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: 教材處理或索引積壓
+
+      - alert: IacLoginFailureSpike
+        expr: increase(iac_login_failures_total[5m]) > 50
+        labels: { severity: warning }
+        annotations:
+          summary: 登入失敗次數異常（可能有人嘗試猜密碼）
+
+      - alert: IacLicenseExpiring
+        expr: min(iac_license_days_remaining{kind="expiry"}) < 30
+        labels: { severity: warning }
+        annotations:
+          summary: 授權將於 30 天內到期
+
+      - alert: IacLicenseExpiringSoon
+        expr: min(iac_license_days_remaining{kind="expiry"}) < 7
+        labels: { severity: critical }
+        annotations:
+          summary: 授權將於 7 天內到期
