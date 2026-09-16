@@ -20,6 +20,7 @@ import { ENV, loadEnv } from '../../apps/api/src/config/env.js';
 import { DISABLED_SCANNER, ScanUnavailableError, type MalwareScanner } from '../../apps/worker/src/clamav.js';
 import { Dispatcher } from '../../apps/worker/src/dispatcher.js';
 import { DocumentParseHandler } from '../../apps/worker/src/handlers/document-parse.js';
+import { DISABLED_OCR, type OcrEngine } from '../../apps/worker/src/ocr.js';
 import { applyMigrations } from '../../tools/migrate.js';
 import { makePdf } from '../fixtures/make-pdf.js';
 
@@ -69,6 +70,23 @@ const drain = async () => {
   while (await dispatcher.tick());
 };
 const count = async (sql: string, params: unknown[] = []) => (await admin.query(sql, params)).rowCount;
+/**
+ * beforeAll 註冊的 dispatcher 用的是停用掃描與 OCR 的 handler；掃毒與 OCR 的測試需要
+ * 指定結果的假實作，因此直接跑 handler 而不經過 dispatcher。
+ */
+const parseWith = async (opts: { scanner: MalwareScanner; ocr: OcrEngine }, versionId: string): Promise<void> => {
+  const j = (await admin.query<{ id: string; payload: Record<string, unknown> }>(`SELECT id, payload FROM job_queue WHERE idempotency_key = $1`, [`parse:${versionId}`])).rows[0]!;
+  await new DocumentParseHandler(workerPool, mem, opts).handle({
+    id: j.id,
+    job_type: 'document.parse',
+    queue: 'ingest',
+    payload: j.payload,
+    attempts: 1,
+    max_attempts: 3,
+    organization_id: ORG,
+    correlation_id: null,
+  });
+};
 
 beforeAll(async () => {
   container = await new PostgreSqlContainer('postgres:18-alpine').withDatabase('iac').withUsername('postgres').withPassword('devonly').start();
@@ -121,7 +139,7 @@ beforeAll(async () => {
   // （需要 Elasticsearch）以空 handler 承接，見 knowledge-retrieval.test.ts
   workerPool = new pg.Pool({ connectionString: `postgres://app_worker:${PW.worker_pw}@${h}:${p}/iac` });
   dispatcher = new Dispatcher(workerPool, pino({ level: 'silent' }), { workerId: 'e2e', queues: ['ingest'] })
-    .register(new DocumentParseHandler(workerPool, mem, DISABLED_SCANNER))
+    .register(new DocumentParseHandler(workerPool, mem, { scanner: DISABLED_SCANNER, ocr: DISABLED_OCR }))
     .register({ jobType: 'document.embed_index', timeoutMs: 1000, handle: async () => undefined })
     .register({ jobType: 'document.sync_bindings', timeoutMs: 1000, handle: async () => undefined });
 
@@ -265,21 +283,6 @@ describe('malware scanning and zip bombs (SD §14、SA SEQ-06)', () => {
     secV = (await call('POST', `/api/courses/${c}/versions`, 'instr', { title: 'v1' })).json().id;
   });
 
-  /** beforeAll 註冊的 dispatcher 是停用掃描的版本；這裡直接跑 handler，換上指定結果的掃描器 */
-  const parseWith = async (scanner: MalwareScanner, versionId: string): Promise<void> => {
-    const j = (await admin.query<{ id: string; payload: Record<string, unknown> }>(`SELECT id, payload FROM job_queue WHERE idempotency_key = $1`, [`parse:${versionId}`])).rows[0]!;
-    await new DocumentParseHandler(workerPool, mem, scanner).handle({
-      id: j.id,
-      job_type: 'document.parse',
-      queue: 'ingest',
-      payload: j.payload,
-      attempts: 1,
-      max_attempts: 3,
-      organization_id: ORG,
-      correlation_id: null,
-    });
-  };
-
   /** 最小的 .docx 外形：zip 檔頭讓上傳端認得格式，central directory 宣告解壓後 1 GB */
   const zipBomb = (): Buffer => {
     const local = Buffer.alloc(30);
@@ -301,7 +304,7 @@ describe('malware scanning and zip bombs (SD §14、SA SEQ-06)', () => {
 
   it('rejects an infected document and leaves it in quarantine', async () => {
     const up = (await uploadTo(secV, '有毒講義.pdf', PDF)).json();
-    await parseWith({ enabled: true, scan: () => Promise.resolve({ status: 'infected', signature: 'Eicar-Test-Signature' }) }, up.id);
+    await parseWith({ scanner: { enabled: true, scan: () => Promise.resolve({ status: 'infected', signature: 'Eicar-Test-Signature' }) }, ocr: DISABLED_OCR }, up.id);
 
     const dv = (await admin.query<{ status: string; failure_reason: string }>(`SELECT status, failure_reason FROM document_versions WHERE id = $1`, [up.id])).rows[0]!;
     expect(dv).toEqual({ status: 'rejected', failure_reason: 'malware_detected: Eicar-Test-Signature' });
@@ -315,14 +318,14 @@ describe('malware scanning and zip bombs (SD §14、SA SEQ-06)', () => {
     // 「掃不到」絕不等於「乾淨」：必須往外丟讓 job 重試，教材留在 scanning
     const up = (await uploadTo(secV, '掃描服務中斷.pdf', PDF)).json();
     const down: MalwareScanner = { enabled: true, scan: () => Promise.reject(new ScanUnavailableError('clamd is down')) };
-    await expect(parseWith(down, up.id)).rejects.toBeInstanceOf(ScanUnavailableError);
+    await expect(parseWith({ scanner: down, ocr: DISABLED_OCR }, up.id)).rejects.toBeInstanceOf(ScanUnavailableError);
     expect((await admin.query<{ status: string }>(`SELECT status FROM document_versions WHERE id = $1`, [up.id])).rows[0]!.status).toBe('scanning');
     expect(await count(`SELECT 1 FROM knowledge_chunk_manifest WHERE document_version_id = $1`, [up.id])).toBe(0);
   });
 
   it('rejects a zip bomb before mammoth unpacks it', async () => {
     const up = (await uploadTo(secV, '炸彈.docx', zipBomb())).json();
-    await parseWith(DISABLED_SCANNER, up.id);
+    await parseWith({ scanner: DISABLED_SCANNER, ocr: DISABLED_OCR }, up.id);
     const dv = (await admin.query<{ status: string; failure_reason: string }>(`SELECT status, failure_reason FROM document_versions WHERE id = $1`, [up.id])).rows[0]!;
     expect(dv).toEqual({ status: 'rejected', failure_reason: 'zip_bomb' });
   });
@@ -330,8 +333,56 @@ describe('malware scanning and zip bombs (SD §14、SA SEQ-06)', () => {
   it('still parses normally when scanning is switched off', async () => {
     // 沒有 clamd 的部署不該因此無法使用教材
     const up = (await uploadTo(secV, '未啟用掃描.md', MD)).json();
-    await parseWith(DISABLED_SCANNER, up.id);
+    await parseWith({ scanner: DISABLED_SCANNER, ocr: DISABLED_OCR }, up.id);
     expect((await admin.query<{ status: string }>(`SELECT status FROM document_versions WHERE id = $1`, [up.id])).rows[0]!.status).toBe('indexing');
+  });
+});
+
+describe('OCR for scanned PDFs (SD §6.30)', () => {
+  // 沒有文字層的 PDF：makePdf 產生的文字內容為空，正是掃描版 PDF 會走到的那條路
+  const scanned = () => makePdf(['']);
+  const ocrOf = (text: string): OcrEngine => ({ enabled: true, recognize: () => Promise.resolve([{ pageNo: 1, text }]) });
+  let ocrV = '';
+
+  beforeAll(async () => {
+    const c = (await call('POST', '/api/courses', 'admin', { title: 'OCR 測試' })).json().id;
+    await call('POST', `/api/courses/${c}/staff`, 'admin', { email: 'instr@knw.test', role: 'instructor' });
+    ocrV = (await call('POST', `/api/courses/${c}/versions`, 'instr', { title: 'v1' })).json().id;
+  });
+
+  it('uses the OCR text when the PDF has no text layer', async () => {
+    const up = (await uploadTo(ocrV, '掃描版講義.pdf', scanned())).json();
+    await parseWith({ scanner: DISABLED_SCANNER, ocr: ocrOf('發酵溫度要控制在 26 度。') }, up.id);
+
+    expect((await admin.query<{ status: string }>(`SELECT status FROM document_versions WHERE id = $1`, [up.id])).rows[0]!.status).toBe('indexing');
+    const extracted = mem.objects.get(`kt/documents/${ORG}/${up.documentId}/${up.id}/extracted.txt`);
+    expect(extracted!.body.toString('utf8')).toContain('發酵溫度要控制在 26 度。');
+    expect(await count(`SELECT 1 FROM knowledge_chunk_manifest WHERE document_version_id = $1`, [up.id])).toBe(1);
+  });
+
+  it('still reports no_text when OCR reads nothing', async () => {
+    // OCR 讀不出東西不是系統錯誤，結果要與沒有 OCR 時一致
+    const up = (await uploadTo(ocrV, '空白掃描.pdf', scanned())).json();
+    await parseWith({ scanner: DISABLED_SCANNER, ocr: ocrOf('   \n  ') }, up.id);
+    const dv = (await admin.query<{ status: string; failure_reason: string }>(`SELECT status, failure_reason FROM document_versions WHERE id = $1`, [up.id])).rows[0]!;
+    expect(dv).toEqual({ status: 'failed', failure_reason: 'no_text' });
+  });
+
+  it('keeps the previous behaviour when OCR is switched off', async () => {
+    const up = (await uploadTo(ocrV, '未啟用 OCR.pdf', scanned())).json();
+    await parseWith({ scanner: DISABLED_SCANNER, ocr: DISABLED_OCR }, up.id);
+    const dv = (await admin.query<{ status: string; failure_reason: string }>(`SELECT status, failure_reason FROM document_versions WHERE id = $1`, [up.id])).rows[0]!;
+    expect(dv).toEqual({ status: 'failed', failure_reason: 'no_text' });
+  });
+
+  it('does not run OCR on Word files, only PDFs', async () => {
+    // .docx 沒有文字層是內容問題，不該浪費時間跑 OCR
+    const empty = Buffer.from([0x50, 0x4b, 0x03, 0x04, ...Array(60).fill(0)]);
+    const up = (await uploadTo(ocrV, '壞檔.docx', empty)).json();
+    let called = false;
+    await parseWith({ scanner: DISABLED_SCANNER, ocr: { enabled: true, recognize: () => { called = true; return Promise.resolve([{ pageNo: 1, text: 'x' }]); } } }, up.id);
+    expect(called).toBe(false);
+    expect((await admin.query<{ status: string }>(`SELECT status FROM document_versions WHERE id = $1`, [up.id])).rows[0]!.status).toBe('rejected');
   });
 });
 

@@ -23,6 +23,7 @@ import { KNOWLEDGE_RETRIEVER, type KnowledgeRetriever } from '../../apps/api/src
 import { DISABLED_SCANNER } from '../../apps/worker/src/clamav.js';
 import { Dispatcher } from '../../apps/worker/src/dispatcher.js';
 import { DocumentParseHandler } from '../../apps/worker/src/handlers/document-parse.js';
+import { DISABLED_OCR } from '../../apps/worker/src/ocr.js';
 import { COACH_TEXT } from '../../packages/contracts/src/coach.js';
 import type { RetrievedChunk, RetrieveScope } from '../../packages/domain/src/knowledge/search.js';
 import { applyMigrations } from '../../tools/migrate.js';
@@ -218,7 +219,7 @@ beforeAll(async () => {
 
   workerPool = new pg.Pool({ connectionString: `postgres://app_worker:${PW.worker_pw}@${h}:${p}/iac` });
   dispatcher = new Dispatcher(workerPool, pino({ level: 'silent' }), { workerId: 'e2e', queues: ['ingest'] })
-    .register(new DocumentParseHandler(workerPool, mem, DISABLED_SCANNER))
+    .register(new DocumentParseHandler(workerPool, mem, { scanner: DISABLED_SCANNER, ocr: DISABLED_OCR }))
     .register({ jobType: 'document.embed_index', timeoutMs: 1000, handle: async () => undefined })
     .register({ jobType: 'document.sync_bindings', timeoutMs: 1000, handle: async () => undefined });
 
