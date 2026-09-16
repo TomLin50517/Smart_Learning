@@ -2369,7 +2369,7 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 格式 | 以檔頭判斷，不採信副檔名或 Content-Type：`%PDF-` → PDF；zip 檔頭且副檔名 .docx → Word；.md／.txt 須為合法 UTF-8 且無 NUL。其他一律 415（含 .doc、圖片、zip）。判斷結果寫入 `mime_type`，worker 再確認一次（不符 → rejected `unsupported_type`） |
 | 物件儲存 | 單一 bucket（`S3_BUCKET`，預設 iac-data），key 依 §5.1：`{storage_prefix}/quarantine/{org}/{doc}/{ver}/original.bin` → 解析時移到 `documents/…/original.bin`，另存 `extracted.txt` 與 PDF 的 `pages/{n}.txt`。key 不含檔名。存取一律經伺服器。未設定 `S3_ENDPOINT` 時上傳與預覽回 503，其餘功能不受影響。Compose 預設啟動 MinIO（只在內部網路） |
 | 交易 | 檔案先放入 quarantine，再於一個交易內建立 source_document（course_id = 課程）、document_version（uploaded）、綁定草稿版本、排入 `document.parse`（key `parse:{dvId}`）。交易失敗則刪除已放入的物件 |
-| 解析（worker） | `document.parse`（ingest 佇列，最多 3 次，15 分鐘）：scanning → 檔頭確認 → 移出 quarantine → parsing（PDF：pdf.js 文字層，不載字型；Word：mammoth 純文字；文字檔：UTF-8）→ chunking → 寫 manifest → `indexing` 並排入 `document.embed_index`（3-2）。**惡意程式掃描 hook 尚未接上**（SA SEQ-06 可插拔）；不執行文件內任何巨集或程式碼 |
+| 解析（worker） | `document.parse`（ingest 佇列，最多 3 次，15 分鐘）：scanning → 檔頭確認 → 移出 quarantine → parsing（PDF：pdf.js 文字層，不載字型；Word：mammoth 純文字；文字檔：UTF-8）→ chunking → 寫 manifest → `indexing` 並排入 `document.embed_index`（3-2）。惡意程式掃描於移出 quarantine 前執行（clamd INSTREAM；未設定 CLAMAV_HOST 則跳過並於 worker 啟動記錄）；.docx 另檢查 zip 宣告的解壓比例與總量（防 zip bomb）；不執行文件內任何巨集或程式碼 |
 | 失敗原因 | 內容問題不重試、直接標記並稽核 `knowledge.document.failed`：`unsupported_type`（rejected）、`no_text`（例如掃描成圖片的 PDF，OCR 尚未支援）、`parse_failed: …`（壞檔或加密）、`too_many_pages`（> 2000 頁）、`too_much_text`（> 2000 萬字元）。儲存或資料庫錯誤才依 §11 重試。課程人員可按「重試」（failed → uploaded，重新排入） |
 | 切段 | 目標 800 字元、上限 1200、相鄰段重疊約 100（切在空白或標點後）；不跨頁（引用才能標頁碼）；以段落累積，過長段落在句尾切開；Markdown 標題形成章節路徑（「麵包製作 > 發酵」），每個標題開新段。`chunk_id = {dvId}:{index}`（= 之後 Elasticsearch 的 `_id`）；manifest 只存位置（char_start／char_end 對應 extracted.txt）、頁碼、章節、雜湊，不存全文。重試時以 chunk_id 覆寫（worker 無 DELETE 權限） |
 | 綁定 | 草稿可「移出」（教材保留）與「加入本課程其他版本用過的教材」；同一份教材在一個版本只能出現一次。已發布版本的綁定由資料庫觸發器保證不可變 |
@@ -2551,6 +2551,22 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 系統狀態 | `GET /system/status`（platform.health.read）：背景工作（待處理、最久等待、已放棄、過期鎖）、教材處理與搜尋、AI 今日用量與安全替代比例、儲存用量（資料庫、教材、素材）、授權（到期天數、進行中的學員數）、最近備份，加上一份 `alerts[]`（critical／warning／info）。前端 `/app/platform/system-status` 一頁呈現並可觸發備份 |
 | 指標與告警 | `/system/metrics` 新增 `iac_es_index_backlog_documents`、`iac_ai_tokens_today`、`iac_ai_requests_today{status}`、`iac_coach_fallback_ratio`、`iac_storage_used_bytes{kind}`、`iac_backup_age_seconds`、`iac_backup_failed`（抓取時從資料庫計算，失敗保留上次的值）。`infra/monitoring/prometheus-rules.yml` 提供 SD §13.3 的告警規則給已有監控系統的客戶 |
 | 未做 | 異地備份（需客戶端環境）、WAL 連續備份與 PITR（目前為每日全量）、還原自動化、Prometheus／Grafana 容器、備份加密 |
+
+## 6.29 上傳安全：惡意程式掃描與 zip bomb（v1.39）
+
+實作：`apps/worker/src/{clamav.ts,zip-guard.ts,handlers/document-parse.ts}`、`infra/clamav/clamd.conf`、`infra/compose/docker-compose.yml`（clamav 服務）。對應 SA SEQ-06、§14、UC-KNW-001。**無 migration**——`document_status` 的 `scanning`／`rejected` 與 `failure_reason` 自 0001／0007 起就已備妥。
+
+| 項目 | 實作 |
+|---|---|
+| 掃描時機 | `document.parse` 在**移出 quarantine 之前**掃描（SA SEQ-06）：檔頭確認格式 → 惡意程式掃描 → zip 檢查 → 才複製到 `documents/…`。被判定有問題的檔案永遠不會離開 quarantine |
+| 協定 | clamd 的 `zINSTREAM`（TCP 3310）：長度前綴分塊送出，讀回 `stream: OK` 或 `stream: <簽章> FOUND`。自己寫薄 client（`clamav.ts`），與 `search.ts`／`storage.ts`／`mailer.ts` 同風格，不引入套件 |
+| 掃到病毒 | `rejected` ＋ `failure_reason = malware_detected: <簽章>`，稽核 `knowledge.document.failed`；屬內容問題，不重試 |
+| 掃描失敗 | 連不上、逾時、clamd 回 ERROR、回應格式不認得 → `ScanUnavailableError`，依 §11.3 **重試**，教材留在 `scanning`。**「掃不到」不等於「乾淨」**——任何無法確認的情況都不放行 |
+| 未啟用 | 未設定 `CLAMAV_HOST` → `DISABLED_SCANNER`（no-op），worker 啟動時記一筆 warn。教材照常解析，其餘功能不受影響（SD §14 要求可插拔且留痕） |
+| 大小上限 | clamd 內建 `StreamMaxLength` 僅 25 MB，遠小於 `upload.max_size`（預設 512 MB）→ 掛載 `infra/clamav/clamd.conf` 放寬為 512 MB（`MaxScanSize` 1 GB，為解壓後留餘裕）。**調高 `upload.max_size` 時要一起調**，否則大教材會卡在 scanning 重試 |
+| zip bomb | `.docx` 是 zip：`inspectZip()` 只讀 central directory（不解壓縮），宣告的解壓後總量 > 500 MB 或壓縮比 > 100 → `rejected` ＋ `zip_bomb`；結構讀不懂 → `zip_unreadable`。擋的是「合法 zip 但解開極大」；偽造結構的檔案會在 mammoth 解析時以 `parse_failed` 收場，不會靜默吃光記憶體 |
+| 部署 | compose 預設啟動 `clamav`（約 1.5 GB 記憶體常駐病毒庫）。worker **不** `depends_on` 它——病毒庫首次下載需數分鐘，不該拖住 worker；期間的教材解析會重試。資源不足的部署可移除該服務並把 `CLAMAV_HOST` 留空 |
+| 未做 | 掃描結果不另存欄位（沿用 `failure_reason`）；不做既有教材的定期重新掃描；PPTX／XLSX 尚未開放上傳，故 zip 檢查目前只用於 .docx |
 
 ---
 
@@ -3216,7 +3232,7 @@ Fingerprint：`SHA256(machine-id | DMI product_uuid | hostname)`，缺項以空�
 | Nginx | `client_max_body_size`（預設 512m）；逾時設定 |
 | API 接收 | 副檔名白名單（`pdf,docx,pptx,md,txt,png,jpg,mp4`）；magic bytes 與宣告 MIME 比對；大小上限 |
 | 落地 | 寫入 `quarantine/` prefix，計算 SHA-256 |
-| Worker | malware scan hook（可插拔，預設 no-op 但記錄「未啟用掃描」）；DOCX/PPTX 以 zip 安全解析（限制解壓比例防 zip bomb）；PDF 解析禁用 JavaScript 與外部參照 |
+| Worker | malware scan（clamd INSTREAM，SD §6.29；未設定 CLAMAV_HOST 時為 no-op 並於 worker 啟動記錄「未啟用掃描」）；DOCX 以 zip 安全解析（inspectZip 限制解壓比例與總量防 zip bomb）；PDF 解析禁用 JavaScript 與外部參照 |
 | 通過 | copy 至 `documents/`，刪除隔離物件 |
 | 渲染 | Source Viewer 以文字 + 座標高亮呈現，不直接在瀏覽器執行原檔（PDF 若需原檔預覽，以 `sandbox` iframe + `Content-Disposition: attachment` 策略） |
 
@@ -4565,3 +4581,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.36 | 2026-09-15 | 新增 §6.26 通知：七種事件（指派、申請、核准／拒絕、重新開啟、重修、發證）在事件交易內寫入站內與 Email 通知、偏好（預設開啟）、worker `notification.email` 經 SMTP 寄出（zh-TW／en 模板、冪等 sent_at、重修原因不進信件）、站內清單與已讀、頁首鈴鐺與通知頁；migration 0024（索引） | Software Designer |
 | v1.37 | 2026-09-15 | 新增 §6.27：課程的常見問答與常見錯誤（老師撰寫直接生效、版本保留、下架）、系統整理的線索（作答問題代碼彙整、提問去識別化與相似度分群、匿名門檻）、AI 依教材起草（不儲存）、FAQ 進入檢索（權重 1.3）與 AI 教練引用 FAQ、組織共用教材（新權限 knowledge.shared.write）；migration 0025 | Software Designer |
 | v1.38 | 2026-09-16 | 新增 §6.28 維運：證書 PDF（pdf-lib＋Noto Sans TC subset＋QR code，發證時產生、學員與課程人員下載）、備份（compose backup 服務、每日 pg_dump＋物件增量同步、7／4／6 保留、手動觸發、backup_runs）、系統狀態頁與告警、維運指標與 Prometheus 規則；migration 0026 | Software Designer |
+| v1.39 | 2026-09-16 | 新增 §6.29 上傳安全：教材在移出 quarantine 前經 clamd（zINSTREAM）掃描惡意程式，掃到即 rejected 並記 `malware_detected: <簽章>`；掃描服務不可用一律重試而非放行（「掃不到」≠「乾淨」）；未設定 CLAMAV_HOST 時為 no-op 並於 worker 啟動留痕；.docx 以 inspectZip 限制解壓比例與總量防 zip bomb；clamd.conf 放寬 StreamMaxLength 至 512 MB 對齊 upload.max_size；compose 新增 clamav 服務。無 migration | Software Designer |
