@@ -3,6 +3,7 @@ import pg from 'pg';
 import { pino } from 'pino';
 import { z } from 'zod';
 import { Dispatcher } from './dispatcher.js';
+import { createScanner } from './clamav.js';
 import { CertificateGenerateHandler } from './handlers/certificate-generate.js';
 import { DerivedIndexHandler } from './handlers/derived-index.js';
 import { DocumentIndexHandler } from './handlers/document-index.js';
@@ -41,6 +42,10 @@ const env = z
     SMTP_USER: z.string().default(''),
     SMTP_PASSWORD: z.string().default(''),
     SMTP_FROM: z.string().default(''),
+    // 惡意程式掃描（SD §14、SA SEQ-06）：未設定 CLAMAV_HOST 則跳過掃描（啟動時會記錄）
+    CLAMAV_HOST: z.string().default(''),
+    CLAMAV_PORT: z.coerce.number().int().min(1).max(65535).default(3310),
+    CLAMAV_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
     // 證書 PDF（SD §6.28）：中文字型（Noto Sans TC，SIL OFL）隨 image 一起提供
     CERTIFICATE_FONT_PATH: z.string().default('assets/fonts/NotoSansTC[wght].ttf'),
   })
@@ -60,6 +65,8 @@ const db = new pg.Pool({ connectionString: env.DATABASE_URL_WORKER, max: 5, appl
 const storage = createWorkerStorage(env);
 const search = createWorkerSearch(env);
 const mailer = createWorkerMailer(env);
+const scanner = createScanner(env);
+if (!scanner.enabled) log.warn('CLAMAV_HOST is not set — uploaded documents will NOT be scanned for malware');
 if (!mailer && env.NODE_ENV === 'production') log.warn('SMTP_HOST is not set — notification emails will NOT be sent');
 
 const dispatcher = new Dispatcher(db, log, {
@@ -69,7 +76,7 @@ const dispatcher = new Dispatcher(db, log, {
 });
 // Handlers 依 SD §11.1 的 job 目錄於各 Phase 加入
 dispatcher.register(new CertificateGenerateHandler(db, storage, { fontPath: env.CERTIFICATE_FONT_PATH, baseUrl: env.PUBLIC_BASE_URL }));
-dispatcher.register(new DocumentParseHandler(db, storage));
+dispatcher.register(new DocumentParseHandler(db, storage, scanner));
 dispatcher.register(new DocumentIndexHandler(db, storage, search));
 dispatcher.register(new DocumentSyncHandler(db, search));
 dispatcher.register(new DerivedIndexHandler(db, search));
