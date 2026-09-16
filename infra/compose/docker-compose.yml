@@ -99,6 +99,9 @@ services:
       - backups:/backups
     depends_on:
       migrate: { condition: service_completed_successfully }
+      # 備份一定要同步物件儲存（api／worker 少了它還能降級運作，備份不行）；
+      # 也讓 docs/ops/backup-restore.md 的 `docker compose run --rm backup` 能自行帶起它
+      object-storage: { condition: service_started }
     mem_limit: 1g
 
   # nginx + React SPA（建置產物與 nginx.conf 皆包進 image，見 Dockerfile.web）

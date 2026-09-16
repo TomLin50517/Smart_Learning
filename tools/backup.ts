@@ -78,24 +78,40 @@ async function syncObjects(root: string): Promise<{ files: number; bytes: number
   let token: string | undefined;
   let files = 0;
   let bytes = 0;
-  do {
-    const list = await client.send(new ListObjectsV2Command({ Bucket: env.s3.bucket, ...(token && { ContinuationToken: token }) }));
-    for (const o of list.Contents ?? []) {
-      if (!o.Key) continue;
-      const target = join(root, o.Key);
-      const size = o.Size ?? 0;
-      const existing = await stat(target).catch(() => null);
-      if (!existing || existing.size !== size) {
-        const r = await client.send(new GetObjectCommand({ Bucket: env.s3.bucket, Key: o.Key }));
-        await mkdir(dirname(target), { recursive: true });
-        await writeFile(target, Buffer.from(await r.Body!.transformToByteArray()));
+  try {
+    do {
+      const list = await client.send(new ListObjectsV2Command({ Bucket: env.s3.bucket, ...(token && { ContinuationToken: token }) }));
+      for (const o of list.Contents ?? []) {
+        if (!o.Key) continue;
+        const target = join(root, o.Key);
+        const size = o.Size ?? 0;
+        const existing = await stat(target).catch(() => null);
+        if (!existing || existing.size !== size) {
+          const r = await client.send(new GetObjectCommand({ Bucket: env.s3.bucket, Key: o.Key }));
+          await mkdir(dirname(target), { recursive: true });
+          await writeFile(target, Buffer.from(await r.Body!.transformToByteArray()));
+        }
+        files++;
+        bytes += size;
       }
-      files++;
-      bytes += size;
-    }
-    token = list.IsTruncated ? list.NextContinuationToken : undefined;
-  } while (token);
+      token = list.IsTruncated ? list.NextContinuationToken : undefined;
+    } while (token);
+  } catch (e) {
+    // 全新安裝、還沒有人上傳教材時 bucket 尚不存在（api／worker 第一次上傳才建立，見 S3ObjectStorage.ensureBucket）。
+    // 視為「沒有物件要備份」，不讓已經成功的資料庫備份跟著被標成失敗；仍留一筆 log，
+    // bucket 名稱設錯才不會被靜默吞掉。其餘錯誤（連不上、認證失敗、權限不足）照常往外拋。
+    if (!isMissingBucket(e)) throw e;
+    log('object storage bucket does not exist yet; nothing to back up', { bucket: env.s3.bucket });
+  }
   return { files, bytes };
+}
+
+/** bucket 不存在：MinIO／S3 回 NoSuchBucket，部分實作只回 404 */
+export function isMissingBucket(e: unknown): boolean {
+  if (typeof e !== 'object' || e === null) return false;
+  const name = (e as { name?: string }).name;
+  const status = (e as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
+  return name === 'NoSuchBucket' || name === 'NotFound' || status === 404;
 }
 
 /** 保留策略（ARCH §26.2）：7 日 + 4 週（週日）+ 6 月（每月 1 日） */

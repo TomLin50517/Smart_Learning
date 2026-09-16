@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { keepDumps, parseStamp } from './backup.js';
+import { isMissingBucket, keepDumps, parseStamp } from './backup.js';
 
 const name = (iso: string) => `iac-${iso.replace(/[-:]/g, '').replace(/\..+/, '').replace('T', '-')}.dump`;
 
@@ -27,5 +27,24 @@ describe('keepDumps (7 daily + 4 weekly + 6 monthly)', () => {
 
   it('ignores files that are not dumps', () => {
     expect(keepDumps(['readme.txt', 'iac-latest.dump'], { daily: 0, weekly: 0, monthly: 0 })).toEqual([]);
+  });
+});
+
+describe('isMissingBucket', () => {
+  it('recognises a bucket that has not been created yet', () => {
+    // 全新安裝還沒有人上傳教材：bucket 要等 api／worker 第一次上傳才建立
+    expect(isMissingBucket(Object.assign(new Error('The specified bucket does not exist'), { name: 'NoSuchBucket' }))).toBe(true);
+    expect(isMissingBucket({ name: 'NotFound' })).toBe(true);
+    expect(isMissingBucket({ $metadata: { httpStatusCode: 404 } })).toBe(true);
+  });
+
+  it('does not swallow the failures that must fail the backup', () => {
+    // 連不上、認證錯誤、權限不足若被當成「沒有物件」，備份就會假裝成功——這比失敗更危險
+    expect(isMissingBucket(Object.assign(new Error('connect ECONNREFUSED 10.0.0.2:9000'), { name: 'Error' }))).toBe(false);
+    expect(isMissingBucket({ name: 'AccessDenied', $metadata: { httpStatusCode: 403 } })).toBe(false);
+    expect(isMissingBucket(Object.assign(new Error('bad key'), { name: 'InvalidAccessKeyId' }))).toBe(false);
+    expect(isMissingBucket({ name: 'NoSuchKey' })).toBe(false);
+    expect(isMissingBucket(null)).toBe(false);
+    expect(isMissingBucket('NoSuchBucket')).toBe(false);
   });
 });

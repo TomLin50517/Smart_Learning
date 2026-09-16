@@ -50,6 +50,9 @@ CMD ["node", "apps/api/dist/main.js"]
 # =============================================================================
 FROM runtime AS backup
 USER root
-RUN apk add --no-cache postgresql-client
+# /backups 由 compose 的具名 volume 掛載；先建好並交給 iac——volume 首次初始化會沿用
+# image 中該目錄的擁有者，否則 Docker 以 root 建立，非 root 的 iac 寫不進去（EACCES）
+RUN apk add --no-cache postgresql-client \
+ && mkdir -p /backups && chown iac:iac /backups
 USER iac
 CMD ["node", "tools/backup.ts"]
