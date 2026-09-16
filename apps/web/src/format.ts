@@ -1,6 +1,7 @@
 import type {
   ActivityType,
   AttemptStatusTarget,
+  BackupStatus,
   CapabilityName,
   CertificateStatus,
   DocumentStatus,
@@ -263,6 +264,20 @@ export const CERTIFICATE_STATUS_BADGE: Record<CertificateStatus, string> = {
   failed: 'badge-blocked',
 };
 
+export const BACKUP_STATUS_LABELS: Record<BackupStatus, string> = {
+  requested: '等待中',
+  running: '進行中',
+  succeeded: '成功',
+  failed: '失敗',
+};
+
+export const BACKUP_STATUS_BADGE: Record<BackupStatus, string> = {
+  requested: 'badge-grace',
+  running: 'badge-grace',
+  succeeded: 'badge-active',
+  failed: 'badge-blocked',
+};
+
 /** 常見稽核動作的中文名稱（SD §12.2）；未列出者顯示原始代碼 */
 const ACTION_LABELS: Record<string, string> = {
   'auth.login.succeeded': '登入成功',
@@ -294,6 +309,7 @@ const ACTION_LABELS: Record<string, string> = {
   'enrollment.resumed': '恢復選課',
   'enrollment.reopened': '重新開啟課程',
   'enrollment.relearning.assigned': '指派重修',
+  'backup.executed': '執行備份',
   'knowledge.faq.created': '新增常見問答',
   'knowledge.faq.updated': '修改常見問答',
   'knowledge.faq.retired': '下架常見問答',

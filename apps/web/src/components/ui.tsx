@@ -23,9 +23,9 @@ export function ErrorAlert({ error, overrides }: { error: unknown; overrides?: P
   );
 }
 
-export function Notice({ kind, children }: { kind: 'ok' | 'warn' | 'info'; children: ReactNode }) {
+export function Notice({ kind, children }: { kind: 'ok' | 'warn' | 'info' | 'error'; children: ReactNode }) {
   return (
-    <div className={`alert alert-${kind}`} role="status">
+    <div className={`alert alert-${kind}`} role={kind === 'error' ? 'alert' : 'status'}>
       {children}
     </div>
   );

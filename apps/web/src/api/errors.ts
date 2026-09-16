@@ -166,6 +166,8 @@ const ISSUE_MESSAGES: Record<string, string> = {
   faq_exists: '這個線索已經建立過常見問答或常見錯誤',
   faq_retired: '這一則已下架，無法修改',
   course_has_no_version: '課程還沒有任何版本，請先建立版本',
+  pdf_not_ready: '這張證書還沒有 PDF（發證時物件儲存不可用）；可以先用列印功能',
+  backup_in_progress: '已經有一個備份在進行中，請等它完成',
   approver_role_required: '只有完成條件指定的核可者可以核可',
   already_approved: '你已經核可過了',
   approval_not_required: '這門課的完成條件不需要人工核可',
