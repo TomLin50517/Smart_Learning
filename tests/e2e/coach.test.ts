@@ -20,6 +20,7 @@ import { hashToken } from '../../apps/api/src/common/tokens.js';
 import { ENV, loadEnv } from '../../apps/api/src/config/env.js';
 import { LLM_PROVIDER, ProviderError, type CompletionRequest, type CompletionResponse, type LlmProvider } from '../../apps/api/src/modules/ai-coach/infrastructure/llm-provider.js';
 import { KNOWLEDGE_RETRIEVER, type KnowledgeRetriever } from '../../apps/api/src/modules/knowledge/knowledge.contracts.js';
+import { DISABLED_SCANNER } from '../../apps/worker/src/clamav.js';
 import { Dispatcher } from '../../apps/worker/src/dispatcher.js';
 import { DocumentParseHandler } from '../../apps/worker/src/handlers/document-parse.js';
 import { COACH_TEXT } from '../../packages/contracts/src/coach.js';
@@ -217,7 +218,7 @@ beforeAll(async () => {
 
   workerPool = new pg.Pool({ connectionString: `postgres://app_worker:${PW.worker_pw}@${h}:${p}/iac` });
   dispatcher = new Dispatcher(workerPool, pino({ level: 'silent' }), { workerId: 'e2e', queues: ['ingest'] })
-    .register(new DocumentParseHandler(workerPool, mem))
+    .register(new DocumentParseHandler(workerPool, mem, DISABLED_SCANNER))
     .register({ jobType: 'document.embed_index', timeoutMs: 1000, handle: async () => undefined })
     .register({ jobType: 'document.sync_bindings', timeoutMs: 1000, handle: async () => undefined });
 

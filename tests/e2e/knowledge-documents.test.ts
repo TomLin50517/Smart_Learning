@@ -17,6 +17,7 @@ import { csrfTokenFor } from '../../apps/api/src/common/csrf.js';
 import { MemoryObjectStorage, OBJECT_STORAGE } from '../../apps/api/src/common/object-storage.js';
 import { hashToken } from '../../apps/api/src/common/tokens.js';
 import { ENV, loadEnv } from '../../apps/api/src/config/env.js';
+import { DISABLED_SCANNER, ScanUnavailableError, type MalwareScanner } from '../../apps/worker/src/clamav.js';
 import { Dispatcher } from '../../apps/worker/src/dispatcher.js';
 import { DocumentParseHandler } from '../../apps/worker/src/handlers/document-parse.js';
 import { applyMigrations } from '../../tools/migrate.js';
@@ -120,7 +121,7 @@ beforeAll(async () => {
   // （需要 Elasticsearch）以空 handler 承接，見 knowledge-retrieval.test.ts
   workerPool = new pg.Pool({ connectionString: `postgres://app_worker:${PW.worker_pw}@${h}:${p}/iac` });
   dispatcher = new Dispatcher(workerPool, pino({ level: 'silent' }), { workerId: 'e2e', queues: ['ingest'] })
-    .register(new DocumentParseHandler(workerPool, mem))
+    .register(new DocumentParseHandler(workerPool, mem, DISABLED_SCANNER))
     .register({ jobType: 'document.embed_index', timeoutMs: 1000, handle: async () => undefined })
     .register({ jobType: 'document.sync_bindings', timeoutMs: 1000, handle: async () => undefined });
 
@@ -250,6 +251,87 @@ describe('parsing (worker)', () => {
     expect(await count(`SELECT 1 FROM source_documents WHERE id = $1`, [blank.documentId])).toBe(0);
     expect([...mem.objects.keys()].some((k) => k.includes(blank.documentId))).toBe(false);
     await drain();
+  });
+});
+
+describe('malware scanning and zip bombs (SD §14、SA SEQ-06)', () => {
+  // 用自己的課程與草稿版本：這裡會上傳數份被退件的教材，掛在 v1 上會影響
+  // 其他 describe 對 v1 教材數量的斷言
+  let secV = '';
+
+  beforeAll(async () => {
+    const c = (await call('POST', '/api/courses', 'admin', { title: '上傳安全測試' })).json().id;
+    await call('POST', `/api/courses/${c}/staff`, 'admin', { email: 'instr@knw.test', role: 'instructor' });
+    secV = (await call('POST', `/api/courses/${c}/versions`, 'instr', { title: 'v1' })).json().id;
+  });
+
+  /** beforeAll 註冊的 dispatcher 是停用掃描的版本；這裡直接跑 handler，換上指定結果的掃描器 */
+  const parseWith = async (scanner: MalwareScanner, versionId: string): Promise<void> => {
+    const j = (await admin.query<{ id: string; payload: Record<string, unknown> }>(`SELECT id, payload FROM job_queue WHERE idempotency_key = $1`, [`parse:${versionId}`])).rows[0]!;
+    await new DocumentParseHandler(workerPool, mem, scanner).handle({
+      id: j.id,
+      job_type: 'document.parse',
+      queue: 'ingest',
+      payload: j.payload,
+      attempts: 1,
+      max_attempts: 3,
+      organization_id: ORG,
+      correlation_id: null,
+    });
+  };
+
+  /** 最小的 .docx 外形：zip 檔頭讓上傳端認得格式，central directory 宣告解壓後 1 GB */
+  const zipBomb = (): Buffer => {
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    const name = Buffer.from('word/document.xml', 'utf8');
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt32LE(1024, 20);
+    central.writeUInt32LE(1024 * 1024 * 1024, 24);
+    central.writeUInt16LE(name.length, 28);
+    const dir = Buffer.concat([central, name]);
+    const eocd = Buffer.alloc(22);
+    eocd.writeUInt32LE(0x06054b50, 0);
+    eocd.writeUInt16LE(1, 10);
+    eocd.writeUInt32LE(dir.length, 12);
+    eocd.writeUInt32LE(local.length, 16);
+    return Buffer.concat([local, dir, eocd]);
+  };
+
+  it('rejects an infected document and leaves it in quarantine', async () => {
+    const up = (await uploadTo(secV, '有毒講義.pdf', PDF)).json();
+    await parseWith({ enabled: true, scan: () => Promise.resolve({ status: 'infected', signature: 'Eicar-Test-Signature' }) }, up.id);
+
+    const dv = (await admin.query<{ status: string; failure_reason: string }>(`SELECT status, failure_reason FROM document_versions WHERE id = $1`, [up.id])).rows[0]!;
+    expect(dv).toEqual({ status: 'rejected', failure_reason: 'malware_detected: Eicar-Test-Signature' });
+    // 沒有移出 quarantine，也沒有留下擷取文字或切段結果
+    expect([...mem.objects.keys()].filter((k) => k.includes(up.id))).toEqual([`kt/quarantine/${ORG}/${up.documentId}/${up.id}/original.bin`]);
+    expect(await count(`SELECT 1 FROM knowledge_chunk_manifest WHERE document_version_id = $1`, [up.id])).toBe(0);
+    expect(await count(`SELECT 1 FROM audit_logs WHERE action = 'knowledge.document.failed' AND resource_id = $1`, [up.id])).toBe(1);
+  });
+
+  it('retries instead of letting the document through when the scanner is unavailable', async () => {
+    // 「掃不到」絕不等於「乾淨」：必須往外丟讓 job 重試，教材留在 scanning
+    const up = (await uploadTo(secV, '掃描服務中斷.pdf', PDF)).json();
+    const down: MalwareScanner = { enabled: true, scan: () => Promise.reject(new ScanUnavailableError('clamd is down')) };
+    await expect(parseWith(down, up.id)).rejects.toBeInstanceOf(ScanUnavailableError);
+    expect((await admin.query<{ status: string }>(`SELECT status FROM document_versions WHERE id = $1`, [up.id])).rows[0]!.status).toBe('scanning');
+    expect(await count(`SELECT 1 FROM knowledge_chunk_manifest WHERE document_version_id = $1`, [up.id])).toBe(0);
+  });
+
+  it('rejects a zip bomb before mammoth unpacks it', async () => {
+    const up = (await uploadTo(secV, '炸彈.docx', zipBomb())).json();
+    await parseWith(DISABLED_SCANNER, up.id);
+    const dv = (await admin.query<{ status: string; failure_reason: string }>(`SELECT status, failure_reason FROM document_versions WHERE id = $1`, [up.id])).rows[0]!;
+    expect(dv).toEqual({ status: 'rejected', failure_reason: 'zip_bomb' });
+  });
+
+  it('still parses normally when scanning is switched off', async () => {
+    // 沒有 clamd 的部署不該因此無法使用教材
+    const up = (await uploadTo(secV, '未啟用掃描.md', MD)).json();
+    await parseWith(DISABLED_SCANNER, up.id);
+    expect((await admin.query<{ status: string }>(`SELECT status FROM document_versions WHERE id = $1`, [up.id])).rows[0]!.status).toBe('indexing');
   });
 });
 

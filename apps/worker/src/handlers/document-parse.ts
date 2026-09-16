@@ -2,10 +2,12 @@ import { createHash } from 'node:crypto';
 import { DOCUMENT_INDEX_JOB, DOCUMENT_PARSE_JOB, documentObjectKeys, type DocumentStatus } from '@iac/contracts';
 import { chunkDocument, detectDocumentKind, DOCUMENT_KIND_MIME, PAGE_SEPARATOR } from '@iac/domain';
 import type pg from 'pg';
+import type { MalwareScanner } from '../clamav.js';
 import type { Job, JobHandler } from '../dispatcher.js';
 import { extractPages, ExtractError } from '../extract.js';
 import { FatalError } from '../retry-policy.js';
 import type { ObjectStorage } from '../storage.js';
+import { inspectZip } from '../zip-guard.js';
 
 /** 前一次在這些狀態中斷時可以重做（冪等） */
 const REDO = new Set<DocumentStatus>(['uploaded', 'scanning', 'parsing', 'chunking']);
@@ -22,8 +24,9 @@ interface Row {
 }
 
 /**
- * 教材解析（SA SEQ-06、§7.4；SD §6.17）：檢查格式 → 移出 quarantine → 擷取文字 → 切段 → 寫入 chunk manifest → 排入索引。
- * 內容問題（格式不符、壞檔、沒有文字）標為 rejected／failed 並附原因，不重試；儲存或資料庫錯誤才重試。
+ * 教材解析（SA SEQ-06、§7.4；SD §6.17）：檢查格式 → 惡意程式掃描 → 移出 quarantine → 擷取文字 → 切段 → 寫入 chunk manifest → 排入索引。
+ * 內容問題（格式不符、壞檔、沒有文字、掃到病毒、zip bomb）標為 rejected／failed 並附原因，不重試；
+ * 儲存、資料庫或掃描服務錯誤才重試。
  * chunk 全文不存資料庫：擷取出的全文與各頁文字存在物件儲存，manifest 只記位置（char_start／char_end）。
  */
 export class DocumentParseHandler implements JobHandler {
@@ -33,6 +36,7 @@ export class DocumentParseHandler implements JobHandler {
   constructor(
     private readonly db: pg.Pool,
     private readonly storage: ObjectStorage,
+    private readonly scanner: MalwareScanner,
   ) {}
 
   private async setStatus(id: string, status: DocumentStatus, extra: { reason?: string } = {}): Promise<void> {
@@ -67,9 +71,22 @@ export class DocumentParseHandler implements JobHandler {
 
     await this.setStatus(r.id, 'scanning');
     const original = await this.storage.get(r.object_key);
-    // 惡意程式掃描 hook 尚未接上（可插拔，SA SEQ-06）；目前以檔頭再次確認格式
     const kind = detectDocumentKind(original.subarray(0, 8192), r.original_filename);
     if (!kind || DOCUMENT_KIND_MIME[kind] !== r.mime_type) return this.fail(r, 'rejected', 'unsupported_type', job);
+
+    // 惡意程式掃描（SA SEQ-06、SD §14）：在移出 quarantine 之前。掃描服務不可用時 scan() 會丟
+    // ScanUnavailableError → 依 §11.3 重試，教材留在 scanning；「掃不到」絕不等於「乾淨」。
+    // 未設定 CLAMAV_HOST 時 enabled 為 false，worker 啟動時已記錄未啟用（SD §14 的可插拔 hook）
+    if (this.scanner.enabled) {
+      const verdict = await this.scanner.scan(original);
+      if (verdict.status === 'infected') return this.fail(r, 'rejected', `malware_detected: ${verdict.signature}`, job);
+    }
+
+    // zip bomb 防護（SD §14）：.docx 是 zip，先看宣告的解壓後總量與壓縮比，再交給 mammoth
+    if (kind === 'docx') {
+      const zip = inspectZip(original);
+      if (!zip.ok) return this.fail(r, 'rejected', zip.reason, job);
+    }
 
     const keys = documentObjectKeys({ prefix: r.storage_prefix, organizationId: r.organization_id, documentId: r.source_document_id, versionId: r.id });
     if (r.object_key !== keys.original) {
