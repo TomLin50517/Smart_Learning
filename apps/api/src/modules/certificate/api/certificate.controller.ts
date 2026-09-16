@@ -1,6 +1,6 @@
-import { Body, Controller, Get, HttpCode, Param, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, Header, HttpCode, Param, Post, Req, Res } from '@nestjs/common';
 import type { CourseCertificateDto, MyCertificateDto, PublicCertificateDto } from '@iac/contracts';
-import type { FastifyRequest } from 'fastify';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { AuthUser } from '../../../common/context.js';
 import { Audit, CurrentUser, Public, RequirePermission } from '../../../common/decorators.js';
@@ -26,6 +26,28 @@ export class CertificateController {
   @RequirePermission('certificate.read_self', { scope: 'self' })
   myOne(@Param('id') id: string, @CurrentUser() user: AuthUser): Promise<MyCertificateDto> {
     return this.certs.myOne(parseInput(z.guid(), id), user.id);
+  }
+
+  /** openapi: downloadMyCertificatePdf */
+  @Get('me/certificates/:id/pdf')
+  @RequirePermission('certificate.read_self', { scope: 'self' })
+  @Header('Content-Type', 'application/pdf')
+  @Header('Cache-Control', 'private, no-store')
+  async myPdf(@Param('id') id: string, @CurrentUser() user: AuthUser, @Res({ passthrough: true }) reply: FastifyReply): Promise<Buffer> {
+    const r = await this.certs.pdf(parseInput(z.guid(), id), { userId: user.id });
+    void reply.header('content-disposition', `attachment; filename="${r.filename}"`);
+    return r.body;
+  }
+
+  /** openapi: downloadCertificatePdf——課程人員 */
+  @Get('certificates/:id/pdf')
+  @RequirePermission('certificate.read_all', { scope: 'course', resource: 'certificate' })
+  @Header('Content-Type', 'application/pdf')
+  @Header('Cache-Control', 'private, no-store')
+  async coursePdf(@Param('id') id: string, @Res({ passthrough: true }) reply: FastifyReply): Promise<Buffer> {
+    const r = await this.certs.pdf(parseInput(z.guid(), id), {});
+    void reply.header('content-disposition', `attachment; filename="${r.filename}"`);
+    return r.body;
   }
 
   /** openapi: listCourseCertificates */

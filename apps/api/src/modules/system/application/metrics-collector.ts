@@ -22,8 +22,56 @@ export class MetricsCollector {
   ) {}
 
   async render(): Promise<string> {
-    await Promise.all([this.collectJobs(), this.collectLicense()]);
+    await Promise.all([this.collectJobs(), this.collectLicense(), this.collectOps()]);
     return registry.render();
+  }
+
+  /** 教材索引積壓、AI 用量、儲存用量、備份（SD §6.28、SA §18.2） */
+  private async collectOps(): Promise<void> {
+    try {
+      const r = await this.db.query<{
+        backlog: number;
+        tokens: string;
+        ai_ok: number;
+        ai_error: number;
+        answers: number;
+        fallbacks: number;
+        database_bytes: string;
+        document_bytes: string;
+        media_bytes: string;
+        backup_age: number | null;
+        backup_failed: number;
+      }>(
+        `SELECT (SELECT count(*)::int FROM document_versions WHERE status IN ('uploaded', 'scanning', 'parsing', 'chunking', 'indexing')) AS backlog,
+                (SELECT COALESCE(sum(total_tokens), 0)::text FROM ai_usage_records WHERE occurred_at >= date_trunc('day', now())) AS tokens,
+                (SELECT count(*)::int FROM ai_usage_records WHERE occurred_at >= date_trunc('day', now()) AND status = 'success') AS ai_ok,
+                (SELECT count(*)::int FROM ai_usage_records WHERE occurred_at >= date_trunc('day', now()) AND status <> 'success') AS ai_error,
+                (SELECT count(*)::int FROM coach_messages WHERE role = 'assistant' AND created_at >= date_trunc('day', now())) AS answers,
+                (SELECT count(*)::int FROM coach_messages WHERE role = 'assistant' AND created_at >= date_trunc('day', now()) AND validation_status = 'fallback') AS fallbacks,
+                pg_database_size(current_database())::text AS database_bytes,
+                (SELECT COALESCE(sum(size_bytes), 0)::text FROM document_versions) AS document_bytes,
+                (SELECT COALESCE(sum(size_bytes), 0)::text FROM media_assets) AS media_bytes,
+                (SELECT extract(epoch FROM now() - max(finished_at))::float8 FROM backup_runs WHERE status = 'succeeded') AS backup_age,
+                (SELECT count(*)::int FROM backup_runs b WHERE b.status = 'failed'
+                   AND b.created_at = (SELECT max(created_at) FROM backup_runs)) AS backup_failed`,
+      );
+      const x = r.rows[0]!;
+      metrics.esIndexBacklog.set({}, x.backlog);
+      metrics.aiTokensToday.set({}, Number(x.tokens));
+      metrics.aiRequestsToday.reset();
+      metrics.aiRequestsToday.set({ status: 'success' }, x.ai_ok);
+      metrics.aiRequestsToday.set({ status: 'error' }, x.ai_error);
+      metrics.coachFallbackRatio.set({}, x.answers > 0 ? x.fallbacks / x.answers : 0);
+      metrics.storageUsedBytes.reset();
+      metrics.storageUsedBytes.set({ kind: 'database' }, Number(x.database_bytes));
+      metrics.storageUsedBytes.set({ kind: 'documents' }, Number(x.document_bytes));
+      metrics.storageUsedBytes.set({ kind: 'media' }, Number(x.media_bytes));
+      metrics.backupAgeSeconds.reset();
+      if (x.backup_age !== null) metrics.backupAgeSeconds.set({}, Math.max(0, Math.round(x.backup_age)));
+      metrics.backupFailed.set({}, x.backup_failed > 0 ? 1 : 0);
+    } catch (err) {
+      logger.warn({ err }, 'ops metrics collection failed');
+    }
   }
 
   private async collectJobs(): Promise<void> {
