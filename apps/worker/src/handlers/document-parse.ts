@@ -5,6 +5,7 @@ import type pg from 'pg';
 import type { MalwareScanner } from '../clamav.js';
 import type { Job, JobHandler } from '../dispatcher.js';
 import { extractPages, ExtractError } from '../extract.js';
+import type { OcrEngine } from '../ocr.js';
 import { FatalError } from '../retry-policy.js';
 import type { ObjectStorage } from '../storage.js';
 import { inspectZip } from '../zip-guard.js';
@@ -36,7 +37,7 @@ export class DocumentParseHandler implements JobHandler {
   constructor(
     private readonly db: pg.Pool,
     private readonly storage: ObjectStorage,
-    private readonly scanner: MalwareScanner,
+    private readonly opts: { scanner: MalwareScanner; ocr: OcrEngine },
   ) {}
 
   private async setStatus(id: string, status: DocumentStatus, extra: { reason?: string } = {}): Promise<void> {
@@ -77,8 +78,8 @@ export class DocumentParseHandler implements JobHandler {
     // 惡意程式掃描（SA SEQ-06、SD §14）：在移出 quarantine 之前。掃描服務不可用時 scan() 會丟
     // ScanUnavailableError → 依 §11.3 重試，教材留在 scanning；「掃不到」絕不等於「乾淨」。
     // 未設定 CLAMAV_HOST 時 enabled 為 false，worker 啟動時已記錄未啟用（SD §14 的可插拔 hook）
-    if (this.scanner.enabled) {
-      const verdict = await this.scanner.scan(original);
+    if (this.opts.scanner.enabled) {
+      const verdict = await this.opts.scanner.scan(original);
       if (verdict.status === 'infected') return this.fail(r, 'rejected', `malware_detected: ${verdict.signature}`, job);
     }
 
@@ -98,7 +99,7 @@ export class DocumentParseHandler implements JobHandler {
     await this.setStatus(r.id, 'parsing');
     let pages;
     try {
-      pages = await extractPages(kind, original);
+      pages = await extractPages(kind, original, this.opts.ocr);
     } catch (e) {
       if (e instanceof ExtractError) return this.fail(r, 'failed', e.reason, job);
       throw e;

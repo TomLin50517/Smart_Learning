@@ -75,11 +75,20 @@ services:
 
   worker:
     <<: *app
+    # 專用 target：掃描版 PDF 的 OCR 需要 tesseract 與 poppler-utils（約 +100 MiB）。
+    # api 用不到那些二進位，因此不放進共用的 runtime（layer 仍共享，磁碟無額外成本）
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+      target: worker
+    image: iac-worker:dev
     command: ["node", "apps/worker/dist/main.js"]
     environment:
       WORKER_QUEUES: ingest,ai,output
       # 惡意程式掃描（SD §14）：留空即停用（用 - 而非 :- ，空字串才不會被換成預設值）
       CLAMAV_HOST: ${CLAMAV_HOST-clamav}
+      # 掃描版 PDF 的 OCR（SD §6.30）：這個 image 內含所需工具，因此預設開啟
+      OCR_ENABLED: ${OCR_ENABLED-true}
       <<: *backing
     depends_on:
       migrate: { condition: service_completed_successfully }

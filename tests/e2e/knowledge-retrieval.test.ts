@@ -21,6 +21,7 @@ import { DISABLED_SCANNER } from '../../apps/worker/src/clamav.js';
 import { Dispatcher } from '../../apps/worker/src/dispatcher.js';
 import { DocumentIndexHandler } from '../../apps/worker/src/handlers/document-index.js';
 import { DocumentParseHandler } from '../../apps/worker/src/handlers/document-parse.js';
+import { DISABLED_OCR } from '../../apps/worker/src/ocr.js';
 import { DocumentSyncHandler } from '../../apps/worker/src/handlers/document-sync.js';
 import { DerivedIndexHandler } from '../../apps/worker/src/handlers/derived-index.js';
 import { createWorkerSearch } from '../../apps/worker/src/search.js';
@@ -150,7 +151,7 @@ beforeAll(async () => {
   workerPool = new pg.Pool({ connectionString: `postgres://app_worker:${PW.worker_pw}@${h}:${p}/iac` });
   const esClient = createWorkerSearch({ ELASTICSEARCH_URL: esUrl, ELASTICSEARCH_API_KEY: '', ELASTICSEARCH_USERNAME: '', ELASTICSEARCH_PASSWORD: '' });
   dispatcher = new Dispatcher(workerPool, pino({ level: 'silent' }), { workerId: 'e2e', queues: ['ingest'] })
-    .register(new DocumentParseHandler(workerPool, mem, DISABLED_SCANNER))
+    .register(new DocumentParseHandler(workerPool, mem, { scanner: DISABLED_SCANNER, ocr: DISABLED_OCR }))
     .register(new DocumentIndexHandler(workerPool, mem, esClient))
     .register(new DocumentSyncHandler(workerPool, esClient))
     // 複製與發布版本時也會排入課程 FAQ 的索引（SD §6.27）

@@ -45,6 +45,19 @@ EXPOSE 3000
 CMD ["node", "apps/api/dist/main.js"]
 
 # =============================================================================
+# worker（SD §6.30）：同一個 image，另裝掃描版 PDF 的 OCR 工具——
+#   pdftoppm（poppler-utils）轉圖 + tesseract 辨識（繁中與英文語言包），約 +100 MiB。
+#   api 用不到這些二進位，所以獨立成一個 target（與 backup 同模式；layer 共享，磁碟無額外成本）。
+#   未裝這些工具時 worker 仍可執行——OCR_ENABLED 預設關閉，行為與加入 OCR 前一致。
+#   docker build -f infra/docker/Dockerfile --target worker -t iac-worker .
+# =============================================================================
+FROM runtime AS worker
+USER root
+RUN apk add --no-cache poppler-utils tesseract-ocr tesseract-ocr-data-chi_tra tesseract-ocr-data-eng
+USER iac
+CMD ["node", "apps/worker/dist/main.js"]
+
+# =============================================================================
 # 備份代理（SD §6.28）：同一個 image，另裝 PostgreSQL client 以使用 pg_dump
 #   docker build -f infra/docker/Dockerfile --target backup -t iac-backup .
 # =============================================================================

@@ -4,6 +4,7 @@ import { pino } from 'pino';
 import { z } from 'zod';
 import { Dispatcher } from './dispatcher.js';
 import { createScanner } from './clamav.js';
+import { createOcrEngine } from './ocr.js';
 import { CertificateGenerateHandler } from './handlers/certificate-generate.js';
 import { DerivedIndexHandler } from './handlers/derived-index.js';
 import { DocumentIndexHandler } from './handlers/document-index.js';
@@ -46,6 +47,13 @@ const env = z
     CLAMAV_HOST: z.string().default(''),
     CLAMAV_PORT: z.coerce.number().int().min(1).max(65535).default(3310),
     CLAMAV_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
+    // 掃描版 PDF 的 OCR（SD §6.30）：需要 worker image（--target worker）的 tesseract 與 poppler-utils。
+    // 預設關閉——啟用卻沒有工具時 job 會明確失敗，不會把辨識失敗誤當成「沒有文字」
+    OCR_ENABLED: z.stringbool().default(false),
+    OCR_DPI: z.coerce.number().int().min(72).max(600).default(300),
+    OCR_LANGUAGES: z.string().default('chi_tra+eng'),
+    OCR_MAX_PAGES: z.coerce.number().int().positive().max(500).default(50),
+    OCR_PAGE_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
     // 證書 PDF（SD §6.28）：中文字型（Noto Sans TC，SIL OFL）隨 image 一起提供
     CERTIFICATE_FONT_PATH: z.string().default('assets/fonts/NotoSansTC[wght].ttf'),
   })
@@ -67,6 +75,13 @@ const search = createWorkerSearch(env);
 const mailer = createWorkerMailer(env);
 const scanner = createScanner(env);
 if (!scanner.enabled) log.warn('CLAMAV_HOST is not set — uploaded documents will NOT be scanned for malware');
+const ocr = createOcrEngine({
+  enabled: env.OCR_ENABLED,
+  dpi: env.OCR_DPI,
+  languages: env.OCR_LANGUAGES,
+  maxPages: env.OCR_MAX_PAGES,
+  pageTimeoutMs: env.OCR_PAGE_TIMEOUT_MS,
+});
 if (!mailer && env.NODE_ENV === 'production') log.warn('SMTP_HOST is not set — notification emails will NOT be sent');
 
 const dispatcher = new Dispatcher(db, log, {
@@ -76,7 +91,7 @@ const dispatcher = new Dispatcher(db, log, {
 });
 // Handlers 依 SD §11.1 的 job 目錄於各 Phase 加入
 dispatcher.register(new CertificateGenerateHandler(db, storage, { fontPath: env.CERTIFICATE_FONT_PATH, baseUrl: env.PUBLIC_BASE_URL }));
-dispatcher.register(new DocumentParseHandler(db, storage, scanner));
+dispatcher.register(new DocumentParseHandler(db, storage, { scanner, ocr }));
 dispatcher.register(new DocumentIndexHandler(db, storage, search));
 dispatcher.register(new DocumentSyncHandler(db, search));
 dispatcher.register(new DerivedIndexHandler(db, search));
