@@ -4,7 +4,9 @@
 #   docker compose -f infra/compose/docker-compose.yml up --build
 #
 # 預設啟動 postgres / migrate / api / worker / reverse-proxy / object-storage（MinIO，Phase 3-1 起）/
-# elasticsearch（Phase 3-2 起）。MinIO 與 Elasticsearch 只在 compose 內部網路，不對外開埠。
+# elasticsearch（Phase 3-2 起）/ backup（SD §6.28）/ clamav（SD §14）。
+# MinIO、Elasticsearch 與 clamd 只在 compose 內部網路，不對外開埠。
+# clamav 約需 1.5 GB 記憶體；不需要掃毒的部署可以移除該服務並把 .env 的 CLAMAV_HOST 留空。
 # 不含 Redis / Kafka / RabbitMQ（ARCH §5.2、ADR-011）。
 # =============================================================================
 name: iac
@@ -76,6 +78,8 @@ services:
     command: ["node", "apps/worker/dist/main.js"]
     environment:
       WORKER_QUEUES: ingest,ai,output
+      # 惡意程式掃描（SD §14）：留空即停用（用 - 而非 :- ，空字串才不會被換成預設值）
+      CLAMAV_HOST: ${CLAMAV_HOST-clamav}
       <<: *backing
     depends_on:
       migrate: { condition: service_completed_successfully }
@@ -144,8 +148,30 @@ services:
     volumes: [objdata:/data]
     mem_limit: 2g
 
+  # 惡意程式掃描（SD §14、SA SEQ-06）：教材在移出 quarantine 之前先經 clamd 掃描。
+  # 病毒庫常駐記憶體，約需 1.5 GB——資源不足的部署可以移除這個服務，並在 .env 把 CLAMAV_HOST 留空；
+  # worker 會跳過掃描並在啟動時記錄一筆警告，其餘功能不受影響。
+  # 不讓 worker depends_on 它：病毒庫首次下載要好幾分鐘，worker 不該被拖住——
+  # clamd 還沒好的期間，教材解析會依 §11.3 重試（留在 scanning，不會被誤放行）
+  clamav:
+    image: clamav/clamav:1.4
+    environment:
+      CLAMAV_NO_MILTERD: "true"
+    volumes:
+      - clamavdb:/var/lib/clamav
+      # 放寬 StreamMaxLength：clamd 內建預設 25 MB，遠小於 upload.max_size（預設 512 MB）
+      - ../clamav/clamd.conf:/etc/clamav/clamd.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 600s
+    mem_limit: 2g
+
 volumes:
   pgdata:
   esdata:
   objdata:
   backups:
+  clamavdb:
