@@ -41,6 +41,8 @@ const env = z
     SMTP_USER: z.string().default(''),
     SMTP_PASSWORD: z.string().default(''),
     SMTP_FROM: z.string().default(''),
+    // 證書 PDF（SD §6.28）：中文字型（Noto Sans TC，SIL OFL）隨 image 一起提供
+    CERTIFICATE_FONT_PATH: z.string().default('assets/fonts/NotoSansTC[wght].ttf'),
   })
   .superRefine((v, ctx) => {
     if (v.SMTP_HOST && !/@[^@\s>]+/.test(v.SMTP_FROM)) {
@@ -66,7 +68,7 @@ const dispatcher = new Dispatcher(db, log, {
   pollIntervalMs: env.WORKER_POLL_MS,
 });
 // Handlers 依 SD §11.1 的 job 目錄於各 Phase 加入
-dispatcher.register(new CertificateGenerateHandler(db));
+dispatcher.register(new CertificateGenerateHandler(db, storage, { fontPath: env.CERTIFICATE_FONT_PATH, baseUrl: env.PUBLIC_BASE_URL }));
 dispatcher.register(new DocumentParseHandler(db, storage));
 dispatcher.register(new DocumentIndexHandler(db, storage, search));
 dispatcher.register(new DocumentSyncHandler(db, search));
