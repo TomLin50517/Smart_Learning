@@ -30,7 +30,8 @@
     "test:db": "bash tests/db/run-db-tests.sh",
     "ci": "npm run build && npm run build:web && npm run typecheck && npm run test:arch && npm test",
     "start:api": "node apps/api/dist/main.js",
-    "start:worker": "node apps/worker/dist/main.js"
+    "start:worker": "node apps/worker/dist/main.js",
+    "backup:run": "tsx tools/backup.ts --once"
   },
   "devDependencies": {
     "@nestjs/testing": "12.0.1",

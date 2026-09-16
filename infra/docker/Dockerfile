@@ -36,7 +36,20 @@ COPY --from=build --chown=iac:iac /app/packages     packages
 COPY --from=build --chown=iac:iac /app/apps         apps
 COPY --chown=iac:iac migrations migrations
 COPY --chown=iac:iac tools/migrate.ts tools/migrate.ts
+COPY --chown=iac:iac tools/backup.ts  tools/backup.ts
+# 證書 PDF 的中文字型（Noto Sans TC，SIL OFL；見 assets/fonts/OFL.txt）
+COPY --chown=iac:iac assets assets
 
 USER iac
 EXPOSE 3000
 CMD ["node", "apps/api/dist/main.js"]
+
+# =============================================================================
+# 備份代理（SD §6.28）：同一個 image，另裝 PostgreSQL client 以使用 pg_dump
+#   docker build -f infra/docker/Dockerfile --target backup -t iac-backup .
+# =============================================================================
+FROM runtime AS backup
+USER root
+RUN apk add --no-cache postgresql-client
+USER iac
+CMD ["node", "tools/backup.ts"]
