@@ -17,6 +17,7 @@ import { csrfTokenFor } from '../../apps/api/src/common/csrf.js';
 import { MemoryObjectStorage, OBJECT_STORAGE } from '../../apps/api/src/common/object-storage.js';
 import { hashToken } from '../../apps/api/src/common/tokens.js';
 import { ENV, loadEnv } from '../../apps/api/src/config/env.js';
+import { DISABLED_SCANNER } from '../../apps/worker/src/clamav.js';
 import { Dispatcher } from '../../apps/worker/src/dispatcher.js';
 import { DocumentIndexHandler } from '../../apps/worker/src/handlers/document-index.js';
 import { DocumentParseHandler } from '../../apps/worker/src/handlers/document-parse.js';
@@ -149,7 +150,7 @@ beforeAll(async () => {
   workerPool = new pg.Pool({ connectionString: `postgres://app_worker:${PW.worker_pw}@${h}:${p}/iac` });
   const esClient = createWorkerSearch({ ELASTICSEARCH_URL: esUrl, ELASTICSEARCH_API_KEY: '', ELASTICSEARCH_USERNAME: '', ELASTICSEARCH_PASSWORD: '' });
   dispatcher = new Dispatcher(workerPool, pino({ level: 'silent' }), { workerId: 'e2e', queues: ['ingest'] })
-    .register(new DocumentParseHandler(workerPool, mem))
+    .register(new DocumentParseHandler(workerPool, mem, DISABLED_SCANNER))
     .register(new DocumentIndexHandler(workerPool, mem, esClient))
     .register(new DocumentSyncHandler(workerPool, esClient))
     // 複製與發布版本時也會排入課程 FAQ 的索引（SD §6.27）
