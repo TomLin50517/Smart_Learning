@@ -1,11 +1,12 @@
 import { Module } from '@nestjs/common';
+import { createEmbeddingClient, EMBEDDING_CLIENT } from '../../common/embedding.js';
 import { createSearchClient, SEARCH_CLIENT } from '../../common/elasticsearch.js';
 import { createObjectStorage, OBJECT_STORAGE } from '../../common/object-storage.js';
 import { ENV, type Env } from '../../config/env.js';
 import { KnowledgeController } from './api/knowledge.controller.js';
 import { SharedKnowledgeController } from './api/shared-knowledge.controller.js';
 import { KnowledgeService } from './application/knowledge.service.js';
-import { LexicalKnowledgeRetriever } from './application/retriever.js';
+import { HybridKnowledgeRetriever } from './application/retriever.js';
 import { KNOWLEDGE_RETRIEVER } from './knowledge.contracts.js';
 
 /**
@@ -19,10 +20,12 @@ import { KNOWLEDGE_RETRIEVER } from './knowledge.contracts.js';
   controllers: [KnowledgeController, SharedKnowledgeController],
   providers: [
     KnowledgeService,
-    LexicalKnowledgeRetriever,
-    { provide: KNOWLEDGE_RETRIEVER, useExisting: LexicalKnowledgeRetriever },
+    HybridKnowledgeRetriever,
+    { provide: KNOWLEDGE_RETRIEVER, useExisting: HybridKnowledgeRetriever },
     { provide: OBJECT_STORAGE, useFactory: (env: Env) => createObjectStorage(env), inject: [ENV] },
     { provide: SEARCH_CLIENT, useFactory: (env: Env) => createSearchClient(env), inject: [ENV] },
+    // 未設定 EMBEDDING_BASE_URL 時為停用實作，檢索自動維持 lexical_only（SD §6.31）
+    { provide: EMBEDDING_CLIENT, useFactory: (env: Env) => createEmbeddingClient(env), inject: [ENV] },
   ],
   exports: [KNOWLEDGE_RETRIEVER, OBJECT_STORAGE],
 })

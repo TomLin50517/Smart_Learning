@@ -71,6 +71,12 @@ const schema = z.object({
   S3_SECRET_KEY: z.string().optional().default(''),
 
   // --- Elasticsearch（SD §4）：未設定時教材檢索與 AI 教練回 503，其餘功能正常 ---------------
+  // 語意檢索的 embedding（SD §6.31）：平台層級金鑰，與 worker 索引時必須用同一個模型與維度
+  EMBEDDING_BASE_URL: z.string().optional().default(''),
+  EMBEDDING_API_KEY: z.string().optional().default(''),
+  EMBEDDING_MODEL: z.string().optional().default('text-embedding-3-small'),
+  EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().max(4096).default(1536),
+  EMBEDDING_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
   ELASTICSEARCH_URL: z.string().optional().default(''),
   // 二擇一：API key 或帳號密碼
   ELASTICSEARCH_API_KEY: z.string().optional().default(''),
