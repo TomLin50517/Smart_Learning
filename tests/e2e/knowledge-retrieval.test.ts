@@ -21,6 +21,7 @@ import { DISABLED_SCANNER } from '../../apps/worker/src/clamav.js';
 import { Dispatcher } from '../../apps/worker/src/dispatcher.js';
 import { DocumentIndexHandler } from '../../apps/worker/src/handlers/document-index.js';
 import { DocumentParseHandler } from '../../apps/worker/src/handlers/document-parse.js';
+import { DISABLED_EMBEDDING } from '../../apps/worker/src/embedding.js';
 import { DISABLED_OCR } from '../../apps/worker/src/ocr.js';
 import { DocumentSyncHandler } from '../../apps/worker/src/handlers/document-sync.js';
 import { DerivedIndexHandler } from '../../apps/worker/src/handlers/derived-index.js';
@@ -152,10 +153,10 @@ beforeAll(async () => {
   const esClient = createWorkerSearch({ ELASTICSEARCH_URL: esUrl, ELASTICSEARCH_API_KEY: '', ELASTICSEARCH_USERNAME: '', ELASTICSEARCH_PASSWORD: '' });
   dispatcher = new Dispatcher(workerPool, pino({ level: 'silent' }), { workerId: 'e2e', queues: ['ingest'] })
     .register(new DocumentParseHandler(workerPool, mem, { scanner: DISABLED_SCANNER, ocr: DISABLED_OCR }))
-    .register(new DocumentIndexHandler(workerPool, mem, esClient))
+    .register(new DocumentIndexHandler(workerPool, mem, esClient, DISABLED_EMBEDDING))
     .register(new DocumentSyncHandler(workerPool, esClient))
     // 複製與發布版本時也會排入課程 FAQ 的索引（SD §6.27）
-    .register(new DerivedIndexHandler(workerPool, esClient));
+    .register(new DerivedIndexHandler(workerPool, esClient, DISABLED_EMBEDDING));
 
   const makeCourse = async (title: string) => {
     const id = (await call('POST', '/api/courses', 'admin', { title })).json().id as string;

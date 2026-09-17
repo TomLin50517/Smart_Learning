@@ -15,9 +15,10 @@ describe('extractPages', () => {
     expect(pages).toEqual([{ pageNo: null, text: '# 標題\n內容\n' }]);
   });
 
+  // 解析壞檔是 CPU 密集的：機器上有容器在跑時，預設的 5 秒上限不夠穩（實測單獨跑約 1 秒）
   it('reports content problems with a reason instead of crashing', async () => {
     await expect(extractPages('pdf', Buffer.from('%PDF-1.4 broken'))).rejects.toBeInstanceOf(ExtractError);
     await expect(extractPages('docx', Buffer.from([0x50, 0x4b, 0x03, 0x04, 1, 2, 3]))).rejects.toMatchObject({ reason: expect.stringMatching(/^parse_failed/) });
     await expect(extractPages('text', Buffer.from('   \n  '))).rejects.toMatchObject({ reason: 'no_text' });
-  });
+  }, 30_000);
 });
