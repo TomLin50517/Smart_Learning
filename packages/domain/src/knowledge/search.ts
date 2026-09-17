@@ -29,14 +29,14 @@ const integer = { type: 'integer' } as const;
  * 給定維度時加入 `embedding`，語意檢索才有欄位可查。
  */
 export const chunkIndexBody = (embeddingDims: number | null): Record<string, unknown> => {
-  const body = structuredClone(KNOWLEDGE_CHUNKS_INDEX_BODY) as {
-    mappings: { properties: Record<string, unknown> };
-  };
+  // 以展開運算子複製，不用 structuredClone——packages/domain 不依賴 Node 的全域 API
+  const { settings, mappings } = KNOWLEDGE_CHUNKS_INDEX_BODY;
+  const properties: Record<string, unknown> = { ...mappings.properties };
   if (embeddingDims !== null) {
     // cosine：OpenAI 相容的 embedding 一般已正規化，cosine 與 dot_product 等價但不必自己確認長度
-    body.mappings.properties['embedding'] = { type: 'dense_vector', dims: embeddingDims, index: true, similarity: 'cosine' };
+    properties['embedding'] = { type: 'dense_vector', dims: embeddingDims, index: true, similarity: 'cosine' };
   }
-  return body;
+  return { settings, mappings: { ...mappings, properties } };
 };
 
 export const KNOWLEDGE_CHUNKS_INDEX_BODY = {
