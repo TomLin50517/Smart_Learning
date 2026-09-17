@@ -5,7 +5,12 @@
 
 /** 程式碼只用 alias（SD §4.1）；具體 index 名稱只在建立時出現 */
 export const KNOWLEDGE_CHUNKS_ALIAS = 'knowledge_chunks';
-export const KNOWLEDGE_CHUNKS_INDEX = 'knowledge_chunks_v1';
+/**
+ * v2 起加入 embedding 欄位（語意檢索，SD §6.31）。
+ * **換 embedding 模型（維度不同）或改分析器都必須換 index 名稱並重新索引**——
+ * dense_vector 的 dims 一旦建立就不能改。
+ */
+export const KNOWLEDGE_CHUNKS_INDEX = 'knowledge_chunks_v2';
 
 export type KnowledgeType = 'source' | 'faq' | 'common_error' | 'platform';
 export type VerificationStatus = 'source' | 'verified' | 'auto_generated' | 'teacher_edited';
@@ -19,6 +24,21 @@ const integer = { type: 'integer' } as const;
  * 分析器：standard 會把中日韓文字切成單字，cjk_bigram 再組成相鄰兩字——不需安裝中文分詞外掛；
  * cjk_width 放最前面，先把全形英數轉半形再組字。
  */
+/**
+ * index 定義。`embeddingDims` 為 null 時不建立向量欄位（lexical_only，與 v1 行為相同）；
+ * 給定維度時加入 `embedding`，語意檢索才有欄位可查。
+ */
+export const chunkIndexBody = (embeddingDims: number | null): Record<string, unknown> => {
+  const body = structuredClone(KNOWLEDGE_CHUNKS_INDEX_BODY) as {
+    mappings: { properties: Record<string, unknown> };
+  };
+  if (embeddingDims !== null) {
+    // cosine：OpenAI 相容的 embedding 一般已正規化，cosine 與 dot_product 等價但不必自己確認長度
+    body.mappings.properties['embedding'] = { type: 'dense_vector', dims: embeddingDims, index: true, similarity: 'cosine' };
+  }
+  return body;
+};
+
 export const KNOWLEDGE_CHUNKS_INDEX_BODY = {
   settings: {
     number_of_shards: 1,
@@ -77,6 +97,8 @@ export interface ChunkIndexDocument {
   char_end: number;
   token_count: number | null;
   indexed_at: string;
+  /** 語意檢索的向量（SD §6.31）；未啟用 embedding 時不寫入這個欄位 */
+  embedding?: number[];
 }
 
 export interface RetrieveParams {
@@ -212,6 +234,57 @@ export function toRetrievedChunk(h: SearchHit): RetrievedChunk {
 export function rankHits(hits: readonly SearchHit[], topK?: number): RetrievedChunk[] {
   return hits
     .map(toRetrievedChunk)
+    .sort((a, b) => b.weightedScore - a.weightedScore)
+    .slice(0, clampTopK(topK));
+}
+
+/**
+ * 語意檢索的 kNN 查詢（SD §6.31）。**範圍 filter 與 lexical 完全相同**——
+ * 向量檢索同樣不能繞過 INV-T6 的四道限制。問題為空或範圍任一項為空時回 null。
+ */
+export function buildKnnQuery(vector: readonly number[], params: RetrieveParams, scope: RetrieveScope): Readonly<Record<string, unknown>> | null {
+  if (!vector.length || !scope.organizationId || !scope.courseVersionIds.length || !scope.allowedVerificationStatuses.length || !scope.aclScopes.length) return null;
+  const optional = params.knowledgeTypes?.length ? [{ terms: { knowledge_type: [...params.knowledgeTypes] } }] : [];
+  return deepFreeze({
+    size: FETCH_SIZE,
+    _source: [...SOURCE_FIELDS],
+    knn: {
+      field: 'embedding',
+      query_vector: [...vector],
+      k: FETCH_SIZE,
+      // ES 建議 num_candidates 大於 k，取樣越多召回越好、也越慢
+      num_candidates: FETCH_SIZE * 5,
+      filter: [...optional, ...scopeFilters(scope)],
+    },
+  });
+}
+
+/** RRF 常數：名次越後貢獻越小。60 是原論文與 ES 的預設值 */
+export const RRF_K = 60;
+
+/**
+ * Reciprocal Rank Fusion（SD §6.31）：把 lexical 與語意兩份結果合併。
+ *
+ * ES 內建的 RRF 需要 Enterprise 授權（basic 會回 403），所以在這裡自己合併。
+ * **只看名次不看分數**——BM25 與 cosine 的分數量級不同，相加沒有意義。
+ * 合併後再套知識類型權重（weightOf），排序規則與 lexical_only 時一致。
+ */
+export function fuseRankings(lists: readonly (readonly SearchHit[])[], topK?: number): RetrievedChunk[] {
+  const merged = new Map<string, { hit: SearchHit; score: number }>();
+  for (const list of lists) {
+    list.forEach((hit, rank) => {
+      const key = hit._source.chunk_id ?? hit._id;
+      const contribution = 1 / (RRF_K + rank + 1);
+      const seen = merged.get(key);
+      if (seen) seen.score += contribution;
+      else merged.set(key, { hit, score: contribution });
+    });
+  }
+  return [...merged.values()]
+    .map(({ hit, score }) => {
+      const c = toRetrievedChunk(hit);
+      return { ...c, rawScore: score, weightedScore: score * weightOf(c) };
+    })
     .sort((a, b) => b.weightedScore - a.weightedScore)
     .slice(0, clampTopK(topK));
 }

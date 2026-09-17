@@ -16,3 +16,4 @@ export * from './runtime/unlock.js';
 export * from './notification/templates.js';
 export * from './knowledge/insights.js';
 export * from './knowledge/faq-index.js';
+export * from './knowledge/embedding.js';
