@@ -113,7 +113,7 @@ export function EnrollmentPolicyCard({ course }: { course: CourseDetailDto }) {
           {saved && <Notice kind="ok">已儲存。</Notice>}
           <ErrorAlert error={error} />
           <fieldset disabled={!writable || busy} className="form-grid">
-            <div>
+            <div className="check-group">
               <strong>學員怎麼加入</strong>
               {(Object.keys(JOIN_TEXT) as JoinBy[]).map((k) => (
                 <label key={k} className="check">

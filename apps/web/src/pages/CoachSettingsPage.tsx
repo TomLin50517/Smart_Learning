@@ -100,7 +100,7 @@ export function CoachSettingsPage() {
             啟用 AI 學習教練
           </label>
           <div className="muted small">停用後學員看到「AI 教練暫時無法使用」，課程學習、成績與證書不受影響。</div>
-          <div>
+          <div className="check-group">
             <strong>課程人員能否閱讀學員的教練對話</strong>
             <label className="check">
               <input type="radio" name="visibility" checked={visibility === 'aggregate_only'} onChange={() => setVisibility('aggregate_only')} />

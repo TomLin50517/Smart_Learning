@@ -121,7 +121,7 @@ code.wrap {
 }
 
 /* ---- 表單 ---------------------------------------------------------------- */
-input:not([type='checkbox']):not([type='file']),
+input:not([type='checkbox']):not([type='radio']):not([type='file']),
 select,
 textarea {
   font: inherit;
@@ -1000,6 +1000,35 @@ details.bulk > summary {
 .form-grid .form-actions {
   grid-column: 1 / -1;
 }
+
+/* radio／checkbox 群組的選項文字多半是一整句話，
+   擠在半欄寬會折成三四行——讓整個群組跨整行 */
+.form-grid > .check-group {
+  grid-column: 1 / -1;
+}
+
+/* 上傳欄位（9 處）：原生 file input 的按鈕是瀏覽器預設外觀，
+   和其他按鈕擺在一起格格不入。用 ::file-selector-button 統一，不必改動元件 */
+input[type='file'] {
+  font: inherit;
+  max-width: 100%;
+  color: var(--muted);
+}
+input[type='file']::file-selector-button {
+  font: inherit;
+  font-weight: 500;
+  margin-right: 10px;
+  padding: 7px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+input[type='file']::file-selector-button:hover {
+  border-color: var(--brand);
+  color: var(--brand);
+}
 .form-actions {
   display: flex;
   gap: 10px;
@@ -1307,6 +1336,42 @@ details.bulk > summary {
 }
 .card-grid .card {
   margin-bottom: 0;
+}
+
+/* 首頁的功能入口（SD §7.1）：和側邊導航同一份資料，
+   但每項附一句用途說明並排成卡片——只列連結的話等於把導航再抄一遍 */
+.shortcuts {
+  grid-column: 1 / -1;
+}
+.shortcut-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+.shortcut {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  text-decoration: none;
+}
+.shortcut:hover,
+.shortcut:focus-visible {
+  border-color: var(--brand);
+  background: var(--surface);
+}
+.shortcut strong {
+  color: var(--brand);
+}
+.shortcut span {
+  font-size: 0.88rem;
+  color: var(--muted);
+  line-height: 1.5;
 }
 .card.empty {
   text-align: center;
