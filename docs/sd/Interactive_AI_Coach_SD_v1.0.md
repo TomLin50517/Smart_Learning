@@ -2584,6 +2584,22 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | image | OCR 工具只裝在 worker 的 target（`--target worker`，約 +100 MiB）；api 用不到那些二進位。layer 與 runtime 共享，磁碟無額外成本（與 backup target 同模式）。compose 的 worker 預設 `OCR_ENABLED=true` |
 | 未做 | 不做版面分析（表格、多欄），整頁視為單一文字區塊（`--psm 6`）；不對既有已退件的教材自動重跑；不支援手寫辨識 |
 
+## 6.31 語意檢索（v1.41）
+
+實作：`packages/domain/src/knowledge/{search.ts,embedding.ts}`、`apps/worker/src/{embedding.ts,search.ts,handlers/document-index.ts,handlers/derived-index.ts}`、`apps/api/src/common/embedding.ts`、`modules/knowledge/application/retriever.ts`、`docs/ops/semantic-search-migration.md`。**無 migration**。
+
+| 項目 | 實作 |
+|---|---|
+| 索引 | `knowledge_chunks_v2` 新增 `embedding`（`dense_vector`、cosine、維度取自 `EMBEDDING_DIMENSIONS`）。未設定 embedding 時不建立該欄位，與 v1 完全相同 |
+| 產生向量 | worker 索引時分批（64 段）呼叫 OpenAI 相容的 `/embeddings`。**教材 chunk 與 FAQ／常見錯誤都要寫入向量**——少了任一邊，語意檢索就看不到那種知識來源 |
+| 金鑰 | **平台層級**金鑰，不是組織的虛擬金鑰：worker 依 ADR-034 讀不到 `organization_ai_credentials`（DB 不變條件 T86），且建索引是系統行為而非代表某組織對外發問。AI 教練的對話仍用各組織自己的金鑰 |
+| 對齊 | `parseEmbeddingResponse` 嚴格檢查數量、維度、index 重複與缺漏，對不齊一律丟錯。錯位的向量會讓每個 chunk 配到別人的語意，檢索結果莫名其妙且**完全靜默** |
+| 檢索 | BM25（cjk_bigram）與向量 kNN 各查一次，以 RRF（k=60）合併後再套知識類型權重。**ES 內建的 RRF 需要 Enterprise 授權**（basic 回 403），因此合併實作在 `fuseRankings`；只看名次不看分數——BM25 與 cosine 的量級不同，相加沒有意義 |
+| 範圍 | kNN 查詢帶與 lexical **完全相同**的四道 filter（INV-T6）；範圍不完整時回 `null` 而不是送出少了限制的向量查詢 |
+| 降級 | 未設定 embedding、或問題向量化失敗 → 自動退回 lexical_only。**embedding 服務故障不該讓學員完全問不到東西** |
+| 升級 | `dense_vector` 的維度無法追加，既有 index 沒有向量欄位時 worker 會讓索引工作失敗並指向 `docs/ops/semantic-search-migration.md`，不會靜默索引成沒有向量的狀態 |
+| 未做 | 不做 query rewriting／HyDE；重新索引需人工觸發（見遷移文件）；更換模型（維度不同）必須重建索引並調高 `KNOWLEDGE_CHUNKS_INDEX` 的版本號 |
+
 ---
 
 # 7. Frontend 設計
@@ -4599,3 +4615,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.38 | 2026-09-16 | 新增 §6.28 維運：證書 PDF（pdf-lib＋Noto Sans TC subset＋QR code，發證時產生、學員與課程人員下載）、備份（compose backup 服務、每日 pg_dump＋物件增量同步、7／4／6 保留、手動觸發、backup_runs）、系統狀態頁與告警、維運指標與 Prometheus 規則；migration 0026 | Software Designer |
 | v1.39 | 2026-09-16 | 新增 §6.29 上傳安全：教材在移出 quarantine 前經 clamd（zINSTREAM）掃描惡意程式，掃到即 rejected 並記 `malware_detected: <簽章>`；掃描服務不可用一律重試而非放行（「掃不到」≠「乾淨」）；未設定 CLAMAV_HOST 時為 no-op 並於 worker 啟動留痕；.docx 以 inspectZip 限制解壓比例與總量防 zip bomb；clamd.conf 放寬 StreamMaxLength 至 512 MB 對齊 upload.max_size；compose 新增 clamav 服務。無 migration | Software Designer |
 | v1.40 | 2026-09-16 | 新增 §6.30 掃描版 PDF 的 OCR：PDF 沒有文字層時以 pdftoppm 轉圖（300 DPI 灰階）＋ tesseract（chi_tra+eng、psm 6）辨識，`tidyOcrText` 移除 tesseract 在中文字之間插入的空白（英文空白保留）；上限 50 頁／單頁 60 秒；讀不到文字仍回 `no_text`；`OCR_ENABLED` 預設 false，啟用卻缺工具則 job 明確失敗；OCR 工具只裝在 Dockerfile 的 worker target（約 +100 MiB，api 不含），compose 的 worker 預設開啟。無 migration | Software Designer |
+| v1.41 | 2026-09-17 | 新增 §6.31 語意檢索：knowledge_chunks_v2 加 dense_vector（cosine，維度取自 EMBEDDING_DIMENSIONS），worker 索引教材 chunk 與 FAQ 時分批產生向量（平台層級金鑰——worker 依 ADR-034／T86 讀不到組織金鑰）；檢索為 BM25 與 kNN 各查一次後以 RRF（k=60）自行合併（ES 內建 RRF 需 Enterprise 授權，basic 回 403），再套知識類型權重；kNN 帶與 lexical 相同的四道範圍 filter（INV-T6）；未設定或向量化失敗自動退回 lexical_only；既有 index 無向量欄位時明確失敗並指向 docs/ops/semantic-search-migration.md。無 migration | Software Designer |

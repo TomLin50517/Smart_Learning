@@ -4,6 +4,7 @@ import { pino } from 'pino';
 import { z } from 'zod';
 import { Dispatcher } from './dispatcher.js';
 import { createScanner } from './clamav.js';
+import { createEmbeddingClient } from './embedding.js';
 import { createOcrEngine } from './ocr.js';
 import { CertificateGenerateHandler } from './handlers/certificate-generate.js';
 import { DerivedIndexHandler } from './handlers/derived-index.js';
@@ -47,6 +48,13 @@ const env = z
     CLAMAV_HOST: z.string().default(''),
     CLAMAV_PORT: z.coerce.number().int().min(1).max(65535).default(3310),
     CLAMAV_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
+    // 語意檢索的 embedding（SD §6.31）：平台層級金鑰（worker 讀不到組織金鑰，ADR-034／T86）。
+    // 未設定則不寫入向量，檢索自動維持 lexical_only
+    EMBEDDING_BASE_URL: z.string().default(''),
+    EMBEDDING_API_KEY: z.string().default(''),
+    EMBEDDING_MODEL: z.string().default('text-embedding-3-small'),
+    EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().max(4096).default(1536),
+    EMBEDDING_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
     // 掃描版 PDF 的 OCR（SD §6.30）：需要 worker image（--target worker）的 tesseract 與 poppler-utils。
     // 預設關閉——啟用卻沒有工具時 job 會明確失敗，不會把辨識失敗誤當成「沒有文字」
     OCR_ENABLED: z.stringbool().default(false),
@@ -75,6 +83,8 @@ const search = createWorkerSearch(env);
 const mailer = createWorkerMailer(env);
 const scanner = createScanner(env);
 if (!scanner.enabled) log.warn('CLAMAV_HOST is not set — uploaded documents will NOT be scanned for malware');
+const embedding = createEmbeddingClient(env);
+if (!embedding.enabled) log.info('EMBEDDING_BASE_URL is not set — documents are indexed for lexical search only');
 const ocr = createOcrEngine({
   enabled: env.OCR_ENABLED,
   dpi: env.OCR_DPI,
@@ -92,9 +102,9 @@ const dispatcher = new Dispatcher(db, log, {
 // Handlers 依 SD §11.1 的 job 目錄於各 Phase 加入
 dispatcher.register(new CertificateGenerateHandler(db, storage, { fontPath: env.CERTIFICATE_FONT_PATH, baseUrl: env.PUBLIC_BASE_URL }));
 dispatcher.register(new DocumentParseHandler(db, storage, { scanner, ocr }));
-dispatcher.register(new DocumentIndexHandler(db, storage, search));
+dispatcher.register(new DocumentIndexHandler(db, storage, search, embedding));
 dispatcher.register(new DocumentSyncHandler(db, search));
-dispatcher.register(new DerivedIndexHandler(db, search));
+dispatcher.register(new DerivedIndexHandler(db, search, embedding));
 dispatcher.register(new NotificationEmailHandler(db, mailer, log, env.PUBLIC_BASE_URL));
 
 async function shutdown(signal: string): Promise<void> {

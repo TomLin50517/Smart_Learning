@@ -1,7 +1,8 @@
 import { DERIVED_INDEX_JOB, faqChunkId, type FaqKind } from '@iac/contracts';
-import { faqIndexDocument, KNOWLEDGE_CHUNKS_ALIAS } from '@iac/domain';
+import { faqIndexDocument, KNOWLEDGE_CHUNKS_ALIAS, type ChunkIndexDocument } from '@iac/domain';
 import type pg from 'pg';
 import type { Job, JobHandler } from '../dispatcher.js';
+import { embedAll, type EmbeddingClient } from '../embedding.js';
 import { FatalError, RetryableError } from '../retry-policy.js';
 import { describeFailure, ensureChunkIndex, type SearchClient } from '../search.js';
 
@@ -26,6 +27,7 @@ export class DerivedIndexHandler implements JobHandler {
   constructor(
     private readonly db: pg.Pool,
     private readonly es: SearchClient,
+    private readonly embedding: EmbeddingClient,
   ) {}
 
   async handle(job: Job): Promise<void> {
@@ -44,21 +46,34 @@ export class DerivedIndexHandler implements JobHandler {
     if (!faqs.rows.length) return;
     const versions = (await this.db.query<{ id: string }>(`SELECT id FROM course_versions WHERE course_id = $1`, [courseId])).rows.map((r) => r.id);
 
-    await ensureChunkIndex(this.es);
+    await ensureChunkIndex(this.es, this.embedding.enabled ? this.embedding.dimensions : null);
     const now = new Date().toISOString();
-    const lines: string[] = [];
+    const indexing: { id: string; doc: ChunkIndexDocument }[] = [];
+    const removing: string[] = [];
     for (const f of faqs.rows) {
       const id = faqChunkId(f.id);
       if (f.status === 'verified' && f.evidence_status === 'grounded' && f.version_id && f.question && f.answer) {
-        const doc = faqIndexDocument(
-          { id: f.id, versionId: f.version_id, organizationId: co.rows[0].organization_id, courseId, courseVersionIds: versions, kind: f.kind, question: f.question, answer: f.answer },
-          now,
-        );
-        lines.push(JSON.stringify({ index: { _index: KNOWLEDGE_CHUNKS_ALIAS, _id: id } }), JSON.stringify(doc));
+        indexing.push({
+          id,
+          doc: faqIndexDocument(
+            { id: f.id, versionId: f.version_id, organizationId: co.rows[0].organization_id, courseId, courseVersionIds: versions, kind: f.kind, question: f.question, answer: f.answer },
+            now,
+          ),
+        });
       } else {
-        lines.push(JSON.stringify({ delete: { _index: KNOWLEDGE_CHUNKS_ALIAS, _id: id } }));
+        removing.push(id);
       }
     }
+
+    // FAQ 也要有向量：少了就等於語意檢索看不到 FAQ 與常見錯誤，
+    // 而那是權重最高的知識來源（weightOf 給 verified FAQ ×1.3）
+    const vectors = await embedAll(this.embedding, indexing.map((x) => x.doc.content));
+    const lines: string[] = [];
+    indexing.forEach((x, i) => {
+      const doc = vectors.length > 0 ? { ...x.doc, embedding: vectors[i]! } : x.doc;
+      lines.push(JSON.stringify({ index: { _index: KNOWLEDGE_CHUNKS_ALIAS, _id: x.id } }), JSON.stringify(doc));
+    });
+    for (const id of removing) lines.push(JSON.stringify({ delete: { _index: KNOWLEDGE_CHUNKS_ALIAS, _id: id } }));
     const res = await this.es.request<BulkResponse>('POST', '/_bulk?refresh=wait_for', lines.join('\n') + '\n', { ndjson: true });
     if (res.status >= 300) throw new RetryableError(`faq bulk index failed: ${describeFailure(res)}`);
     // 刪除不存在的文件（從未索引過）回 404，不算失敗

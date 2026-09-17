@@ -1,4 +1,4 @@
-import { KNOWLEDGE_CHUNKS_ALIAS, KNOWLEDGE_CHUNKS_INDEX, KNOWLEDGE_CHUNKS_INDEX_BODY } from '@iac/domain';
+import { chunkIndexBody, KNOWLEDGE_CHUNKS_ALIAS, KNOWLEDGE_CHUNKS_INDEX } from '@iac/domain';
 import { RetryableError } from './retry-policy.js';
 
 /**
@@ -54,11 +54,18 @@ export function createWorkerSearch(env: { ELASTICSEARCH_URL: string; ELASTICSEAR
   };
 }
 
-/** 第一次使用時建立 index 與 alias（SD §4.1）；已存在就略過 */
-export async function ensureChunkIndex(es: SearchClient): Promise<void> {
+/**
+ * 第一次使用時建立 index 與 alias（SD §4.1）；已存在就略過。
+ * `embeddingDims` 給定時才建立向量欄位——**既有的 index 不會被改寫**，
+ * 因為 dense_vector 的 dims 無法追加；從 lexical 換成語意檢索需要重建 index（見 SD §6.31）。
+ */
+export async function ensureChunkIndex(es: SearchClient, embeddingDims: number | null = null): Promise<void> {
   const alias = await es.request('GET', `/_alias/${KNOWLEDGE_CHUNKS_ALIAS}`);
-  if (alias.status === 200) return;
-  const r = await es.request('PUT', `/${KNOWLEDGE_CHUNKS_INDEX}`, { ...KNOWLEDGE_CHUNKS_INDEX_BODY, aliases: { [KNOWLEDGE_CHUNKS_ALIAS]: { is_write_index: true } } });
+  if (alias.status === 200) {
+    if (embeddingDims !== null) await assertVectorField(es);
+    return;
+  }
+  const r = await es.request('PUT', `/${KNOWLEDGE_CHUNKS_INDEX}`, { ...chunkIndexBody(embeddingDims), aliases: { [KNOWLEDGE_CHUNKS_ALIAS]: { is_write_index: true } } });
   if (r.status < 300 || JSON.stringify(r.body).includes('resource_already_exists_exception')) return;
   throw new RetryableError(`create index failed: ${r.status} ${JSON.stringify(r.body).slice(0, 300)}`);
 }
@@ -66,4 +73,28 @@ export async function ensureChunkIndex(es: SearchClient): Promise<void> {
 /** 錯誤訊息只取前段，避免把整份回應寫進 log */
 export function describeFailure(r: SearchResponse<unknown>): string {
   return `${r.status} ${JSON.stringify(r.body).slice(0, 300)}`;
+}
+
+interface MappingResponse {
+  [index: string]: { mappings?: { properties?: Record<string, unknown> } };
+}
+
+/**
+ * 既有 index 是否含向量欄位。
+ *
+ * 升級情境：舊部署已經有 knowledge_chunks_v1 與 alias，`ensureChunkIndex` 不會再建立 index，
+ * 於是向量欄位永遠不存在；而 mapping 是 dynamic:'strict'，寫入帶 embedding 的文件會被 ES 拒絕。
+ * 與其讓每份教材都索引失敗而看不出原因，這裡直接給出可執行的指示（見 docs/ops/semantic-search-migration.md）。
+ */
+async function assertVectorField(es: SearchClient): Promise<void> {
+  const r = await es.request<MappingResponse>('GET', `/${KNOWLEDGE_CHUNKS_ALIAS}/_mapping`);
+  if (r.status >= 300) throw new RetryableError(`could not read index mapping: ${describeFailure(r)}`);
+  const hasVector = Object.values(r.body ?? {}).some((i) => i.mappings?.properties?.['embedding']);
+  if (!hasVector) {
+    throw new RetryableError(
+      `索引 ${KNOWLEDGE_CHUNKS_ALIAS} 沒有 embedding 欄位，無法寫入向量。` +
+        '啟用語意檢索需要重建索引，步驟見 docs/ops/semantic-search-migration.md；' +
+        '若要維持關鍵字檢索，把 EMBEDDING_BASE_URL 留空即可。',
+    );
+  }
 }
