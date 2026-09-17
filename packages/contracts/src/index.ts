@@ -19,3 +19,4 @@ export * from './permissions.generated.js';
 export * from './notification.js';
 export * from './faq.js';
 export * from './ops.js';
+export * from './cms.js';
