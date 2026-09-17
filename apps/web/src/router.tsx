@@ -7,7 +7,9 @@ import { VersionEditorPage } from './pages/VersionEditorPage';
 import { ForgotPasswordPage, LoginPage, OrgLoginPage, SetPasswordPage } from './pages/auth-pages';
 import { BrandingPage } from './pages/BrandingPage';
 import { NotFoundPage, RouteError } from './pages/errors-pages';
+import { HomepageEditorPage } from './pages/HomepageEditorPage';
 import { HomePage } from './pages/HomePage';
+import { PublicHomePage } from './pages/PublicHomePage';
 import { JobsPage } from './pages/JobsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { LicensePage } from './pages/LicensePage';
@@ -33,7 +35,7 @@ import { ProfilePage } from './pages/ProfilePage';
  * - /password-reset 與 /set-password 的路徑與 API 寄出的連結一致（AuthService.link）
  */
 export const router = createBrowserRouter([
-  { path: '/', element: <Navigate to="/app" replace /> },
+  { path: '/', element: <PublicHomePage />, errorElement: <RouteError /> },
   { path: '/login', element: <LoginPage />, errorElement: <RouteError /> },
   // 組織登入網址：組織的 Logo、名稱與配色（SD §6.16）
   { path: '/o/:code', element: <OrgLoginPage />, errorElement: <RouteError /> },
@@ -65,6 +67,7 @@ export const router = createBrowserRouter([
       { path: 'org/users', element: <OrgMembersPage /> },
       { path: 'org/cohorts', element: <CohortsPage /> },
       { path: 'org/branding', element: <BrandingPage /> },
+      { path: 'org/homepage', element: <HomepageEditorPage scope="organization" /> },
       { path: 'org/knowledge', element: <OrgKnowledgePage /> },
       { path: 'org/coach', element: <CoachSettingsPage /> },
       // Platform Admin
@@ -76,6 +79,7 @@ export const router = createBrowserRouter([
       { path: 'platform/system', element: <SettingsPage /> },
       { path: 'platform/jobs', element: <JobsPage /> },
       { path: 'platform/system-status', element: <SystemStatusPage /> },
+      { path: 'platform/homepage', element: <HomepageEditorPage scope="platform" /> },
       // 稽核紀錄／帳號活動（所有 audit.read_* 共用，SD §12.4）
       { path: 'audit', element: <AuditPage /> },
       { path: '*', element: <NotFoundPage /> },
