@@ -2600,6 +2600,22 @@ SA §12.2 已列出全部端點與所需 permission/capability/audit。SD 不重
 | 升級 | `dense_vector` 的維度無法追加，既有 index 沒有向量欄位時 worker 會讓索引工作失敗並指向 `docs/ops/semantic-search-migration.md`，不會靜默索引成沒有向量的狀態 |
 | 未做 | 不做 query rewriting／HyDE；重新索引需人工觸發（見遷移文件）；更換模型（維度不同）必須重建索引並調高 `KNOWLEDGE_CHUNKS_INDEX` 的版本號 |
 
+## 6.32 公開首頁 CMS（v1.42）
+
+實作：`packages/contracts/src/cms.ts`、`apps/api/src/modules/cms/{api/cms.controller.ts,application/{cms.service.ts,cms-inputs.ts}}`、`apps/web/src/pages/{PublicHomePage,HomepageEditorPage,page-blocks}.tsx`。沿用 migration 0009 的 `cms_pages`／`cms_revisions` 與 0012 的 `cms.*` 權限，**無新 migration**。對應 SA UC-CMS-001～005、§5.4。
+
+| 項目 | 實作 |
+|---|---|
+| 頁面歸屬 | `cms_pages.organization_id` 為 NULL＝**平台首頁**（`/`），有值＝該組織首頁（`/?org=代碼`）。唯一索引以 `COALESCE` 把 NULL 併入比較 |
+| 端點 | 組織：`/cms/pages/{key}`（organization scope）；平台：`/platform/cms/pages/{key}`（platform scope）。**分成兩組**是因為 `cms.*` 本身是 organization 範圍的權限，而平台首頁不屬於任何組織——以 session 的 active organization 解析會落空而回 404 |
+| 草稿與發布 | 存草稿只改 `draft_blocks`，**公開頁面完全不受影響**；按下發布才建立 `cms_revisions` 並更新 `current_revision_id`。草稿永遠不會出現在公開頁 |
+| 回滾 | 把指定 revision 的內容放回草稿並**重新發布成新的一版**——舊 revision 永不改寫，歷史完整可追（UC-CMS-004） |
+| 區塊 | `hero`／`richtext`／`image`／`video`／`announcement`／`callout`／`footer`（SD §7.5 的 CMS 子集；`activity` 只屬課程單元，放進首頁會被拒絕） |
+| 注入防護 | `strictObject` ＋ `discriminatedUnion`：**未知 type 與多餘欄位一律整筆拒絕**（擋下 `{type:'richtext',html:'<script>'}` 這類夾帶）；`href` 只接受 http(s)（擋 `javascript:`／`data:`）；圖片影片只接受 `assetId`，不收外部網址（防 SSRF 與追蹤像素）。前端以 `parseMarkdownLite` 轉成純文字結構交給 React 轉義，**全程不使用 `dangerouslySetInnerHTML`** |
+| 公開素材 | `/public/cms/assets/{id}`：只有**目前已發布**的首頁真正引用到的素材才取得到（草稿引用的不算）——不是開放整個素材庫，否則等於把所有組織的教材素材對外曝光。以 SHA-256 為 ETag |
+| 前端 | `/` 為公開首頁（原本導向 `/app`）；編輯頁 `/app/org/homepage` 與 `/app/platform/homepage`，含預覽、發布紀錄與回滾。`/api/me` 的 permissions 不含 scope，導覽以平台層級權限一併判斷才不會把平台首頁入口顯示給組織管理員 |
+| 未做 | `course_list` 區塊（需要先定義「課程是否可對外曝光」，屬產品決策）；編輯器尚未提供素材挑選介面（圖片影片需先在素材庫上傳並填入 id）；公開素材端點不支援 Range（影片會整段下載） |
+
 ---
 
 # 7. Frontend 設計
@@ -4616,3 +4632,4 @@ SA 的 ADR-028 開放課程範圍的 Coach 逐字稿讀取，四道約束在 SD 
 | v1.39 | 2026-09-16 | 新增 §6.29 上傳安全：教材在移出 quarantine 前經 clamd（zINSTREAM）掃描惡意程式，掃到即 rejected 並記 `malware_detected: <簽章>`；掃描服務不可用一律重試而非放行（「掃不到」≠「乾淨」）；未設定 CLAMAV_HOST 時為 no-op 並於 worker 啟動留痕；.docx 以 inspectZip 限制解壓比例與總量防 zip bomb；clamd.conf 放寬 StreamMaxLength 至 512 MB 對齊 upload.max_size；compose 新增 clamav 服務。無 migration | Software Designer |
 | v1.40 | 2026-09-16 | 新增 §6.30 掃描版 PDF 的 OCR：PDF 沒有文字層時以 pdftoppm 轉圖（300 DPI 灰階）＋ tesseract（chi_tra+eng、psm 6）辨識，`tidyOcrText` 移除 tesseract 在中文字之間插入的空白（英文空白保留）；上限 50 頁／單頁 60 秒；讀不到文字仍回 `no_text`；`OCR_ENABLED` 預設 false，啟用卻缺工具則 job 明確失敗；OCR 工具只裝在 Dockerfile 的 worker target（約 +100 MiB，api 不含），compose 的 worker 預設開啟。無 migration | Software Designer |
 | v1.41 | 2026-09-17 | 新增 §6.31 語意檢索：knowledge_chunks_v2 加 dense_vector（cosine，維度取自 EMBEDDING_DIMENSIONS），worker 索引教材 chunk 與 FAQ 時分批產生向量（平台層級金鑰——worker 依 ADR-034／T86 讀不到組織金鑰）；檢索為 BM25 與 kNN 各查一次後以 RRF（k=60）自行合併（ES 內建 RRF 需 Enterprise 授權，basic 回 403），再套知識類型權重；kNN 帶與 lexical 相同的四道範圍 filter（INV-T6）；未設定或向量化失敗自動退回 lexical_only；既有 index 無向量欄位時明確失敗並指向 docs/ops/semantic-search-migration.md。無 migration | Software Designer |
+| v1.42 | 2026-09-17 | 新增 §6.32 公開首頁 CMS：block 草稿／發布／回滾（revision 永不改寫），平台首頁與組織首頁分成 platform／organization 兩組端點（cms.* 為 organization 範圍權限，平台首頁不屬任何組織）；注入防護以 strictObject＋discriminatedUnion 拒絕未知 type 與多餘欄位、href 限 http(s)、圖片影片只收 assetId，前端不使用 dangerouslySetInnerHTML；`/public/cms/assets/{id}` 只開放已發布首頁引用到的素材；`/` 改為公開首頁（原為導向 /app）。沿用 migration 0009 與 0012，無新 migration | Software Designer |

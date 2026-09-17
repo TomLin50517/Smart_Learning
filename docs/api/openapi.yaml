@@ -1390,6 +1390,57 @@ paths:
       responses:
         '200': { description: OK }
 
+  # 平台首頁（`cms_pages.organization_id` 為 NULL，即 `/` 顯示的內容）。
+  # cms.* 本身是 organization 範圍的權限，但平台首頁不屬於任何組織——以 session 的
+  # active organization 解析會落空，因此另設一組 platform scope 的端點（SD §6.32）。
+  /platform/cms/pages/{pageKey}:
+    parameters:
+      - { name: pageKey, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: getPlatformCmsPage
+      tags: [CMS]
+      x-required-permission: cms.read
+      responses:
+        '200': { description: '`CmsPageDto`（packages/contracts/src/cms.ts）' }
+
+  /platform/cms/pages/{pageKey}/draft:
+    parameters:
+      - { name: pageKey, in: path, required: true, schema: { type: string } }
+    patch:
+      operationId: updatePlatformCmsDraft
+      tags: [CMS]
+      x-required-permission: cms.write
+      x-required-capability: configurationWriteAllowed
+      x-audit: cms.updated
+      description: block-based schema；禁止 raw HTML/script 注入（SD §7.5）
+      responses:
+        '200': { description: OK }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /platform/cms/pages/{pageKey}/publish:
+    parameters:
+      - { name: pageKey, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: publishPlatformCmsPage
+      tags: [CMS]
+      x-required-permission: cms.publish
+      x-required-capability: configurationWriteAllowed
+      x-audit: cms.published
+      responses:
+        '200': { description: OK }
+
+  /platform/cms/pages/{pageKey}/rollback:
+    parameters:
+      - { name: pageKey, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: rollbackPlatformCmsPage
+      tags: [CMS]
+      x-required-permission: cms.rollback
+      x-required-capability: configurationWriteAllowed
+      x-audit: cms.rolled_back
+      responses:
+        '200': { description: OK }
+
   # ----------------------------------------------------------------- Course
   /courses:
     get:
@@ -3759,12 +3810,43 @@ paths:
         '429': { $ref: '#/components/responses/RateLimited' }
 
   /public/cms/home:
+    parameters:
+      - name: org
+        in: query
+        required: false
+        schema: { type: string }
+        description: 組織代碼；省略時回平台首頁
     get:
       operationId: getPublicHome
       tags: [CMS]
       security: []
+      description: |
+        公開首頁（不需登入）。**只回已發布的內容**——草稿永遠不會出現在這裡。
+        每個 IP 每分鐘 60 次；nginx 的 /public/ 另有第一層限流。
       servers:
         - url: https://{host}
           variables: { host: { default: localhost } }
       responses:
-        '200': { description: OK }
+        '200': { description: '`PublicHomeDto`（packages/contracts/src/cms.ts）' }
+        '404': { description: 查無此組織代碼 }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /public/cms/assets/{assetId}:
+    parameters:
+      - { name: assetId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: getPublicCmsAsset
+      tags: [CMS]
+      security: []
+      description: |
+        公開首頁的圖片與影片。**只有已發布首頁真正引用到的素材**才取得到——
+        不是開放整個素材庫（ARCH §16.1）。內容不可變，以 SHA-256 為 ETag；不支援 Range。
+      responses:
+        '200':
+          description: 素材內容
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '304': { description: 未變更 }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
