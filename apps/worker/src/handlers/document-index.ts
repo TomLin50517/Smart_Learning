@@ -2,6 +2,7 @@ import { DOCUMENT_INDEX_JOB, documentObjectKeys, type DocumentStatus } from '@ia
 import { KNOWLEDGE_CHUNKS_ALIAS, type ChunkIndexDocument } from '@iac/domain';
 import type pg from 'pg';
 import type { Job, JobHandler } from '../dispatcher.js';
+import { embedAll, type EmbeddingClient } from '../embedding.js';
 import { FatalError, RetryableError } from '../retry-policy.js';
 import { describeFailure, ensureChunkIndex, type SearchClient } from '../search.js';
 import type { ObjectStorage } from '../storage.js';
@@ -38,6 +39,7 @@ export class DocumentIndexHandler implements JobHandler {
     private readonly db: pg.Pool,
     private readonly storage: ObjectStorage,
     private readonly es: SearchClient,
+    private readonly embedding: EmbeddingClient,
   ) {}
 
   private async fail(r: Row, reason: string, job: Job): Promise<void> {
@@ -70,7 +72,7 @@ export class DocumentIndexHandler implements JobHandler {
   }
 
   private async index(r: Row): Promise<void> {
-    await ensureChunkIndex(this.es);
+    await ensureChunkIndex(this.es, this.embedding.enabled ? this.embedding.dimensions : null);
     const keys = documentObjectKeys({ prefix: r.storage_prefix, organizationId: r.organization_id, documentId: r.source_document_id, versionId: r.id });
     const text = (await this.storage.get(keys.extracted)).toString('utf8');
     const chunks = await this.db.query<{ chunk_id: string; chunk_index: number; page_no: number | null; section_path: string | null; char_start: number; char_end: number; token_count: number | null }>(
@@ -82,8 +84,12 @@ export class DocumentIndexHandler implements JobHandler {
     const now = new Date().toISOString();
 
     for (let i = 0; i < chunks.rows.length; i += BATCH) {
+      const slice = chunks.rows.slice(i, i + BATCH);
+      const contents = slice.map((c) => text.slice(c.char_start, c.char_end));
+      // 向量與 contents 一一對應；對不齊會在 parseEmbeddingResponse 就丟錯，不會寫進索引
+      const vectors = await embedAll(this.embedding, contents);
       const lines: string[] = [];
-      for (const c of chunks.rows.slice(i, i + BATCH)) {
+      slice.forEach((c, n) => {
         const doc: ChunkIndexDocument = {
           organization_id: r.organization_id,
           course_id: r.course_id,
@@ -97,16 +103,17 @@ export class DocumentIndexHandler implements JobHandler {
           acl_scope: r.course_id ? 'course' : 'organization',
           language: r.language,
           title: r.title,
-          content: text.slice(c.char_start, c.char_end),
+          content: contents[n]!,
           page_no: c.page_no,
           section_path: c.section_path,
           char_start: c.char_start,
           char_end: c.char_end,
           token_count: c.token_count,
           indexed_at: now,
+          ...(vectors.length > 0 && { embedding: vectors[n]! }),
         };
         lines.push(JSON.stringify({ index: { _index: KNOWLEDGE_CHUNKS_ALIAS, _id: c.chunk_id } }), JSON.stringify(doc));
-      }
+      });
       const last = i + BATCH >= chunks.rows.length;
       const res = await this.es.request<BulkResponse>('POST', `/_bulk${last ? '?refresh=wait_for' : ''}`, lines.join('\n') + '\n', { ndjson: true });
       if (res.status >= 300 || res.body?.errors) {
