@@ -27,6 +27,7 @@ export function navItems(me: MeResponse): NavItem[] {
     items.push({ to: '/app/org/cohorts', label: '班級管理' });
   }
   if (me.activeOrganization && can(me, 'org.settings.write')) items.push({ to: '/app/org/branding', label: '品牌設定' });
+  if (me.activeOrganization && can(me, 'cms.write')) items.push({ to: '/app/org/homepage', label: '首頁內容' });
   if (me.activeOrganization && can(me, 'knowledge.shared.write')) items.push({ to: '/app/org/knowledge', label: '共用教材' });
   if (me.activeOrganization && can(me, 'coach.transcript_policy.write')) items.push({ to: '/app/org/coach', label: 'AI 教練設定' });
   if (can(me, 'course.read')) items.push({ to: '/app/courses', label: '課程管理' });
@@ -35,6 +36,9 @@ export function navItems(me: MeResponse): NavItem[] {
   }
   if (can(me, 'platform.license.read')) items.push({ to: '/app/platform/license', label: '系統授權' });
   if (can(me, 'platform.settings.read')) items.push({ to: '/app/platform/system', label: '平台設定' });
+  // permissions 是扁平集合（不含 scope），組織管理員同樣持有 cms.write——
+  // 以平台層級的權限一併判斷，避免把平台首頁的入口顯示給組織管理員
+  if (can(me, 'platform.settings.read') && can(me, 'cms.write')) items.push({ to: '/app/platform/homepage', label: '平台首頁' });
   if (can(me, 'platform.health.read')) items.push({ to: '/app/platform/system-status', label: '系統狀態' });
   if (can(me, 'platform.health.read')) items.push({ to: '/app/platform/jobs', label: '背景工作' });
   // 稽核：管理範圍者看「稽核紀錄」，只有 audit.read_self 者看「帳號活動」（同一頁，SD §12.4）

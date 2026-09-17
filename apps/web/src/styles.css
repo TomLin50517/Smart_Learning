@@ -1497,6 +1497,105 @@ pre {
   gap: 12px;
 }
 
+/* ---- 公開首頁與首頁編輯（SD §6.32）--------------------------------------- */
+.public-home {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 0 20px 60px;
+}
+.public-home-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 24px;
+}
+.public-home-bar .btn {
+  margin-left: auto;
+}
+
+.cms-hero {
+  text-align: center;
+  padding: 36px 0 28px;
+}
+.cms-hero h1 {
+  margin: 0 0 10px;
+  font-size: 2rem;
+}
+.cms-hero-sub {
+  color: var(--muted);
+  font-size: 1.05rem;
+  margin: 0 0 18px;
+}
+.cms-hero-image {
+  max-width: 100%;
+  border-radius: var(--radius-lg);
+  margin-bottom: 18px;
+}
+
+.cms-figure {
+  margin: 22px 0;
+  text-align: center;
+}
+.cms-figure img,
+.cms-figure video {
+  max-width: 100%;
+  border-radius: var(--radius);
+}
+
+.cms-announcements article {
+  border-top: 1px solid var(--border);
+  padding: 14px 0;
+}
+.cms-announcements h3 {
+  margin: 0 0 4px;
+}
+
+.cms-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  justify-content: center;
+  border-top: 1px solid var(--border);
+  margin-top: 36px;
+  padding-top: 18px;
+}
+
+.cms-block-edit {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+.cms-block-edit > header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.cms-block-edit .spacer {
+  flex: 1;
+}
+.cms-subitem {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+.cms-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.cms-preview {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  background: var(--surface-2);
+}
+
 /* ---- 窄螢幕 -------------------------------------------------------------- */
 @media (max-width: 760px) {
   .shell {
