@@ -14,6 +14,7 @@ import { csrfTokenFor } from '../../apps/api/src/common/csrf.js';
 import { hashToken } from '../../apps/api/src/common/tokens.js';
 import { ENV, loadEnv } from '../../apps/api/src/config/env.js';
 import { applyMigrations } from '../../tools/migrate.js';
+import { startOfFreshWindow } from './rate-limit-window.js';
 
 const PW = { api_pw: 'e2e_api', coach_pw: 'e2e_coach', worker_pw: 'e2e_worker', ro_pw: 'e2e_ro' };
 const SECRET = 'events-e2e-secret-events-e2e-secret';
@@ -299,6 +300,8 @@ describe('rate limit', () => {
   it('over 120 events per minute per enrollment gets 429 (learning is not blocked)', async () => {
     const a = await start(ID.READ, 'other');
     const batch = () => Array.from({ length: 50 }, (_, i) => ev('activity.heartbeat', {}, ago(i)));
+    // 3 批必須落在同一個視窗內，否則計數被拆開、第 3 批不會被擋
+    await startOfFreshWindow(admin);
     expect((await send(a, batch(), 'other')).statusCode).toBe(202);
     expect((await send(a, batch(), 'other')).statusCode).toBe(202);
     const third = await send(a, batch(), 'other');
