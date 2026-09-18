@@ -33,16 +33,18 @@ export function HomePage() {
           {can(me, 'platform.license.read') && <Link to="/app/platform/license">檢視授權詳情</Link>}
         </section>
 
-        <section className="card">
+        {/* 與側邊導航同一份資料，但附上用途說明；只列出這個帳號真的能開的頁面 */}
+        <section className="card shortcuts">
           <h2>可使用的功能</h2>
           {shortcuts.length ? (
-            <ul className="link-list">
+            <div className="shortcut-grid">
               {shortcuts.map((s) => (
-                <li key={s.to}>
-                  <Link to={s.to}>{s.label}</Link>
-                </li>
+                <Link key={s.to} to={s.to} className="shortcut">
+                  <strong>{s.label}</strong>
+                  {s.hint && <span>{s.hint}</span>}
+                </Link>
               ))}
-            </ul>
+            </div>
           ) : (
             <p className="muted">課程與學習功能將於後續版本開放。</p>
           )}

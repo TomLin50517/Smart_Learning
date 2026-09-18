@@ -150,37 +150,39 @@ export function HomepageEditorPage({ scope }: { scope: 'platform' | 'organizatio
           {page.data.revisions.length > 0 && (
             <section className="card">
               <h2>發布紀錄</h2>
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>版本</th>
-                    <th>發布時間</th>
-                    <th>發布者</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {page.data.revisions.map((r) => (
-                    <tr key={r.revisionNo}>
-                      <td>第 {r.revisionNo} 版</td>
-                      <td className="nowrap">{formatDateTime(r.publishedAt)}</td>
-                      <td>{r.publishedByName ?? '—'}</td>
-                      <td>
-                        {canPublish && r.revisionNo !== page.data!.publishedRevisionNo && (
-                          <button
-                            type="button"
-                            className="btn btn-small"
-                            disabled={busy}
-                            onClick={() => void run(() => api<CmsPageDto>('POST', `${base}/rollback`, { revisionNo: r.revisionNo }), `已回到第 ${r.revisionNo} 版的內容並發布`)}
-                          >
-                            回到這個版本
-                          </button>
-                        )}
-                      </td>
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>版本</th>
+                      <th>發布時間</th>
+                      <th>發布者</th>
+                      <th />
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {page.data.revisions.map((r) => (
+                      <tr key={r.revisionNo}>
+                        <td>第 {r.revisionNo} 版</td>
+                        <td className="nowrap">{formatDateTime(r.publishedAt)}</td>
+                        <td>{r.publishedByName ?? '—'}</td>
+                        <td>
+                          {canPublish && r.revisionNo !== page.data!.publishedRevisionNo && (
+                            <button
+                              type="button"
+                              className="btn btn-small"
+                              disabled={busy}
+                              onClick={() => void run(() => api<CmsPageDto>('POST', `${base}/rollback`, { revisionNo: r.revisionNo }), `已回到第 ${r.revisionNo} 版的內容並發布`)}
+                            >
+                              回到這個版本
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
               <p className="muted small">回滾會把舊版內容重新發布成新的一版，歷史紀錄不會被改寫。</p>
             </section>
           )}

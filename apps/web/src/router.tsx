@@ -1,38 +1,17 @@
 import { createBrowserRouter, Navigate } from 'react-router';
 import { RequireAuth } from './components/AppShell';
-import { AuditPage } from './pages/AuditPage';
-import { CoursePage } from './pages/CoursePage';
-import { CoursesPage } from './pages/CoursesPage';
-import { VersionEditorPage } from './pages/VersionEditorPage';
 import { ForgotPasswordPage, LoginPage, OrgLoginPage, SetPasswordPage } from './pages/auth-pages';
-import { BrandingPage } from './pages/BrandingPage';
 import { NotFoundPage, RouteError } from './pages/errors-pages';
-import { HomepageEditorPage } from './pages/HomepageEditorPage';
-import { HomePage } from './pages/HomePage';
 import { PublicHomePage } from './pages/PublicHomePage';
-import { JobsPage } from './pages/JobsPage';
-import { SettingsPage } from './pages/SettingsPage';
-import { LicensePage } from './pages/LicensePage';
-import { MyCertificatePage, MyCertificatesPage } from './pages/CertificatesPage';
-import { CoachSettingsPage } from './pages/CoachSettingsPage';
-import { CohortsPage } from './pages/CohortsPage';
-import { LearnerDetailPage } from './pages/LearnerDetailPage';
-import { VerifyPage } from './pages/VerifyPage';
-import { LearnPage } from './pages/LearnPage';
-import { MyCoursesPage } from './pages/MyCoursesPage';
-import { NotificationsPage } from './pages/NotificationsPage';
-import { OrgKnowledgePage } from './pages/OrgKnowledgePage';
-import { SystemStatusPage } from './pages/SystemStatusPage';
-import { MyTimelinePage } from './pages/MyTimelinePage';
-import { OrganizationsPage } from './pages/OrganizationsPage';
-import { OrgAiKeyPage } from './pages/OrgAiKeyPage';
-import { OrgMembersPage } from './pages/OrgMembersPage';
-import { ProfilePage } from './pages/ProfilePage';
 
 /**
  * 路由（SD §7.1；react-router 8 data router）。
- * - 需登入的頁面一律在 /app 之下；/ 保留給公開 CMS 首頁（尚未實作，暫時導向 /app）
+ * - 需登入的頁面一律在 /app 之下；/ 是公開首頁（SD §6.32）
  * - /password-reset 與 /set-password 的路徑與 API 寄出的連結一致（AuthService.link）
+ *
+ * **只有公開頁（首頁、登入、錯誤頁）靜態載入**，其餘一律用 route.lazy 動態載入。
+ * 訪客為了看一頁首頁不該下載整個後台；react-router 會在導航時才去抓對應的 chunk，
+ * 而且會在比對到路由之後、渲染之前等它載完，所以不需要額外的 Suspense fallback。
  */
 export const router = createBrowserRouter([
   { path: '/', element: <PublicHomePage />, errorElement: <RouteError /> },
@@ -43,45 +22,45 @@ export const router = createBrowserRouter([
   { path: '/password-reset', element: <SetPasswordPage mode="reset" />, errorElement: <RouteError /> },
   { path: '/set-password', element: <SetPasswordPage mode="invite" />, errorElement: <RouteError /> },
   // 公開證書查驗（不需登入；UC-CRT-005）
-  { path: '/verify/:code', element: <VerifyPage />, errorElement: <RouteError /> },
+  { path: '/verify/:code', lazy: async () => ({ Component: (await import('./pages/VerifyPage')).VerifyPage }), errorElement: <RouteError /> },
   {
     path: '/app',
     element: <RequireAuth />,
     errorElement: <RouteError />,
     children: [
-      { index: true, element: <HomePage /> },
-      { path: 'profile', element: <ProfilePage /> },
-      { path: 'notifications', element: <NotificationsPage /> },
+      { index: true, lazy: async () => ({ Component: (await import('./pages/HomePage')).HomePage }) },
+      { path: 'profile', lazy: async () => ({ Component: (await import('./pages/ProfilePage')).ProfilePage }) },
+      { path: 'notifications', lazy: async () => ({ Component: (await import('./pages/NotificationsPage')).NotificationsPage }) },
       // 學員（SD §6.8）
-      { path: 'learn', element: <MyCoursesPage /> },
-      { path: 'learn/:enrollmentId', element: <LearnPage /> },
-      { path: 'learn/:enrollmentId/timeline', element: <MyTimelinePage /> },
-      { path: 'certificates', element: <MyCertificatesPage /> },
-      { path: 'certificates/:certificateId', element: <MyCertificatePage /> },
+      { path: 'learn', lazy: async () => ({ Component: (await import('./pages/MyCoursesPage')).MyCoursesPage }) },
+      { path: 'learn/:enrollmentId', lazy: async () => ({ Component: (await import('./pages/LearnPage')).LearnPage }) },
+      { path: 'learn/:enrollmentId/timeline', lazy: async () => ({ Component: (await import('./pages/MyTimelinePage')).MyTimelinePage }) },
+      { path: 'certificates', lazy: async () => ({ Component: (await import('./pages/CertificatesPage')).MyCertificatesPage }) },
+      { path: 'certificates/:certificateId', lazy: async () => ({ Component: (await import('./pages/CertificatesPage')).MyCertificatePage }) },
       // 課程（SD §7.1）
-      { path: 'courses', element: <CoursesPage /> },
-      { path: 'courses/:courseId', element: <CoursePage /> },
-      { path: 'courses/:courseId/learners/:enrollmentId', element: <LearnerDetailPage /> },
-      { path: 'courses/:courseId/versions/:versionId/edit', element: <VersionEditorPage /> },
+      { path: 'courses', lazy: async () => ({ Component: (await import('./pages/CoursesPage')).CoursesPage }) },
+      { path: 'courses/:courseId', lazy: async () => ({ Component: (await import('./pages/CoursePage')).CoursePage }) },
+      { path: 'courses/:courseId/learners/:enrollmentId', lazy: async () => ({ Component: (await import('./pages/LearnerDetailPage')).LearnerDetailPage }) },
+      { path: 'courses/:courseId/versions/:versionId/edit', lazy: async () => ({ Component: (await import('./pages/VersionEditorPage')).VersionEditorPage }) },
       // Org Admin：目前組織的成員與角色（SD 的 /app/org/roles 併入此頁）
-      { path: 'org/users', element: <OrgMembersPage /> },
-      { path: 'org/cohorts', element: <CohortsPage /> },
-      { path: 'org/branding', element: <BrandingPage /> },
-      { path: 'org/homepage', element: <HomepageEditorPage scope="organization" /> },
-      { path: 'org/knowledge', element: <OrgKnowledgePage /> },
-      { path: 'org/coach', element: <CoachSettingsPage /> },
+      { path: 'org/users', lazy: async () => ({ Component: (await import('./pages/OrgMembersPage')).OrgMembersPage }) },
+      { path: 'org/cohorts', lazy: async () => ({ Component: (await import('./pages/CohortsPage')).CohortsPage }) },
+      { path: 'org/branding', lazy: async () => ({ Component: (await import('./pages/BrandingPage')).BrandingPage }) },
+      { path: 'org/homepage', lazy: async () => { const { HomepageEditorPage } = await import('./pages/HomepageEditorPage'); return { Component: () => <HomepageEditorPage scope="organization" /> }; } },
+      { path: 'org/knowledge', lazy: async () => ({ Component: (await import('./pages/OrgKnowledgePage')).OrgKnowledgePage }) },
+      { path: 'org/coach', lazy: async () => ({ Component: (await import('./pages/CoachSettingsPage')).CoachSettingsPage }) },
       // Platform Admin
-      { path: 'platform/organizations', element: <OrganizationsPage /> },
-      { path: 'platform/organizations/:orgId/users', element: <OrgMembersPage /> },
-      { path: 'platform/organizations/:orgId/branding', element: <BrandingPage /> },
-      { path: 'platform/organizations/:orgId/ai-key', element: <OrgAiKeyPage /> },
-      { path: 'platform/license', element: <LicensePage /> },
-      { path: 'platform/system', element: <SettingsPage /> },
-      { path: 'platform/jobs', element: <JobsPage /> },
-      { path: 'platform/system-status', element: <SystemStatusPage /> },
-      { path: 'platform/homepage', element: <HomepageEditorPage scope="platform" /> },
+      { path: 'platform/organizations', lazy: async () => ({ Component: (await import('./pages/OrganizationsPage')).OrganizationsPage }) },
+      { path: 'platform/organizations/:orgId/users', lazy: async () => ({ Component: (await import('./pages/OrgMembersPage')).OrgMembersPage }) },
+      { path: 'platform/organizations/:orgId/branding', lazy: async () => ({ Component: (await import('./pages/BrandingPage')).BrandingPage }) },
+      { path: 'platform/organizations/:orgId/ai-key', lazy: async () => ({ Component: (await import('./pages/OrgAiKeyPage')).OrgAiKeyPage }) },
+      { path: 'platform/license', lazy: async () => ({ Component: (await import('./pages/LicensePage')).LicensePage }) },
+      { path: 'platform/system', lazy: async () => ({ Component: (await import('./pages/SettingsPage')).SettingsPage }) },
+      { path: 'platform/jobs', lazy: async () => ({ Component: (await import('./pages/JobsPage')).JobsPage }) },
+      { path: 'platform/system-status', lazy: async () => ({ Component: (await import('./pages/SystemStatusPage')).SystemStatusPage }) },
+      { path: 'platform/homepage', lazy: async () => { const { HomepageEditorPage } = await import('./pages/HomepageEditorPage'); return { Component: () => <HomepageEditorPage scope="platform" /> }; } },
       // 稽核紀錄／帳號活動（所有 audit.read_* 共用，SD §12.4）
-      { path: 'audit', element: <AuditPage /> },
+      { path: 'audit', lazy: async () => ({ Component: (await import('./pages/AuditPage')).AuditPage }) },
       { path: '*', element: <NotFoundPage /> },
     ],
   },

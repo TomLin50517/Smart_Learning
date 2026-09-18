@@ -25,6 +25,8 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     target: 'es2023',
-    sourcemap: true,
+    // sourcemap 預設不產生：正式映像若帶著 map，等於對外附贈一份可還原的前端原始碼。
+    // 要除錯時：IAC_SOURCEMAP=1 npm run build:web
+    sourcemap: process.env['IAC_SOURCEMAP'] === '1',
   },
 });
