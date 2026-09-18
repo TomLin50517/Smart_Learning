@@ -299,7 +299,10 @@ describe('navigation by permission (display only — the server enforces access)
   });
 
   it('course staff and org admins see course management', () => {
-    expect(labels(['course.read'])).toContain('課程管理');
+    expect(labels(['course.read', 'course.version.read'])).toContain('課程管理');
+    // learner 也有 course.read，但只涵蓋自己選的課；課程清單要的是組織層級的授權，
+    // 只憑 course.read 顯示入口的話，學員點進去會拿到 403
+    expect(labels(['course.read'])).not.toContain('課程管理');
     expect(labels(['coach.interact_self'])).not.toContain('課程管理');
   });
 
