@@ -32,7 +32,12 @@ export function navItems(me: MeResponse): NavItem[] {
   if (me.activeOrganization && can(me, 'cms.write')) items.push({ to: '/app/org/homepage', label: '首頁內容', hint: '編輯組織公開首頁要顯示的內容' });
   if (me.activeOrganization && can(me, 'knowledge.shared.write')) items.push({ to: '/app/org/knowledge', label: '共用教材', hint: '組織層級的教材，所有課程都能引用' });
   if (me.activeOrganization && can(me, 'coach.transcript_policy.write')) items.push({ to: '/app/org/coach', label: 'AI 教練設定', hint: '逐字稿政策與教練的開關' });
-  if (can(me, 'course.read')) items.push({ to: '/app/courses', label: '課程管理', hint: '建立課程、編輯版本與發布' });
+  // learner 也有 course.read（只涵蓋自己選的課），但課程清單要的是組織層級的授權——
+  // /api/me 的 permissions 不含 scope，無法直接分辨，改以 learner 沒有的 course.version.read 判斷，
+  // 否則學員會看到一個點進去必定 403 的入口
+  if (can(me, 'course.read') && can(me, 'course.version.read')) {
+    items.push({ to: '/app/courses', label: '課程管理', hint: '建立課程、編輯版本與發布' });
+  }
   if (can(me, 'platform.organization.create') || can(me, 'platform.organization.disable')) {
     items.push({ to: '/app/platform/organizations', label: '組織管理', hint: '建立組織、指派管理員、停用' });
   }
