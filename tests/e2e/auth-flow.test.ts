@@ -15,6 +15,7 @@ import { ENV, loadEnv } from '../../apps/api/src/config/env.js';
 import { hashPassword } from '../../apps/api/src/modules/identity/infrastructure/password-hasher.js';
 import { ACCOUNT_MAILER, type AccountMailer } from '../../apps/api/src/modules/notification/notification.contracts.js';
 import { applyMigrations } from '../../tools/migrate.js';
+import { startOfFreshWindow } from './rate-limit-window.js';
 
 const PW = { api_pw: 'e2e_api', coach_pw: 'e2e_coach', worker_pw: 'e2e_worker', ro_pw: 'e2e_ro' };
 const ORG = '22222222-0000-0000-0000-00000000000a';
@@ -209,6 +210,8 @@ describe('lockout (LOGIN_MAX_FAILURES = 3)', () => {
 
 describe('rate limiting', () => {
   it('per-account limit (5/min) → 429 RATE_LIMITED with Retry-After', async () => {
+    // 7 次登入必須落在同一個視窗內，否則計數被拆開、第 7 次不會被擋
+    await startOfFreshWindow(admin);
     const ip = nextIp();
     const codes: number[] = [];
     for (let i = 0; i < 6; i++) codes.push((await login('ratelimit@e2e.test', 'x-x-x-x-x', ip)).res.statusCode);
