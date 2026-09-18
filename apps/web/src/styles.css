@@ -1319,6 +1319,15 @@ input[type='file']::file-selector-button:hover {
   margin-bottom: 18px;
 }
 
+/* 頁首右側的操作區：PageHeader 可能放好幾個按鈕或連結，
+   沒有 gap 它們會直接黏在一起（JSX 相鄰元素之間不會留空白） */
+.page-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 /* ---- 卡片／表格 ---------------------------------------------------------- */
 .card {
   background: var(--surface);
